@@ -464,6 +464,7 @@ class TaskManager:
         for name in get_settings().enabled_engine_list():
             if name == EngineName.BROWSER_USE.value or name == "browser_use":
                 e = BrowserUseEngine()
+                e.on_screenshot = lambda img: asyncio.create_task(self._broadcast({"type": "live_view", "payload": {"image": img}})) if self._broadcast else None
                 await e.initialize()
                 self._engines[EngineName.BROWSER_USE] = e
             elif name == EngineName.OPENCLAW.value or name == "openclaw":
@@ -594,11 +595,32 @@ def _dashboard_html() -> str:
 body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden;}
 .header{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;border-bottom:1px solid var(--border);flex-shrink:0;}
 .logo{font-weight:700;color:var(--accent);font-size:1.2rem;}
-.layout{display:grid;grid-template-columns:300px 1fr 300px;gap:0;flex:1;overflow:hidden;}
-aside{border-right:1px solid var(--border);padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;}
+/* Layout & Sidebars */
+.layout{display:grid;grid-template-columns:300px 1fr 300px;gap:0;flex:1;overflow:hidden;transition:grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);}
+.layout.left-collapsed{grid-template-columns:60px 1fr 300px;}
+.layout.right-collapsed{grid-template-columns:300px 1fr 60px;}
+.layout.both-collapsed{grid-template-columns:60px 1fr 60px;}
+
+aside{border-right:1px solid var(--border);padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;position:relative;transition:all 0.3s;}
 aside:last-child{border-right:none;border-left:1px solid var(--border);}
+
+.collapsed-icons{display:none;flex-direction:column;align-items:center;gap:20px;padding-top:20px;}
+aside.collapsed .collapsed-icons{display:flex;}
+aside.collapsed .card, aside.collapsed .btn, aside.collapsed h2{display:none;}
+aside.collapsed{padding:10px;overflow:hidden;}
+
+.toggle-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:8px;z-index:10;transition:color 0.2s;display:flex;align-items:center;justify-content:center;border-radius:8px;}
+.toggle-btn:hover{color:var(--accent);background:rgba(255,255,255,0.05);}
+.toggle-btn svg{width:20px;height:20px;}
+aside.collapsed .toggle-btn svg{transform:rotate(180deg);}
+aside:last-child .toggle-btn svg{transform:none;}
+aside:last-child.collapsed .toggle-btn svg{transform:rotate(180deg);}
+
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
-.card h2{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:12px;}
+.card h2{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+.icon-svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;}
+.sidebar-icon-large{width:20px;height:20px;color:var(--muted);cursor:pointer;transition:color 0.2s;}
+.sidebar-icon-large:hover{color:var(--accent);}
 textarea,select,input{width:100%;background:#2d3748;border:1px solid var(--border);border-radius:8px;color:var(--text);padding:12px;font-size:14px;outline:none;}
 textarea:focus,select:focus,input:focus{border-color:var(--accent);}
 textarea{min-height:44px;max-height:120px;resize:none;line-height:1.4;}
@@ -625,9 +647,13 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;background:r
 
 .activity-feed{font-size:11px;}
 .activity-item{padding:8px;background:rgba(255,255,255,0.02);border-radius:8px;margin-bottom:8px;border-left:2px solid var(--accent);}
-.status-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;}
-.status-dot.connected{background:var(--ok);box-shadow:0 0 8px var(--ok);}
 .status-dot.error{background:var(--err);}
+
+/* Live View Panel */
+.live-view-container{margin:12px;display:none;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;max-height:400px;overflow:hidden;}
+.live-view-container.active{display:flex;}
+.live-view-title{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;display:flex;justify-content:space-between;align-items:center;}
+#liveImage{width:100%;height:auto;border-radius:8px;background:#000;object-fit:contain;}
 """
     # Inline JS
     js = """
@@ -641,7 +667,27 @@ function connect(){
   state.ws=new WebSocket((location.protocol==="https:"?"wss:":"ws:")+"//"+location.host+"/ws");
   state.ws.onopen=()=>{state.connected=true;document.querySelector(".ws-status").previousElementSibling.className="status-dot connected";document.querySelector(".ws-status").textContent="Connected";};
   state.ws.onclose=()=>{state.connected=false;document.querySelector(".ws-status").previousElementSibling.className="status-dot error";document.querySelector(".ws-status").textContent="Disconnected";setTimeout(connect,3000);};
-  state.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="task_update")upsert(m.payload);else if(m.type==="task_list"){state.tasks=m.payload;render();}else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}else if(m.type==="audit_event")addActivity(m.payload);else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});};
+  state.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="task_update")upsert(m.payload);else if(m.type==="task_list"){state.tasks=m.payload;render();}else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}else if(m.type==="audit_event")addActivity(m.payload);else if(m.type==="live_view")updateLiveView(m.payload);else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});};
+}
+function updateLiveView(p){
+  const c=document.getElementById("liveView");
+  const i=document.getElementById("liveImage");
+  c.classList.add("active");
+  i.src="data:image/png;base64,"+p.image;
+}
+function toggleSidebar(side){
+  const l=document.getElementById("mainLayout");
+  const a=side==='left'?l.querySelector('aside:first-child'):l.querySelector('aside:last-child');
+  const cls=side==='left'?'left-collapsed':'right-collapsed';
+  const isBoth=l.classList.contains('left-collapsed')&&l.classList.contains('right-collapsed')||(l.classList.contains(side==='left'?'right-collapsed':'left-collapsed')&&!l.classList.contains(cls));
+  
+  l.classList.toggle(cls);
+  a.classList.toggle('collapsed');
+  
+  if(l.classList.contains('left-collapsed')&&l.classList.contains('right-collapsed')) l.classList.add('both-collapsed');
+  else l.classList.remove('both-collapsed');
+  
+  localStorage.setItem('sidebar_'+side, a.classList.contains('collapsed'));
 }
 function upsert(t){const i=state.tasks.findIndex(x=>x.id===t.id);if(i>=0)state.tasks[i]=t;else state.tasks.push(t);render();}
 async function submit(){
@@ -745,6 +791,11 @@ document.addEventListener("DOMContentLoaded",()=>{
   prompt.onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submit();}};
   prompt.oninput=e=>{prompt.style.height="auto";prompt.style.height=prompt.scrollHeight+"px";};
   document.getElementById("taskForm").onsubmit=e=>{e.preventDefault();submit();};
+  
+  // Restore sidebar states
+  if(localStorage.getItem('sidebar_left')==='true') toggleSidebar('left');
+  if(localStorage.getItem('sidebar_right')==='true') toggleSidebar('right');
+
   refreshConfig();
   connect();
 });
@@ -771,14 +822,33 @@ document.addEventListener("DOMContentLoaded",()=>{
       </div>
     </div>
   </header>
-  <div class="layout">
-    <aside>
+  <div class="layout" id="mainLayout">
+    <aside id="leftSidebar">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+        <button class="toggle-btn" onclick="toggleSidebar('left')" title="Toggle Sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
+        </button>
+      </div>
+      <div class="collapsed-icons">
+        <div onclick="toggleSidebar('left')" title="Engines">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+        </div>
+        <div onclick="toggleSidebar('left')" title="Configuration">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        </div>
+      </div>
       <div class="card">
-        <h2>Engines</h2>
+        <h2>
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          Engines
+        </h2>
         <div id="engineList"><p class="muted">Loading...</p></div>
       </div>
       <div class="card">
-        <h2>Config</h2>
+        <h2>
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          Config
+        </h2>
         <div id="configSummary"><p class="muted">Loading...</p></div>
         <div id="keyForm" style="margin-top:12px;display:none">
           <input type="password" id="keyInput" placeholder="Paste API key..." style="margin-bottom:8px">
@@ -798,6 +868,13 @@ document.addEventListener("DOMContentLoaded",()=>{
         <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)">Chat & Tasks</h2>
         <span id="taskCount" style="font-size:12px;color:var(--muted)">0 tasks</span>
       </div>
+      <div id="liveView" class="live-view-container">
+        <div class="live-view-title">
+          <span>Live Browser View</span>
+          <button class="btn" style="padding:2px 8px;font-size:10px;background:var(--border)" onclick="document.getElementById('liveView').classList.remove('active')">Hide</button>
+        </div>
+        <img id="liveImage" src="" alt="Live Browser Feed">
+      </div>
       <div id="taskList" class="task-list">
         <p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>
       </div>
@@ -815,10 +892,25 @@ document.addEventListener("DOMContentLoaded",()=>{
         </form>
       </div>
     </main>
-    <aside>
-      <div class="card" style="flex:1;display:flex;flex-direction:column;">
-        <h2>Activity Logs</h2>
-        <div id="activityFeed" class="activity-feed" style="flex:1;overflow-y:auto;"><p class="muted">Waiting...</p></div>
+    <aside id="rightSidebar">
+      <div style="display:flex;justify-content:flex-start;margin-bottom:12px;">
+        <button class="toggle-btn" onclick="toggleSidebar('right')" title="Toggle Sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline></svg>
+        </button>
+      </div>
+      <div class="collapsed-icons">
+        <div onclick="toggleSidebar('right')" title="Activity Feed">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+        </div>
+      </div>
+      <div class="card" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <h2>
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+          Activity
+        </h2>
+        <div id="activityFeed" class="activity-feed" style="overflow-y:auto;flex:1">
+          <p class="muted">Recent events will appear here.</p>
+        </div>
       </div>
     </aside>
   </div>

@@ -38,6 +38,7 @@ class BrowserUseEngine(EngineBase):
         self._agent_class: Any = None
         self._browser_class: Any = None
         self._llm: Any = None
+        self.on_screenshot: Callable[[str], Any] | None = None
 
     @property
     def name(self) -> EngineName:
@@ -114,6 +115,11 @@ class BrowserUseEngine(EngineBase):
 
         return BrowserConfig(
             headless=settings.browser_headless,
+            disable_security=True,
+            new_context_config={
+                "viewport": {"width": 1280, "height": 720},
+                "record_video_size": {"width": 1280, "height": 720},
+            }
         )
 
     async def execute_step(self, task: Task, step: TaskStep) -> StepResult:
@@ -165,6 +171,13 @@ class BrowserUseEngine(EngineBase):
         try:
             settings = get_settings()
 
+            async def step_callback(state: Any):
+                if self.on_screenshot and state.results and state.results[-1].extracted_content:
+                    # browser-use captures screenshots in history
+                    # We can try to get it from the last state
+                    if hasattr(state, 'screenshot') and state.screenshot:
+                        self.on_screenshot(state.screenshot)
+
             agent = self._agent_class(
                 task=task.prompt,
                 llm=self._llm,
@@ -173,7 +186,7 @@ class BrowserUseEngine(EngineBase):
 
             # Run the agent with configurable step limit
             max_steps = min(settings.max_actions_per_task, 50)
-            history = await agent.run(max_steps=max_steps)
+            history = await agent.run(max_steps=max_steps, step_callback=step_callback)
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
