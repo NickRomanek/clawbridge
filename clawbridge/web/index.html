@@ -1,20 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ClawBridge</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
+
 <body>
   <div id="app">
     <!-- Header -->
     <header class="header">
       <div class="header-left">
+        <button id="toggleSidebar" class="btn btn-ghost btn-sm" style="margin-right: 12px; padding: 4px;">
+          <span class="material-icons" style="font-size: 20px;">menu</span>
+        </button>
         <h1 class="logo">ClawBridge</h1>
         <span class="version">v0.1.0</span>
       </div>
       <div class="header-right">
+        <button id="settingsBtn" class="btn btn-ghost btn-sm" style="margin-right: 12px;">
+          <span class="material-icons" style="font-size: 18px; margin-right: 4px;">settings</span>
+          Settings
+        </button>
         <div class="status-indicator" id="connectionStatus">
           <span class="status-dot"></span>
           <span class="status-text">Connecting...</span>
@@ -22,33 +31,48 @@
       </div>
     </header>
 
-    <!-- Main Layout -->
-    <div class="main-layout">
-      <!-- Left Panel: Task Input + Engine Status -->
-      <aside class="sidebar">
-        <!-- Task Submission -->
-        <section class="card">
-          <h2>New Task</h2>
-          <form id="taskForm">
-            <textarea
-              id="taskPrompt"
-              placeholder="Describe your task... e.g. 'Research the latest Microsoft Exchange vulnerability CVE-2026-XXXX and draft a client advisory'"
-              rows="4"
-            ></textarea>
-            <div class="form-row">
-              <label for="engineSelect">Engine</label>
-              <select id="engineSelect">
-                <option value="auto">Auto (recommended)</option>
-                <option value="browser_use">browser-use</option>
-                <option value="openclaw">OpenClaw</option>
-              </select>
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>ClawBridge Settings</h2>
+          <button class="close-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <form id="keysForm">
+            <div class="form-group">
+              <label for="anthropicKey">Anthropic API Key</label>
+              <input type="password" id="anthropicKey" placeholder="sk-ant-...">
             </div>
-            <button type="submit" class="btn btn-primary" id="submitBtn">
-              Run Task
-            </button>
+            <div class="form-group">
+              <label for="openaiKey">OpenAI API Key</label>
+              <input type="password" id="openaiKey" placeholder="sk-...">
+            </div>
+            <div class="form-group">
+              <label for="openrouterKey">OpenRouter API Key</label>
+              <input type="password" id="openrouterKey" placeholder="sk-or-v1-...">
+            </div>
+            <div class="form-group">
+              <label for="defaultModel">Default Model</label>
+              <input type="text" id="defaultModel" placeholder="claude-3-5-sonnet-20241022">
+            </div>
+            <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+              <input type="checkbox" id="browserHeadless" style="width: auto;">
+              <label for="browserHeadless" style="margin-bottom: 0;">Headless Mode (Hide browser window)</label>
+            </div>
+            <p class="muted small">Updating keys will persist them to your .env file and reload engine state.</p>
+            <div class="modal-footer">
+              <button type="submit" class="btn btn-primary" id="saveKeysBtn">Save Configuration</button>
+            </div>
           </form>
-        </section>
+        </div>
+      </div>
+    </div>
 
+    <!-- Main Layout -->
+    <div id="mainLayout" class="main-layout">
+      <!-- Left Panel: Engines + Config -->
+      <aside id="sidebarLeft" class="sidebar sidebar-left">
         <!-- Engine Status -->
         <section class="card">
           <h2>Engines</h2>
@@ -66,21 +90,59 @@
         </section>
       </aside>
 
-      <!-- Center: Task List + Results -->
+      <!-- Center: Task List + Live View + Results -->
       <main class="content">
-        <section class="card">
+
+        <section class="card chat-card">
           <div class="card-header">
-            <h2>Tasks</h2>
+            <h2>Tasks & Activity</h2>
             <span class="task-count" id="taskCount">0 tasks</span>
           </div>
           <div id="taskList" class="task-list">
             <p class="muted center">No tasks yet. Submit one to get started.</p>
+          </div>
+
+          <div class="chat-input-area">
+            <form id="taskForm">
+              <textarea id="taskPrompt"
+                placeholder="Describe your task... e.g. 'Research the latest Microsoft Exchange vulnerability'"
+                rows="1"></textarea>
+              <div class="chat-controls">
+                <select id="engineSelect">
+                  <option value="auto">Auto</option>
+                  <option value="browser_use">browser-use</option>
+                  <option value="openclaw">OpenClaw</option>
+                </select>
+                <button type="submit" class="btn btn-primary" id="submitBtn">
+                  <span class="material-icons">send</span>
+                </button>
+              </div>
+            </form>
           </div>
         </section>
       </main>
 
       <!-- Right Panel: Activity Feed -->
       <aside class="sidebar sidebar-right">
+        <!-- Live Browser View (Hidden until active) -->
+        <section class="card live-browser-card" id="liveBrowserCard" style="display: none;">
+          <div class="card-header">
+            <h2>Live Browser View</h2>
+            <div class="header-actions">
+              <span id="browserStatus" class="status-badge status-idle">Idle</span>
+            </div>
+          </div>
+          <div class="browser-viewport-container">
+            <div class="browser-viewport">
+              <img id="browserFrame" src="" alt="Live Browser Frame">
+              <div id="browserPlaceholder" class="browser-placeholder">
+                <span class="material-icons">visibility_off</span>
+                <p>Starting browser session...</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="card">
           <h2>Activity Feed</h2>
           <div id="activityFeed" class="activity-feed">
@@ -93,4 +155,5 @@
 
   <script src="/app.js"></script>
 </body>
+
 </html>

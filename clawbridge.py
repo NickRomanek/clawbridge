@@ -82,7 +82,7 @@ import sqlite3
 import uuid
 import webbrowser
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
@@ -274,14 +274,16 @@ class EngineBase:
 class BrowserUseEngine(EngineBase):
     name = EngineName.BROWSER_USE
     display_name = "browser-use"
+    on_screenshot: Callable[[str], Any] | None = None  # receives base64 image string
 
     async def initialize(self) -> None:
         try:
-            from browser_use import Agent, Browser
+            from browser_use import Agent, Browser, BrowserProfile
             self._Agent = Agent
             self._Browser = Browser
-            self._browser = Browser()
             settings = get_settings()
+            profile = BrowserProfile(headless=settings.browser_headless)
+            self._browser = Browser(browser_profile=profile)
             if settings.has_anthropic_key():
                 from browser_use.llm import ChatAnthropic
                 self._llm = ChatAnthropic(model=settings.default_model, api_key=settings.anthropic_api_key)
@@ -316,8 +318,54 @@ class BrowserUseEngine(EngineBase):
         try:
             agent = self._Agent(task=task.prompt, llm=self._llm, browser=self._browser)
             import time
+            import base64
+
+            async def on_step_end(agent_instance):
+                """Capture and broadcast screenshot after each step for in-app live view."""
+                if not self.on_screenshot:
+                    return
+                b64_img = None
+                try:
+                    from browser_use.browser.events import ScreenshotEvent
+                    event = agent_instance.browser_session.event_bus.dispatch(
+                        ScreenshotEvent(full_page=False)
+                    )
+                    await event
+                    result = await event.event_result(raise_if_any=False, raise_if_none=False)
+                    if result is not None:
+                        if isinstance(result, bytes):
+                            b64_img = base64.b64encode(result).decode("utf-8")
+                        elif isinstance(result, str):
+                            b64_img = result
+                        else:
+                            b64_img = getattr(result, "image", None) or (base64.b64encode(result).decode("utf-8") if result else None)
+                except Exception as e:
+                    logging.debug("Live view ScreenshotEvent: %s", e)
+                # Fallback: CDP Page.captureScreenshot directly
+                if not b64_img:
+                    try:
+                        from cdp_use.cdp.page import CaptureScreenshotParameters
+                        session = agent_instance.browser_session
+                        t = session.get_focused_target()
+                        if not t or getattr(t, "target_type", "") not in ("page", "tab"):
+                            page_targets = session.get_page_targets()
+                            t = page_targets[-1] if page_targets else None
+                        if t:
+                            cdp = await session.get_or_create_cdp_session(t.target_id, focus=True)
+                            params = CaptureScreenshotParameters(format="png", captureBeyondViewport=False)
+                            r = await cdp.cdp_client.send.Page.captureScreenshot(params=params, session_id=cdp.session_id)
+                            if r and r.get("data"):
+                                b64_img = r["data"]
+                    except Exception as e:
+                        logging.debug("Live view CDP fallback: %s", e)
+                if b64_img:
+                    self.on_screenshot(b64_img)
+
             t0 = time.monotonic()
-            history = await agent.run(max_steps=min(get_settings().max_actions_per_task, 50))
+            history = await agent.run(
+                max_steps=min(get_settings().max_actions_per_task, 50),
+                on_step_end=on_step_end,
+            )
             duration_ms = int((time.monotonic() - t0) * 1000)
             final = str(getattr(history, "final_result", lambda: str(history))() if callable(getattr(history, "final_result", None)) else str(history))
             task.result = TaskResult(
@@ -550,7 +598,12 @@ class TaskManager:
         return self._tasks.get(task_id)
 
     def list_tasks(self) -> list[Task]:
-        return sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
+        def _sort_key(t: Task):
+            dt = t.created_at
+            if dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+        return sorted(self._tasks.values(), key=_sort_key, reverse=True)
 
     async def engine_infos(self) -> list[dict]:
         return [await e.get_info() for e in self._engines.values()]
@@ -596,25 +649,30 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .header{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;border-bottom:1px solid var(--border);flex-shrink:0;}
 .logo{font-weight:700;color:var(--accent);font-size:1.2rem;}
 /* Layout & Sidebars */
-.layout{display:grid;grid-template-columns:300px 1fr 300px;gap:0;flex:1;overflow:hidden;transition:grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);}
-.layout.left-collapsed{grid-template-columns:60px 1fr 300px;}
-.layout.right-collapsed{grid-template-columns:300px 1fr 60px;}
-.layout.both-collapsed{grid-template-columns:60px 1fr 60px;}
+.layout{display:grid;grid-template-columns:300px 1fr;gap:0;flex:1;overflow:hidden;transition:grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);}
+.layout.left-collapsed{grid-template-columns:52px 1fr;}
 
-aside{border-right:1px solid var(--border);padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;position:relative;transition:all 0.3s;}
-aside:last-child{border-right:none;border-left:1px solid var(--border);}
+aside{border-right:1px solid var(--border);padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;position:relative;transition:all 0.3s;}
 
-.collapsed-icons{display:none;flex-direction:column;align-items:center;gap:20px;padding-top:20px;}
+.collapsed-icons{display:none;flex-direction:column;align-items:center;gap:12px;padding-top:16px;}
 aside.collapsed .collapsed-icons{display:flex;}
 aside.collapsed .card, aside.collapsed .btn, aside.collapsed h2{display:none;}
-aside.collapsed{padding:10px;overflow:hidden;}
+aside.collapsed{padding:10px;overflow:hidden;min-width:52px;}
 
 .toggle-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:8px;z-index:10;transition:color 0.2s;display:flex;align-items:center;justify-content:center;border-radius:8px;}
 .toggle-btn:hover{color:var(--accent);background:rgba(255,255,255,0.05);}
 .toggle-btn svg{width:20px;height:20px;}
 aside.collapsed .toggle-btn svg{transform:rotate(180deg);}
-aside:last-child .toggle-btn svg{transform:none;}
-aside:last-child.collapsed .toggle-btn svg{transform:rotate(180deg);}
+
+/* Expandable sidebar sections */
+.expandable-header{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0;}
+.expandable-header:hover{color:var(--accent);}
+.expandable-header .chevron{width:14px;height:14px;color:var(--muted);transition:transform 0.2s;}
+.expandable-header .chevron.collapsed{transform:rotate(-90deg);}
+.expandable-content{overflow:hidden;transition:max-height 0.25s ease;max-height:600px;}
+.expandable-content.collapsed{max-height:0 !important;overflow:hidden;padding-top:0 !important;margin-top:0 !important;padding-bottom:0 !important;margin-bottom:0 !important;}
+.card.expandable .expandable-content:not(.collapsed){margin-top:12px;}
+.card.expandable{padding:12px 16px;}
 
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
 .card h2{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
@@ -650,10 +708,11 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;background:r
 .status-dot.error{background:var(--err);}
 
 /* Live View Panel */
-.live-view-container{margin:12px;display:none;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;max-height:400px;overflow:hidden;}
-.live-view-container.active{display:flex;}
+.live-view-container{margin:12px;display:flex;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;max-height:400px;overflow:hidden;}
 .live-view-title{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;display:flex;justify-content:space-between;align-items:center;}
-#liveImage{width:100%;height:auto;border-radius:8px;background:#000;object-fit:contain;}
+#liveImage{width:100%;height:auto;border-radius:8px;background:#0f0f0f;object-fit:contain;}
+#livePlaceholder{display:flex;align-items:center;justify-content:center;min-height:120px;color:var(--muted);font-size:12px;text-align:center;padding:16px;}
+#liveImage:not([src=""])~#livePlaceholder{display:none;}
 """
     # Inline JS
     js = """
@@ -670,24 +729,29 @@ function connect(){
   state.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="task_update")upsert(m.payload);else if(m.type==="task_list"){state.tasks=m.payload;render();}else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}else if(m.type==="audit_event")addActivity(m.payload);else if(m.type==="live_view")updateLiveView(m.payload);else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});};
 }
 function updateLiveView(p){
-  const c=document.getElementById("liveView");
+  if(!p||!p.image)return;
   const i=document.getElementById("liveImage");
-  c.classList.add("active");
+  const ph=document.getElementById("livePlaceholder");
+  const st=document.getElementById("liveStatus");
   i.src="data:image/png;base64,"+p.image;
+  i.style.display="block";
+  if(ph)ph.style.display="none";
+  if(st){st.textContent="Streaming";st.style.color="var(--ok)";}
 }
 function toggleSidebar(side){
   const l=document.getElementById("mainLayout");
-  const a=side==='left'?l.querySelector('aside:first-child'):l.querySelector('aside:last-child');
-  const cls=side==='left'?'left-collapsed':'right-collapsed';
-  const isBoth=l.classList.contains('left-collapsed')&&l.classList.contains('right-collapsed')||(l.classList.contains(side==='left'?'right-collapsed':'left-collapsed')&&!l.classList.contains(cls));
-  
-  l.classList.toggle(cls);
+  const a=l.querySelector('#leftSidebar');
+  l.classList.toggle('left-collapsed');
   a.classList.toggle('collapsed');
-  
-  if(l.classList.contains('left-collapsed')&&l.classList.contains('right-collapsed')) l.classList.add('both-collapsed');
-  else l.classList.remove('both-collapsed');
-  
-  localStorage.setItem('sidebar_'+side, a.classList.contains('collapsed'));
+  localStorage.setItem('sidebar_left', a.classList.contains('collapsed'));
+}
+function toggleSection(id){
+  const card=document.getElementById('card-'+id);
+  const content=document.getElementById(id+'Content');
+  const chevron=card.querySelector('.chevron');
+  const collapsed=content.classList.toggle('collapsed');
+  chevron.classList.toggle('collapsed',collapsed);
+  localStorage.setItem('section_'+id, collapsed?'1':'0');
 }
 function upsert(t){const i=state.tasks.findIndex(x=>x.id===t.id);if(i>=0)state.tasks[i]=t;else state.tasks.push(t);render();}
 async function submit(){
@@ -792,10 +856,12 @@ document.addEventListener("DOMContentLoaded",()=>{
   prompt.oninput=e=>{prompt.style.height="auto";prompt.style.height=prompt.scrollHeight+"px";};
   document.getElementById("taskForm").onsubmit=e=>{e.preventDefault();submit();};
   
-  // Restore sidebar states
   if(localStorage.getItem('sidebar_left')==='true') toggleSidebar('left');
-  if(localStorage.getItem('sidebar_right')==='true') toggleSidebar('right');
-
+  ['engines','config','activity'].forEach(id=>{
+    const c=document.getElementById(id+'Content');
+    const card=document.getElementById('card-'+id);
+    if(c&&card&&localStorage.getItem('section_'+id)==='1'){c.classList.add('collapsed');card.querySelector('.chevron')?.classList.add('collapsed');}
+  });
   refreshConfig();
   connect();
 });
@@ -824,43 +890,57 @@ document.addEventListener("DOMContentLoaded",()=>{
   </header>
   <div class="layout" id="mainLayout">
     <aside id="leftSidebar">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
         <button class="toggle-btn" onclick="toggleSidebar('left')" title="Toggle Sidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
         </button>
       </div>
       <div class="collapsed-icons">
         <div onclick="toggleSidebar('left')" title="Engines">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
         </div>
-        <div onclick="toggleSidebar('left')" title="Configuration">
+        <div onclick="toggleSidebar('left')" title="Config">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </div>
-      </div>
-      <div class="card">
-        <h2>
-          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-          Engines
-        </h2>
-        <div id="engineList"><p class="muted">Loading...</p></div>
-      </div>
-      <div class="card">
-        <h2>
-          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-          Config
-        </h2>
-        <div id="configSummary"><p class="muted">Loading...</p></div>
-        <div id="keyForm" style="margin-top:12px;display:none">
-          <input type="password" id="keyInput" placeholder="Paste API key..." style="margin-bottom:8px">
-          <select id="keyProvider" style="margin-bottom:8px">
-            <option value="anthropic">Anthropic</option>
-            <option value="openai">OpenAI</option>
-            <option value="openrouter">OpenRouter</option>
-          </select>
-          <button class="btn" style="width:100%;font-size:13px" onclick="saveKey()">Save Key</button>
-          <div id="keySaveStatus" style="font-size:11px;margin-top:4px"></div>
+        <div onclick="toggleSidebar('left')" title="Activity">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
         </div>
-        <button class="btn" id="toggleKeyBtn" style="width:100%;font-size:12px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="toggleKeyForm()">Add / Update API Keys</button>
+      </div>
+      <div class="card expandable" id="card-engines">
+        <h2 class="expandable-header" onclick="toggleSection('engines')">
+          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>Engines</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </h2>
+        <div class="expandable-content" id="enginesContent"><div id="engineList"><p class="muted">Loading...</p></div></div>
+      </div>
+      <div class="card expandable" id="card-config">
+        <h2 class="expandable-header" onclick="toggleSection('config')">
+          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>Config</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </h2>
+        <div class="expandable-content" id="configContent">
+          <div id="configSummary"><p class="muted">Loading...</p></div>
+          <div id="keyForm" style="margin-top:12px;display:none">
+            <input type="password" id="keyInput" placeholder="Paste API key..." style="margin-bottom:8px">
+            <select id="keyProvider" style="margin-bottom:8px">
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="openrouter">OpenRouter</option>
+            </select>
+            <button class="btn" style="width:100%;font-size:13px" onclick="saveKey()">Save Key</button>
+            <div id="keySaveStatus" style="font-size:11px;margin-top:4px"></div>
+          </div>
+          <button class="btn" id="toggleKeyBtn" style="width:100%;font-size:12px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="toggleKeyForm()">Add / Update API Keys</button>
+        </div>
+      </div>
+      <div class="card expandable" id="card-activity" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <h2 class="expandable-header" onclick="toggleSection('activity')">
+          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>Activity</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </h2>
+        <div class="expandable-content" id="activityContent" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <div id="activityFeed" class="activity-feed" style="overflow-y:auto;flex:1;max-height:200px;"><p class="muted">Waiting for activity...</p></div>
+        </div>
       </div>
     </aside>
     <main>
@@ -871,8 +951,9 @@ document.addEventListener("DOMContentLoaded",()=>{
       <div id="liveView" class="live-view-container">
         <div class="live-view-title">
           <span>Live Browser View</span>
-          <button class="btn" style="padding:2px 8px;font-size:10px;background:var(--border)" onclick="document.getElementById('liveView').classList.remove('active')">Hide</button>
+          <span id="liveStatus" style="font-size:10px;color:var(--muted)">Idle</span>
         </div>
+        <div id="livePlaceholder">Browser view streams here when a task is running.</div>
         <img id="liveImage" src="" alt="Live Browser Feed">
       </div>
       <div id="taskList" class="task-list">
@@ -892,27 +973,6 @@ document.addEventListener("DOMContentLoaded",()=>{
         </form>
       </div>
     </main>
-    <aside id="rightSidebar">
-      <div style="display:flex;justify-content:flex-start;margin-bottom:12px;">
-        <button class="toggle-btn" onclick="toggleSidebar('right')" title="Toggle Sidebar">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline></svg>
-        </button>
-      </div>
-      <div class="collapsed-icons">
-        <div onclick="toggleSidebar('right')" title="Activity Feed">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-        </div>
-      </div>
-      <div class="card" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
-        <h2>
-          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-          Activity
-        </h2>
-        <div id="activityFeed" class="activity-feed" style="overflow-y:auto;flex:1">
-          <p class="muted">Recent events will appear here.</p>
-        </div>
-      </div>
-    </aside>
   </div>
   <script>""" + js + """</script>
 </body>

@@ -10,7 +10,7 @@ import asyncio
 import time
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from clawbridge.config import get_settings
 from clawbridge.engines.base import EngineBase, EngineError
@@ -53,7 +53,7 @@ class BrowserUseEngine(EngineBase):
         return "AI browser automation via Playwright. Fast structured extraction and web research."
 
     def _capabilities(self) -> list[str]:
-        return ["navigate", "extract", "click", "type", "screenshot", "summarize"]
+        return ["navigate", "extract", "click", "type", "screenshot", "summarize", "headless"]
 
     async def initialize(self) -> None:
         """Import browser-use and set up the LLM provider."""
@@ -69,22 +69,20 @@ class BrowserUseEngine(EngineBase):
             settings = get_settings()
             self._llm = self._create_llm(settings)
 
-            # Pre-initialize browser instance
-            self._browser = Browser(
-                config=self._get_browser_config(settings)
-            )
+            # browser instance will be initialized lazily in run_task
+            self._browser = None
 
             self._status = EngineStatus.AVAILABLE
             logger.info("browser-use engine initialized successfully")
 
-        except ImportError:
+        except ImportError as e:
             self._status = EngineStatus.NOT_INSTALLED
             logger.warning(
-                "browser-use not installed. Install with: pip install browser-use"
+                f"browser-use not installed or import failed: {e}. Install with: pip install browser-use"
             )
         except Exception as e:
             self._status = EngineStatus.ERROR
-            logger.error(f"browser-use initialization failed: {e}")
+            logger.error(f"browser-use initialization failed: {e}", exc_info=True)
 
     def _create_llm(self, settings: Any) -> Any:
         """Create LLM instance from BYOK keys. Prefers Anthropic, falls back to OpenAI."""
@@ -98,8 +96,17 @@ class BrowserUseEngine(EngineBase):
             )
         elif settings.has_openrouter_key:
             from browser_use.llm import ChatOpenRouter
+            # OpenRouter usually needs the provider prefix (e.g. anthropic/claude-3-5-sonnet)
+            # If the user just provided 'claude...', we should help out if it's Sonnet 3.5
+            full_model = model
+            if "/" not in full_model:
+                if "claude-3-5-sonnet" in full_model:
+                    full_model = "anthropic/claude-3.5-sonnet"
+                elif "gpt-4o" in full_model:
+                    full_model = "openai/gpt-4o"
+            
             return ChatOpenRouter(
-                model=model,
+                model=full_model,
                 api_key=settings.openrouter_api_key,
             )
         elif settings.has_openai_key:
@@ -115,18 +122,6 @@ class BrowserUseEngine(EngineBase):
                 recoverable=False,
             )
 
-    def _get_browser_config(self, settings: Any) -> Any:
-        """Build browser-use Browser config."""
-        from browser_use import BrowserConfig
-
-        return BrowserConfig(
-            headless=settings.browser_headless,
-            disable_security=True,
-            new_context_config={
-                "viewport": {"width": 1280, "height": 720},
-                "record_video_size": {"width": 1280, "height": 720},
-            }
-        )
 
     async def execute_step(self, task: Task, step: TaskStep) -> StepResult:
         """Execute a single step using browser-use.
@@ -177,12 +172,38 @@ class BrowserUseEngine(EngineBase):
         try:
             settings = get_settings()
 
-            async def step_callback(state: Any):
-                if self.on_screenshot and state.results and state.results[-1].extracted_content:
-                    # browser-use captures screenshots in history
-                    # We can try to get it from the last state
-                    if hasattr(state, 'screenshot') and state.screenshot:
-                        self.on_screenshot(state.screenshot)
+            if not self._browser:
+                from browser_use import Browser, BrowserProfile
+                profile = BrowserProfile(
+                    headless=settings.browser_headless,
+                    disable_security=True,
+                    viewport={"width": 1280, "height": 720},
+                )
+                self._browser = Browser(browser_profile=profile)
+
+            async def on_step_end(agent_instance: Any):
+                """Capture and broadcast screenshot after each step for in-app live view."""
+                if not self.on_screenshot:
+                    return
+                try:
+                    import base64
+                    from browser_use.browser.events import ScreenshotEvent
+                    event = agent_instance.browser_session.event_bus.dispatch(
+                        ScreenshotEvent(full_page=False)
+                    )
+                    await event
+                    result = await event.event_result(raise_if_any=False, raise_if_none=False)
+                    if result is None:
+                        return
+                    img = result if isinstance(result, bytes) else getattr(result, "image", result)
+                    if img is None:
+                        return
+                    if isinstance(img, bytes):
+                        img = base64.b64encode(img).decode("utf-8")
+                    logger.debug("Broadcasting screenshot (len=%s)", len(img))
+                    self.on_screenshot(img)
+                except Exception as e:
+                    logger.debug("Live view screenshot: %s", e)
 
             agent = self._agent_class(
                 task=task.prompt,
@@ -190,9 +211,9 @@ class BrowserUseEngine(EngineBase):
                 browser=self._browser,
             )
 
-            # Run the agent with configurable step limit
+            # Run the agent with configurable step limit; on_step_end streams screenshots to dashboard
             max_steps = min(settings.max_actions_per_task, 50)
-            history = await agent.run(max_steps=max_steps, step_callback=step_callback)
+            history = await agent.run(max_steps=max_steps, on_step_end=on_step_end)
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -254,8 +275,8 @@ class BrowserUseEngine(EngineBase):
             return StepResult(
                 url=url,
                 title=title,
-                summary=str(final_result)[:2000],  # Cap summary length
-                snippets=[str(final_result)[:500]],
+                summary=str(final_result or "Step completed").strip()[:2000],
+                snippets=[str(final_result)[:500]] if final_result else [],
                 duration_ms=duration_ms,
             )
         except Exception as e:

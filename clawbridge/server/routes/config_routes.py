@@ -84,46 +84,55 @@ async def get_key_status():
 @router.post("/keys")
 async def save_keys(body: dict):
     """Save API keys to .env and reload settings."""
-    provider = body.get("provider", "")
-    key = body.get("key", "").strip()
     env_map = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
+        "anthropic_api_key": "ANTHROPIC_API_KEY",
+        "openai_api_key": "OPENAI_API_KEY",
+        "openrouter_api_key": "OPENROUTER_API_KEY",
+        "default_model": "DEFAULT_MODEL",
+        "browser_headless": "BROWSER_HEADLESS",
     }
-    env_var = env_map.get(provider)
-    if not env_var:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
-    if not key:
-        raise HTTPException(status_code=400, detail="Key cannot be empty")
 
     # Update .env file
     env_path = Path(".env")
     lines = env_path.read_text().splitlines() if env_path.exists() else []
-    found = False
-    for i, line in enumerate(lines):
-        if line.strip().startswith(env_var + "=") or line.strip().startswith(
-            env_var + " ="
-        ):
-            lines[i] = f"{env_var}={key}"
-            found = True
-            break
-    if not found:
-        lines.append(f"{env_var}={key}")
+    
+    updates = {}
+    for key, env_var in env_map.items():
+        if key in body:
+            val = body[key]
+            if isinstance(val, bool):
+                val = str(val).upper()  # True -> TRUE
+            updates[env_var] = val
+
+    if not updates:
+        return {"status": "no_changes"}
+
+    for env_var, value in updates.items():
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith(env_var + "=") or line.strip().startswith(env_var + " ="):
+                lines[i] = f"{env_var}={value}"
+                found = True
+                break
+        if not found:
+            lines.append(f"{env_var}={value}")
+        
+        # Update in-memory
+        os.environ[env_var] = str(value)
+
     env_path.write_text("\n".join(lines) + "\n")
 
-    # Update in-memory
-    os.environ[env_var] = key
-    
     # Force reload settings
     from clawbridge.config import reload_settings
     reload_settings()
 
-    # Re-initialize engines
+    # Restart engines
     from clawbridge.orchestrator.manager import get_task_manager
-    await get_task_manager().initialize_engines()
+    mgr = get_task_manager()
+    await mgr.shutdown_engines()
+    await mgr.initialize_engines()
 
-    return {"status": "ok", "provider": provider}
+    return {"status": "ok", "updated": list(updates.keys())}
 
 
 @router.get("/policy")

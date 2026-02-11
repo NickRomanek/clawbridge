@@ -101,8 +101,10 @@ class Settings(BaseSettings):
             f"Settings(host={self.host!r}, port={self.port}, "
             f"model={self.default_model!r}, engines={self.enabled_engines!r}, "
             f"policy={self.policy_mode.value!r}, "
+            f"headless={self.browser_headless}, "
             f"has_anthropic_key={self.has_anthropic_key}, "
-            f"has_openai_key={self.has_openai_key})"
+            f"has_openai_key={self.has_openai_key}, "
+            f"has_openrouter_key={self.has_openrouter_key})"
         )
 
 

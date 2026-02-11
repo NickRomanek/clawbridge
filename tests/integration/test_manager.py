@@ -102,26 +102,30 @@ def failing_manager(tmp_path):
 
 
 class TestEngineSelection:
-    def test_select_specific_engine(self, task_manager):
-        engine = task_manager._select_engine(EngineName.BROWSER_USE)
+    @pytest.mark.asyncio
+    async def test_select_specific_engine(self, task_manager):
+        engine = await task_manager._select_engine(EngineName.BROWSER_USE)
         assert engine.name == EngineName.BROWSER_USE
 
-    def test_auto_selects_browser_use_first(self, task_manager):
-        engine = task_manager._select_engine(EngineName.AUTO)
+    @pytest.mark.asyncio
+    async def test_auto_selects_browser_use_first(self, task_manager):
+        engine = await task_manager._select_engine(EngineName.AUTO)
         assert engine.name == EngineName.BROWSER_USE
 
-    def test_auto_falls_back_to_openclaw(self):
+    @pytest.mark.asyncio
+    async def test_auto_falls_back_to_openclaw(self):
         from clawbridge.orchestrator.manager import TaskManager
         mgr = TaskManager()
         mgr._engines[EngineName.OPENCLAW] = FakeEngine(EngineName.OPENCLAW)
-        engine = mgr._select_engine(EngineName.AUTO)
+        engine = await mgr._select_engine(EngineName.AUTO)
         assert engine.name == EngineName.OPENCLAW
 
-    def test_no_engines_raises(self):
+    @pytest.mark.asyncio
+    async def test_no_engines_raises(self):
         from clawbridge.orchestrator.manager import TaskManager
         mgr = TaskManager()
         with pytest.raises(EngineError):
-            mgr._select_engine(EngineName.AUTO)
+            await mgr._select_engine(EngineName.AUTO)
 
     def test_get_engine_by_name(self, task_manager):
         engine = task_manager.get_engine(EngineName.BROWSER_USE)

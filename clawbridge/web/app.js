@@ -73,6 +73,7 @@ function handleWSMessage(msg) {
     case 'task_list':
       state.tasks = msg.payload;
       renderTasks();
+      updateBrowserStatus();
       break;
     case 'engine_status':
       state.engines = msg.payload;
@@ -84,11 +85,38 @@ function handleWSMessage(msg) {
     case 'approval_request':
       showApprovalRequest(msg.payload);
       break;
+    case 'browser_frame':
+      console.log('Received browser frame:', msg.payload.frame?.substring(0, 50) + '...');
+      updateLiveBrowser(msg.payload.frame);
+      break;
     case 'pong':
       break;
     default:
       console.log('Unknown WS message:', msg.type);
   }
+}
+
+function updateLiveBrowser(frameBase64) {
+  const card = document.getElementById('liveBrowserCard');
+  const img = document.getElementById('browserFrame');
+  const placeholder = document.getElementById('browserPlaceholder');
+  const status = document.getElementById('browserStatus');
+
+  if (!frameBase64) return;
+
+  // Show card if hidden
+  if (card.style.display === 'none') {
+    card.style.display = 'flex';
+  }
+
+  // Update image
+  img.src = `data:image/jpeg;base64,${frameBase64}`;
+  img.style.display = 'block';
+  placeholder.style.display = 'none';
+
+  // Update status
+  status.textContent = 'Active';
+  status.className = 'status-badge status-active';
 }
 
 // ─── Task Management ─────────────────────────────────────────────────────────
@@ -111,6 +139,16 @@ function upsertTask(task) {
     state.tasks.unshift(task);
   }
   renderTasks();
+  updateBrowserStatus();
+}
+
+function updateBrowserStatus() {
+  const anyRunning = state.tasks.some(t => t.status === 'running');
+  const status = document.getElementById('browserStatus');
+  if (!anyRunning && status) {
+    status.textContent = 'Idle';
+    status.className = 'status-badge status-idle';
+  }
 }
 
 async function pauseTask(id) {
@@ -166,6 +204,9 @@ function renderTasks() {
   }
 
   container.innerHTML = state.tasks.map(t => renderTaskItem(t)).join('');
+
+  // Auto-scroll to bottom
+  container.scrollTop = container.scrollHeight;
 }
 
 function renderTaskItem(task) {
@@ -268,6 +309,12 @@ async function loadConfig() {
         </span>
       </div>
       <div class="config-row">
+        <span class="config-label">OpenRouter Key</span>
+        <span class="config-value ${config.keys.has_openrouter_key ? 'yes' : 'no'}">
+          ${config.keys.has_openrouter_key ? 'Configured' : 'Not set'}
+        </span>
+      </div>
+      <div class="config-row">
         <span class="config-label">Model</span>
         <span class="config-value">${escapeHtml(config.keys.default_model)}</span>
       </div>
@@ -329,16 +376,92 @@ document.addEventListener('DOMContentLoaded', () => {
 
     await submitTask(prompt, engine);
 
-    document.getElementById('taskPrompt').value = '';
+    const taskPrompt = document.getElementById('taskPrompt');
+    taskPrompt.value = '';
+    taskPrompt.style.height = '48px'; // Reset height
     btn.disabled = false;
-    btn.textContent = 'Run Task';
+    btn.textContent = 'send'; // Keep icon
+  });
+
+  // Textarea auto-resize
+  const taskPrompt = document.getElementById('taskPrompt');
+  taskPrompt.addEventListener('input', function () {
+    this.style.height = '48px';
+    this.style.height = (this.scrollHeight) + 'px';
+  });
+
+  taskPrompt.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      document.getElementById('taskForm').dispatchEvent(new Event('submit'));
+    }
   });
 
   // Load initial data
   loadConfig();
 
+  // Settings Modal
+  const modal = document.getElementById('settingsModal');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const closeBtn = document.querySelector('.close-modal');
+  const keysForm = document.getElementById('keysForm');
+
+  settingsBtn.onclick = () => {
+    // Fill form with current state
+    document.getElementById('anthropicKey').value = '';
+    document.getElementById('openaiKey').value = '';
+    document.getElementById('openrouterKey').value = '';
+    document.getElementById('defaultModel').value = state.config.keys?.default_model || '';
+    document.getElementById('browserHeadless').checked = state.config.engines?.browser_use?.config?.headless ?? true;
+    modal.classList.add('active');
+  };
+
+  closeBtn.onclick = () => modal.classList.remove('active');
+  window.onclick = (e) => { if (e.target === modal) modal.classList.remove('active'); };
+
+  keysForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const saveBtn = document.getElementById('saveKeysBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    const payload = {
+      default_model: document.getElementById('defaultModel').value.trim(),
+      browser_headless: document.getElementById('browserHeadless').checked
+    };
+
+    const ant = document.getElementById('anthropicKey').value.trim();
+    const oai = document.getElementById('openaiKey').value.trim();
+    const or = document.getElementById('openrouterKey').value.trim();
+
+    if (ant) payload.anthropic_api_key = ant;
+    if (oai) payload.openai_api_key = oai;
+    if (or) payload.openrouter_api_key = or;
+
+    try {
+      await api('POST', '/api/config/keys', payload);
+      modal.classList.remove('active');
+      await loadConfig();
+      alert('Configuration saved. Engines are reloading.');
+    } catch (err) {
+      alert(`Failed to save: ${err.message}`);
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Configuration';
+    }
+  };
+
   // Connect WebSocket for live updates
   connectWebSocket();
+
+  // Sidebar Togle
+  const toggleBtn = document.getElementById('toggleSidebar');
+  const mainLayout = document.getElementById('mainLayout');
+  if (toggleBtn && mainLayout) {
+    toggleBtn.onclick = () => {
+      mainLayout.classList.toggle('sidebar-collapsed');
+    };
+  }
 
   // Keepalive ping
   setInterval(() => {

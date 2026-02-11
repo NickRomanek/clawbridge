@@ -63,6 +63,10 @@ class TaskManager:
 
         if EngineName.BROWSER_USE in enabled:
             engine = BrowserUseEngine()
+            # Set screenshot callback to broadcast frames
+            engine.on_screenshot = lambda frame: asyncio.create_task(
+                self._broadcast_browser_frame(frame)
+            )
             await engine.initialize()
             self._engines[EngineName.BROWSER_USE] = engine
 
@@ -82,6 +86,19 @@ class TaskManager:
             or True  # will check below
         ]
         logger.info(f"Engines initialized: {list(self._engines.keys())}")
+
+    async def _broadcast_browser_frame(self, frame_base64: str) -> None:
+        """Broadcast a browser screenshot frame to connected dashboards."""
+        if self._ws_broadcast:
+            try:
+                await self._ws_broadcast({
+                    "type": "browser_frame",
+                    "payload": {
+                        "frame": frame_base64
+                    },
+                })
+            except Exception as e:
+                logger.debug(f"Frame broadcast failed: {e}")
 
     async def shutdown_engines(self) -> None:
         """Gracefully stop all engines."""
@@ -104,23 +121,34 @@ class TaskManager:
             infos.append(info.model_dump())
         return infos
 
-    def _select_engine(self, preferred: EngineName) -> EngineBase:
+    async def _select_engine(self, preferred: EngineName) -> EngineBase:
         """Select the best available engine.
 
         If preferred is AUTO, pick browser-use first (faster for research tasks),
         fall back to OpenClaw.
         """
         if preferred != EngineName.AUTO and preferred in self._engines:
-            return self._engines[preferred]
+            engine = self._engines[preferred]
+            status = await engine.get_status()
+            if status == EngineStatus.AVAILABLE:
+                return engine
+            raise EngineError(
+                preferred,
+                f"Selected engine '{preferred.value}' is not available (status: {status.value})",
+                recoverable=True
+            )
 
         # Auto-select: prefer browser-use for speed
         for name in [EngineName.BROWSER_USE, EngineName.OPENCLAW]:
             if name in self._engines:
-                return self._engines[name]
+                engine = self._engines[name]
+                status = await engine.get_status()
+                if status == EngineStatus.AVAILABLE:
+                    return engine
 
         raise EngineError(
             EngineName.AUTO,
-            "No engines available. Check ENABLED_ENGINES in .env",
+            "No functional engines available. Please check your API keys or ENABLED_ENGINES.",
             recoverable=False,
         )
 
@@ -172,7 +200,7 @@ class TaskManager:
             await self._broadcast_task_update(task)
 
             # Select engine
-            engine = self._select_engine(task.engine)
+            engine = await self._select_engine(task.engine)
             actual_engine = engine.name
             task.engine = actual_engine
 
