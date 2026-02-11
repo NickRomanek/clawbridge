@@ -11,7 +11,16 @@
       "mcp__Windows-MCP__Shell",
       "Bash(echo:*)",
       "Bash(where npm:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(du:*)",
+      "Bash(wc:*)",
+      "Bash(cd:*)",
+      "Bash(pip install:*)",
+      "Bash(taskkill:*)",
+      "Bash(powershell \"Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match ''clawbridge'' } | Stop-Process -Force\")",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd test suite \\(199 tests\\) and update documentation\n\n- Add comprehensive test suite: unit tests for schemas, safety/policy engine,\n  config, and audit logger; integration tests for TaskManager and FastAPI routes\n- Fix datetime.utcnow\\(\\) deprecation warnings across schemas and manager\n- Update walkthrough.md as project status tracker with completed phases\n- Update implementation_plan.md to mark Phase 4 complete, add Phase 5\n- Add GitHub repo link to README.md\n- Add pytest.ini, requirements-dev.txt, and test infrastructure\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)"
     ]
   }
 }

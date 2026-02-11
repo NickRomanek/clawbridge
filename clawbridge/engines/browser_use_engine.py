@@ -96,6 +96,12 @@ class BrowserUseEngine(EngineBase):
                 model=model,
                 api_key=settings.anthropic_api_key,
             )
+        elif settings.has_openrouter_key:
+            from browser_use.llm import ChatOpenRouter
+            return ChatOpenRouter(
+                model=model,
+                api_key=settings.openrouter_api_key,
+            )
         elif settings.has_openai_key:
             from browser_use.llm import ChatOpenAI
             return ChatOpenAI(
@@ -105,7 +111,7 @@ class BrowserUseEngine(EngineBase):
         else:
             raise EngineError(
                 EngineName.BROWSER_USE,
-                "No API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env",
+                "No API key configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY in .env",
                 recoverable=False,
             )
 

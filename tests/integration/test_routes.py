@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from unittest.mock import AsyncMock, patch
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -58,21 +59,26 @@ class FakeEngine(EngineBase):
 
 
 @pytest.fixture
-def client():
-    """Create a TestClient with mocked engine initialization."""
+def client(tmp_path):
+    """Create a TestClient with mocked engine initialization and isolated DB."""
     from clawbridge.server.app import create_app
-    from clawbridge.orchestrator.manager import get_task_manager
-
-    # Patch engine initialization to use fake engine
-    original_init = get_task_manager().__class__.initialize_engines
+    from clawbridge.orchestrator import manager
+    from clawbridge.orchestrator.manager import TaskManager
+    
+    db_file = tmp_path / "test_api.db"
+    os.environ["CLAWBRIDGE_DB"] = str(db_file)
+    manager._task_manager = None # Reset singleton
 
     async def fake_init(self):
         self._engines[EngineName.BROWSER_USE] = FakeEngine()
 
-    with patch.object(get_task_manager().__class__, "initialize_engines", fake_init):
+    with patch.object(TaskManager, "initialize_engines", fake_init):
         app = create_app()
         with TestClient(app) as c:
             yield c
+            
+    os.environ.pop("CLAWBRIDGE_DB", None)
+    manager._task_manager = None
 
 
 # ── Health Check ─────────────────────────────────────────────────────────────
@@ -110,6 +116,7 @@ class TestTaskRoutes:
 
     def test_create_task_empty_prompt_rejected(self, client):
         resp = client.post("/api/tasks", json={"prompt": ""})
+        # Note: Depending on Pydantic version/min_length, it might be 422
         assert resp.status_code == 422  # Validation error
 
     def test_create_task_missing_prompt_rejected(self, client):

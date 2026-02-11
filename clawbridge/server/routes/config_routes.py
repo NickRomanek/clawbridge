@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Query
+import os
+from pathlib import Path
+
+from fastapi import APIRouter, Query, HTTPException
 
 from clawbridge.config import get_settings
 from clawbridge.telemetry.logger import get_audit_logger
@@ -32,6 +35,7 @@ async def get_config():
         "keys": {
             "anthropic_configured": settings.has_anthropic_key,
             "openai_configured": settings.has_openai_key,
+            "openrouter_configured": settings.has_openrouter_key,
             "default_model": settings.default_model,
         },
         "engines": {
@@ -45,6 +49,11 @@ async def get_config():
             "max_concurrent_tasks": settings.max_concurrent_tasks,
             "max_actions_per_task": settings.max_actions_per_task,
         },
+        "remote": {
+            "url": settings.remote_bridge_url,
+            "configured": bool(settings.remote_bridge_url),
+        },
+        "machine_id": settings.machine_id,
         "telemetry": {
             "log_level": settings.log_level,
             "log_retention_hours": settings.log_retention_hours,
@@ -65,7 +74,56 @@ async def get_key_status():
             "configured": settings.has_openai_key,
             "model": settings.default_model if settings.has_openai_key and "gpt" in settings.default_model else None,
         },
+        "openrouter": {
+            "configured": settings.has_openrouter_key,
+            "model": settings.default_model,
+        },
     }
+
+
+@router.post("/keys")
+async def save_keys(body: dict):
+    """Save API keys to .env and reload settings."""
+    provider = body.get("provider", "")
+    key = body.get("key", "").strip()
+    env_map = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+    }
+    env_var = env_map.get(provider)
+    if not env_var:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+    if not key:
+        raise HTTPException(status_code=400, detail="Key cannot be empty")
+
+    # Update .env file
+    env_path = Path(".env")
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(env_var + "=") or line.strip().startswith(
+            env_var + " ="
+        ):
+            lines[i] = f"{env_var}={key}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{env_var}={key}")
+    env_path.write_text("\n".join(lines) + "\n")
+
+    # Update in-memory
+    os.environ[env_var] = key
+    
+    # Force reload settings
+    from clawbridge.config import reload_settings
+    reload_settings()
+
+    # Re-initialize engines
+    from clawbridge.orchestrator.manager import get_task_manager
+    await get_task_manager().initialize_engines()
+
+    return {"status": "ok", "provider": provider}
 
 
 @router.get("/policy")

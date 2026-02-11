@@ -6,7 +6,11 @@ Manages the task queue, dispatches tasks to engines, and tracks lifecycle state.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import sqlite3
+import uuid
+import httpx
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -18,9 +22,11 @@ from clawbridge.policy.safety import evaluate_policy, scan_for_prompt_injection
 from clawbridge.shared.schemas import (
     ActionClass,
     AuditEvent,
+    Citation,
     EngineName,
     EngineStatus,
     Task,
+    TaskResult,
     TaskStatus,
 )
 from clawbridge.telemetry.logger import get_audit_logger
@@ -45,6 +51,8 @@ class TaskManager:
         self._running_count: int = 0
         self._task_futures: dict[str, asyncio.Task] = {}
         self._ws_broadcast: Callable | None = None  # Set by server for live updates
+        self._init_db()
+        self._load_tasks_from_db()
 
     # ── Engine Management ─────────────────────────────────────────────────
 
@@ -62,6 +70,10 @@ class TaskManager:
             engine = OpenClawEngine()
             await engine.initialize()
             self._engines[EngineName.OPENCLAW] = engine
+
+        # Start Remote Bridge Polling if configured
+        if settings.remote_bridge_url:
+            asyncio.create_task(self.remote_bridge_loop())
 
         available = [
             e.display_name
@@ -145,6 +157,7 @@ class TaskManager:
         # Execute in background
         future = asyncio.create_task(self._execute_task(task))
         self._task_futures[task.id] = future
+        self._save_task_to_db(task)
 
         return task
 
@@ -219,6 +232,7 @@ class TaskManager:
         finally:
             self._running_count = max(0, self._running_count - 1)
             self._task_futures.pop(task.id, None)
+            self._save_task_to_db(task)
             await self._broadcast_task_update(task)
 
             # Check if any queued tasks can now run
@@ -299,6 +313,121 @@ class TaskManager:
             ))
             await self._broadcast_task_update(task)
         return task
+
+    # ── Persistence ───────────────────────────────────────────────────────
+
+    def _init_db(self) -> None:
+        """Initialize SQLite database for task persistence."""
+        settings = get_settings()
+        try:
+            conn = sqlite3.connect(settings.db_path)
+            c = conn.cursor()
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS tasks
+                             (id TEXT PRIMARY KEY, prompt TEXT, engine TEXT, status TEXT, 
+                              result TEXT, error TEXT, created_at TEXT, updated_at TEXT)"""
+            )
+            conn.commit()
+            conn.close()
+            logger.info(f"Database initialized at {settings.db_path}")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+
+    def _load_tasks_from_db(self) -> None:
+        """Load recent tasks from SQLite on startup."""
+        settings = get_settings()
+        try:
+            conn = sqlite3.connect(settings.db_path)
+            c = conn.cursor()
+            c.execute("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 100")
+            for row in c.fetchall():
+                try:
+                    res_val = json.loads(row[4]) if row[4] else None
+                    t = Task(
+                        id=row[0],
+                        prompt=row[1],
+                        engine=EngineName(row[2]),
+                        status=TaskStatus(row[3]),
+                        result=TaskResult(**res_val) if res_val else None,
+                        error=row[5],
+                        created_at=datetime.fromisoformat(row[6]) if datetime.fromisoformat(row[6]).tzinfo else datetime.fromisoformat(row[6]).replace(tzinfo=timezone.utc),
+                        updated_at=datetime.fromisoformat(row[7]) if datetime.fromisoformat(row[7]).tzinfo else datetime.fromisoformat(row[7]).replace(tzinfo=timezone.utc),
+                    )
+                    self._tasks[t.id] = t
+                except Exception as e:
+                    logger.warning(f"Failed to parse task {row[0]} from DB: {e}")
+            conn.close()
+            logger.info(f"Loaded {len(self._tasks)} tasks from database")
+        except Exception as e:
+            logger.error(f"Failed to load tasks from DB: {e}")
+
+    def _save_task_to_db(self, task: Task) -> None:
+        """UPSERT task state into SQLite."""
+        settings = get_settings()
+        try:
+            conn = sqlite3.connect(settings.db_path)
+            c = conn.cursor()
+            res_json = json.dumps(task.result.model_dump(mode="json")) if task.result else None
+            c.execute(
+                """INSERT OR REPLACE INTO tasks 
+                             (id, prompt, engine, status, result, error, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task.id,
+                    task.prompt,
+                    task.engine.value,
+                    task.status.value,
+                    res_json,
+                    task.error,
+                    task.created_at.isoformat(),
+                    task.updated_at.isoformat(),
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to save task to DB: {e}")
+
+    # ── Remote Bridge ─────────────────────────────────────────────────────
+
+    async def remote_bridge_loop(self) -> None:
+        """Background loop to poll for remote tasks from a hub."""
+        settings = get_settings()
+        if not settings.remote_bridge_url:
+            return
+
+        mid = settings.machine_id
+        logger.info(f"Starting Remote Bridge polling (Machine ID: {mid})")
+
+        while True:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        f"{settings.remote_bridge_url}/api/bridge/tasks",
+                        headers={
+                            "X-Machine-ID": mid,
+                            "Authorization": f"Bearer {settings.remote_auth_token}",
+                        },
+                        timeout=30.0,
+                    )
+                    if resp.status_code == 200:
+                        tasks_data = resp.json()
+                        for t_data in tasks_data:
+                            # Avoid duplicates by check ID if provided or prompt?
+                            # Remote typically sends fresh tasks.
+                            task = Task(
+                                id=t_data.get("id", str(uuid.uuid4())),
+                                prompt=t_data["prompt"],
+                                engine=EngineName(t_data.get("engine", "auto")),
+                            )
+                            if task.id not in self._tasks:
+                                await self.submit_task(task)
+                    elif resp.status_code != 204:  # 204 No Content is normal
+                        logger.debug(f"Remote bridge poll status: {resp.status_code}")
+            except Exception as e:
+                logger.debug(f"Remote bridge poll failed: {e}")
+
+            await asyncio.sleep(10)  # Wait 10s between polls
 
     # ── WebSocket Broadcasting ────────────────────────────────────────────
 

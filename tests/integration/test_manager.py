@@ -65,21 +65,37 @@ class FakeEngine(EngineBase):
 
 
 @pytest.fixture
-def task_manager():
-    """Create a TaskManager with a fake engine pre-registered."""
+def task_manager(tmp_path):
+    """Create a TaskManager with a fake engine pre-registered and isolated DB."""
     from clawbridge.orchestrator.manager import TaskManager
+    import os
+    db_file = tmp_path / "test_clawbridge.db"
+    os.environ["CLAWBRIDGE_DB"] = str(db_file)
+    
     mgr = TaskManager()
     mgr._engines[EngineName.BROWSER_USE] = FakeEngine(EngineName.BROWSER_USE)
-    return mgr
+    
+    yield mgr
+    
+    # Cleanup
+    os.environ.pop("CLAWBRIDGE_DB", None)
 
 
 @pytest.fixture
-def failing_manager():
-    """Create a TaskManager where the engine always fails."""
+def failing_manager(tmp_path):
+    """Create a TaskManager where the engine always fails and isolated DB."""
     from clawbridge.orchestrator.manager import TaskManager
+    import os
+    db_file = tmp_path / "test_failing.db"
+    os.environ["CLAWBRIDGE_DB"] = str(db_file)
+    
     mgr = TaskManager()
     mgr._engines[EngineName.BROWSER_USE] = FakeEngine(EngineName.BROWSER_USE, should_fail=True)
-    return mgr
+    
+    yield mgr
+    
+    # Cleanup
+    os.environ.pop("CLAWBRIDGE_DB", None)
 
 
 # ── Engine Selection ─────────────────────────────────────────────────────────
@@ -187,10 +203,10 @@ class TestTaskRetrieval:
 
     @pytest.mark.asyncio
     async def test_get_all_tasks_newest_first(self, task_manager):
-        from datetime import datetime
+        from datetime import datetime, timezone
 
-        t1 = Task(prompt="first", created_at=datetime(2026, 1, 1, 0, 0, 0))
-        t2 = Task(prompt="second", created_at=datetime(2026, 1, 1, 0, 0, 1))
+        t1 = Task(prompt="first", created_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc))
+        t2 = Task(prompt="second", created_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc))
         await task_manager.submit_task(t1)
         await asyncio.sleep(0.05)
         await task_manager.submit_task(t2)
