@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from clawbridge.config import get_settings
@@ -155,7 +155,7 @@ class TaskManager:
         try:
             self._running_count += 1
             task.status = TaskStatus.RUNNING
-            task.updated_at = datetime.utcnow()
+            task.updated_at = datetime.now(tz=timezone.utc)
             await self._broadcast_task_update(task)
 
             # Select engine
@@ -198,7 +198,7 @@ class TaskManager:
         except EngineError as e:
             task.status = TaskStatus.ERROR
             task.error = str(e)
-            task.updated_at = datetime.utcnow()
+            task.updated_at = datetime.now(tz=timezone.utc)
             audit.log_event(AuditEvent(
                 task_id=task.id,
                 event_type="task_error",
@@ -208,7 +208,7 @@ class TaskManager:
         except Exception as e:
             task.status = TaskStatus.ERROR
             task.error = f"Unexpected error: {e}"
-            task.updated_at = datetime.utcnow()
+            task.updated_at = datetime.now(tz=timezone.utc)
             logger.exception(f"Task {task.id} unexpected error")
             audit.log_event(AuditEvent(
                 task_id=task.id,
@@ -252,7 +252,7 @@ class TaskManager:
         task = self._tasks.get(task_id)
         if task and task.status == TaskStatus.RUNNING:
             task.status = TaskStatus.PAUSED
-            task.updated_at = datetime.utcnow()
+            task.updated_at = datetime.now(tz=timezone.utc)
 
             # Cancel the running future
             future = self._task_futures.get(task_id)
@@ -272,7 +272,7 @@ class TaskManager:
         task = self._tasks.get(task_id)
         if task and task.status == TaskStatus.PAUSED:
             task.status = TaskStatus.PENDING
-            task.updated_at = datetime.utcnow()
+            task.updated_at = datetime.now(tz=timezone.utc)
             get_audit_logger().log_event(AuditEvent(
                 task_id=task_id,
                 event_type="task_resumed",
@@ -286,7 +286,7 @@ class TaskManager:
         task = self._tasks.get(task_id)
         if task and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.PAUSED):
             task.status = TaskStatus.CANCELLED
-            task.updated_at = datetime.utcnow()
+            task.updated_at = datetime.now(tz=timezone.utc)
 
             future = self._task_futures.get(task_id)
             if future:

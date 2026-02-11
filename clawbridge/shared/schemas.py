@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+_UTC = timezone.utc
 
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
@@ -65,8 +67,8 @@ class Task(BaseModel):
     prompt: str = Field(..., description="User's task description or question")
     engine: EngineName = Field(default=EngineName.AUTO, description="Which engine to use")
     status: TaskStatus = Field(default=TaskStatus.PENDING)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=_UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=_UTC))
     result: TaskResult | None = None
     steps: list[TaskStep] = Field(default_factory=list)
     error: str | None = None
@@ -154,7 +156,7 @@ class PolicyDecision(BaseModel):
 class AuditEvent(BaseModel):
     """Structured audit log entry for every action the agent takes."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=_UTC))
     task_id: str
     step_id: str | None = None
     event_type: str  # "task_created", "step_started", "step_completed", "policy_decision", etc.

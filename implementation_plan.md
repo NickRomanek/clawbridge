@@ -1,31 +1,45 @@
 # Phase 4: UI Enhancements & Browser Integration
 
-This phase focuses on improving the dashboard usability with collapsible sidebars and providing a live visual "Bridge" to the browser directly in the UI.
+**Status: COMPLETE** (implemented in commits 8c7b34f and 450c411)
 
-## Proposed Changes
+This phase improved dashboard usability with collapsible sidebars and a live visual "Bridge" to the browser directly in the UI.
 
-### [Component] Browser Engine
-#### [MODIFY] [browser_use_engine.py](file:///d:/AWorkSpace/clawbridge/clawbridge/engines/browser_use_engine.py)
-- **Viewport Config**: Explicitly set the browser viewport and window size in `Agent` settings to ensure it doesn't default to something oversized.
-- **Screenshot Hooks**: Add a hook to the `Agent` to broadcast the current screenshot via the `TaskManager` whenever a new step is executed.
+## Completed Changes
 
-### [Component] UI
-#### [MODIFY] [clawbridge.py](file:///d:/AWorkSpace/clawbridge/clawbridge.py) (inside `_dashboard_html`)
-- **Collapsible Rails**: Add CSS and JS to allow the left (Config) and right (Activity) columns to be toggled.
-- **Live View Panel**: Implement a "Live View" panel in the center area that displays the latest screenshot received from the active engine.
-- **Responsive Layout**: Adjust the layout to handle the dynamic width of the center column when sidebars are collapsed.
+### Browser Engine
+- **Viewport Config**: Browser viewport set to 1280x720 in `BrowserUseEngine._get_browser_config()`.
+- **Screenshot Hooks**: `on_screenshot` callback broadcasts base64 screenshots via `TaskManager` during step execution.
 
-## Implementation Details
+### UI
+- **Collapsible Sidebars**: Left (Config) and right (Activity) columns toggle via CSS `.collapsed` class with arrow button controls.
+- **Live View Panel**: Center area displays latest screenshot from the active engine as a base64 `<img>`.
+- **Responsive Layout**: Center column adjusts width dynamically when sidebars collapse.
+- **Chat-like Interface**: Sticky bottom input, auto-resizing textarea, Enter-to-Submit.
+- **Modern Aesthetics**: Dark theme with gradients, premium typography, connection status indicator.
 
-### Collapsible Logic
-Using CSS classes `.collapsed` and small toggle buttons (arrows/icons) at the top of each sidebar.
+---
 
-### Browser Mirroring
-The engine will send `{"type": "live_view", "payload": {"image": "base64..."}}` messages. The frontend will display this on a `<canvas>` or `<img>` element with `object-fit: contain`.
+# Phase 5: Testing & Hardening (Current)
 
-## Verification Plan
+This phase adds automated test coverage and addresses gaps before production readiness.
 
-### Manual Verification
-- Verify that sidebars collapse/expand smoothly.
-- Run a task and verify that the "Live View" mirrors the browser's actions.
-- Verify the browser window size is more reasonable and consistent.
+## Planned Changes
+
+### Test Infrastructure
+- Add `pytest`, `pytest-asyncio`, `pytest-cov` to dev dependencies
+- Create `tests/` directory structure (unit, integration)
+- Add `conftest.py` with shared fixtures
+
+### Unit Tests (High Priority)
+- `test_schemas.py` -- model creation, validation, serialization, enum coverage
+- `test_safety.py` -- action classification, policy evaluation, content detection, redaction, prompt injection scanning
+- `test_config.py` -- settings loading, properties, key detection, repr safety
+- `test_logger.py` -- ring buffer, event logging, subscriber notification, redaction
+
+### Integration Tests
+- `test_manager.py` -- TaskManager with mocked engines, concurrency limits, queue processing
+- `test_routes.py` -- FastAPI endpoints via TestClient, CRUD operations, error responses
+
+### Future
+- End-to-end tests with actual browser-use/OpenClaw engines
+- Frontend tests (Jest + jsdom or Cypress)

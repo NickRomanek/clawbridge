@@ -8,6 +8,10 @@ Submit a task, pick an engine, and let it run. Everything stays on your machine.
 
 ---
 
+## Repository
+
+**GitHub:** [NickRomanek/clawbridge](https://github.com/NickRomanek/clawbridge)
+
 ## Quick Start (Single File)
 
 One file, no package structure. Install deps once, then run:

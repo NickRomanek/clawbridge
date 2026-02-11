@@ -1,69 +1,140 @@
-# Walkthrough - ClawBridge Engine Fixes & UI Overhaul
+# ClawBridge - Implementation Walkthrough & Status Tracker
 
-I have addressed the LLM provider errors, fixed the OpenClaw engine, and overhauled the dashboard UI.
-1.  **browser-use engine error**: `"ChatOpenAI" object has no field "provider"`
-2.  **OpenClaw engine error**: `OpenClaw not available in single-file mode`
+**Last updated:** February 2026
+**Version:** 0.1.0 (MVP)
+**Repository:** [NickRomanek/clawbridge](https://github.com/NickRomanek/clawbridge)
+**Branch:** main
 
-## Changes Made
+---
 
-### 1. Migration to Native `browser_use.llm` Wrappers
-I have migrated the engine implementation from using LangChain LLM wrappers to using the native wrappers provided by the `browser-use` library itself (`browser_use.llm.ChatAnthropic`, `browser_use.llm.ChatOpenAI`, and `browser_use.llm.ChatOpenRouter`).
+## Completed Work
 
-This solves the `"ChatOpenAI" object has no field "provider"` error because:
-- LangChain's `ChatOpenAI` is a Pydantic model that does not define a `provider` field. Recent versions of `browser-use` use strict Pydantic validation which rejects the manual addition of this field (the "monkey-patch" I previously attempted).
-- The native `browser_use.llm` classes are specifically designed for the library and include all required fields and methods (like `ainvoke`) that the `Agent` expects.
+### Phase 1: Core Scaffolding
+**Status: COMPLETE**
 
-```python
-# Now using native wrappers in clawbridge.py
-from browser_use.llm import ChatAnthropic, ChatOpenAI, ChatOpenRouter
+- Python package structure (`clawbridge/`) with modular architecture
+- Configuration management (`config.py`) using Pydantic BaseSettings with BYOK key support
+- Shared schemas (`shared/schemas.py`) -- Pydantic models for Task, TaskStep, TaskResult, PolicyDecision, AuditEvent, WSMessage, and all supporting types
+- Enums: TaskStatus (8 states), EngineName, ActionClass, PolicyMode, EngineStatus
+- `.env` support with `.env.example` template
 
-if settings.has_anthropic_key():
-    self._llm = ChatAnthropic(...)
-elif settings.has_openai_key():
-    self._llm = ChatOpenAI(...)
-elif settings.has_openrouter_key():
-    self._llm = ChatOpenRouter(...)
+### Phase 2: Engine Integration
+**Status: COMPLETE**
+
+- Abstract engine interface (`engines/base.py`) -- EngineBase ABC with initialize/execute_step/run_task/stop/get_status
+- **browser-use engine** (`engines/browser_use_engine.py`) -- Playwright-based automation using native `browser_use.llm` wrappers (ChatAnthropic, ChatOpenAI, ChatOpenRouter). Supports headless mode, viewport config, screenshot broadcasting.
+- **OpenClaw engine** (`engines/openclaw_engine.py`) -- Node.js + CDP adapter. Manages gateway subprocess lifecycle, communicates via HTTP API, supports BYOK key passthrough.
+- LLM provider migration from LangChain wrappers to native browser-use wrappers (resolved `"ChatOpenAI" object has no field "provider"` error)
+
+### Phase 3: Orchestration, Persistence & Safety
+**Status: COMPLETE**
+
+- **TaskManager** (`orchestrator/manager.py`) -- singleton task lifecycle management with concurrency limits, queue processing, engine selection (auto prefers browser-use), WebSocket broadcasting
+- **Policy engine** (`policy/safety.py`) -- 3-tier action classification (safe_read/sensitive_write/high_risk), 3 policy modes (guarded/permissive/strict), sensitive content detection (credentials, PII, password fields), credential redaction, prompt injection scanning
+- **Audit logger** (`telemetry/logger.py`) -- ring buffer (500 events) for live dashboard feed, JSONL file persistence, WebSocket subscriber notification, sensitive content redaction before writing
+- **SQLite persistence** -- task history in `clawbridge.db`, survives server restarts
+- **Machine identity** -- UUID in `clawbridge.id` for future remote bridge identification
+- **Remote bridge polling** -- background service for `REMOTE_BRIDGE_URL` / `REMOTE_AUTH_TOKEN` support
+
+### Phase 4: Server, Dashboard & UI
+**Status: COMPLETE**
+
+- **FastAPI server** (`server/app.py`) -- factory pattern with async lifespan, CORS, static file serving
+- **REST API routes:**
+  - `POST /api/tasks` -- submit task with prompt + engine selection
+  - `GET /api/tasks` -- list all tasks (newest first)
+  - `GET /api/tasks/{id}` -- get task details
+  - `PATCH /api/tasks/{id}` -- pause/resume/cancel
+  - `DELETE /api/tasks/{id}` -- remove task
+  - `GET /api/engines` -- list engine status
+  - `GET /api/engines/{name}` -- specific engine info
+  - `GET /api/config` -- configuration summary (keys redacted)
+  - `GET /api/config/keys` -- key presence status
+  - `GET /api/config/policy` -- policy mode details
+  - `GET /api/config/audit` -- recent audit events
+  - `GET /health` -- health check
+- **WebSocket** (`/ws`) -- real-time task updates, audit event streaming, engine status, approval request/response protocol, ping/pong keepalive
+- **Web dashboard** (`web/`) -- chat-like interface with:
+  - Sticky bottom task input with auto-resizing textarea
+  - Engine selector dropdown
+  - Collapsible left sidebar (config) and right sidebar (activity feed)
+  - Live task status rendering with pause/resume/cancel controls
+  - Live browser screenshot mirroring (base64 via WebSocket)
+  - Real-time activity log from audit events
+  - Connection status indicator
+  - Modern dark theme with gradients and premium aesthetics
+- **Docker support** -- Dockerfile + docker-compose.yml with optional OpenClaw service
+- **Cross-platform setup** -- `setup.sh` (Unix) + `setup.ps1` (Windows)
+- **Single-file mode** -- `clawbridge.py` (1,114 lines) as standalone distributable
+
+### Infrastructure
+**Status: COMPLETE**
+
+- GitHub repository: `NickRomanek/clawbridge` (main branch)
+- `.gitignore` configured (excludes .env, .db, .id, __pycache__, node_modules, logs)
+- `LICENSE.txt` -- Proprietary RomaTek AI license
+- `build.py` -- build automation for packaging
+
+---
+
+## Current Gaps (To Address Next)
+
+### Testing (Critical)
+- **No tests exist.** Zero test files, no pytest config, no test dependencies.
+- Highest-ROI targets: `schemas.py` (pure models), `safety.py` (pure functions), `config.py` (settings properties)
+- Secondary: `manager.py` (async orchestration with mocked engines), API routes (FastAPI TestClient)
+
+### Error Handling
+- Engine initialization failures need graceful degradation in the dashboard
+- WebSocket reconnection is client-side only; server-side dead connection cleanup exists but untested
+- Bad/expired API keys produce generic errors; could surface clearer messages
+
+### Deferred Features (From Original Spec)
+- Tauri-based desktop agent (currently Python/FastAPI only)
+- Cloudflare Tunnel integration
+- Managed cloud browsing tier with domain allowlist enforcement
+- Enterprise SSO & RBAC
+- Advanced plugin framework
+- Full browser replay/video stream
+- Multi-tenant governance controls
+- Signed command envelope for cloud-to-agent security
+- Landing page and beta waitlist
+
+---
+
+## Architecture Summary
+
+```
+Web Dashboard (HTML/JS/CSS)
+    |  WebSocket + REST
+FastAPI Server
+    |
+    +-- Task Routes (/api/tasks)
+    +-- Engine Routes (/api/engines)
+    +-- Config Routes (/api/config)
+    +-- WebSocket (/ws)
+    |
+TaskManager (orchestrator)
+    |
+    +-- BrowserUseEngine (Playwright + browser-use)
+    +-- OpenClawEngine (Node.js + CDP gateway)
+    |
+Policy Engine (safety.py)
+    |
+Audit Logger (telemetry)
 ```
 
-### 2. Functional OpenClaw Engine in Single-File Mode
-The stubbed `OpenClawEngine` in `clawbridge.py` has been replaced with a real implementation that:
-- Detects the `openclaw` binary on the system.
-- Automatically starts the OpenClaw gateway subprocess if it's not responding.
-- Communicates with the gateway via its HTTP API to execute tasks.
+## Technology Stack
 
-### 3. Fixed Invalid Model ID
-The "None" response and the 400 error in your logs were caused by an invalid default model ID `claude-sonnet-4-20250514` in the `Settings` class. I have updated the default to `gpt-4o`, which is a widely supported ID across OpenAI and OpenRouter.
-
-### 4. UI Overhaul (Chat-like Experience)
-As requested, I have redesigned the dashboard to feel more like a modern chat application:
-- **Sticky Bottom Input**: The task input and engine selector are now at the bottom of the screen.
-- **Chat Log Area**: The task list now scrolls and keeps your most recent tasks at the bottom.
-- **Improved UX**: Added auto-resizing textarea and Enter-to-Submit (Shift+Enter for new lines).
-- **Modern Aesthetics**: Updated gradients, borders, and typography for a more premium feel.
-
-### 5. Machine Identity & Persistence (Phase 3)
-I have transformed ClawBridge into a true "Bridge" by adding identity and persistence:
-- **Machine ID**: A unique UUID is generated and stored in `clawbridge.id`. This allows your machine to be safely identified by the `clawbridge.ai` domain.
-- **SQLite Persistence**: All tasks and results are now stored in `clawbridge.db`. Your chat history will persist even if you restart the server.
-- **Remote Bridge Polling**: I've added a background service that polls for remote tasks. If you set `REMOTE_BRIDGE_URL` and `REMOTE_AUTH_TOKEN` in your `.env`, ClawBridge can now receive and execute tasks sent from your cloud domain.
-
-### 6. Fixed Activity Log Broadcasting
-The "Activity" sidebar was empty because events logged machine-side weren't being pushed to the UI. I have:
-- Added a broadcast callback to the `AuditLogger`.
-- Intercepted all machine logs and forwarded them through the WebSocket.
-- You can now see real-time status updates (task created, started, completed) in the right-hand sidebar.
-
-## Verification Results
-
-### Persistence Test
-- Tasks are now loaded from the database on startup.
-- Machine ID is preserved in a local file.
-
-### 7. GitHub Integration
-The project has been successfully initialized as a Git repository and pushed to your GitHub:
-- **Repository**: [NickRomanek/clawbridge](https://github.com/NickRomanek/clawbridge.git)
-- **Branch**: `main`
-- **Exclusions**: Sensitve files like `.env`, `clawbridge.db`, and `clawbridge.id` are excluded via `.gitignore`.
-
-## Conclusion
-The application is now a multi-engine, persistent, and remote-capable bridge. You are ready to start connecting your local machine to the `clawbridge.ai` ecosystem!
+| Layer | Technology |
+|---|---|
+| Server | FastAPI + Uvicorn |
+| Validation | Pydantic 2.x |
+| Browser automation | browser-use + Playwright |
+| Alt engine | OpenClaw (Node.js + CDP) |
+| LLM providers | Anthropic, OpenAI, OpenRouter (BYOK) |
+| Persistence | SQLite |
+| Real-time | WebSocket |
+| Config | pydantic-settings + .env |
+| Logging | stdlib logging + JSONL audit trail |
+| Containerization | Docker + docker-compose |
