@@ -1,0 +1,63 @@
+CLAWBRIDGE END USER LICENSE AGREEMENT (EULA)
+=============================================
+Version 1.0 | Effective Date: February 2026
+
+Copyright (c) 2026 RomaTek AI. All rights reserved.
+
+BY INSTALLING, COPYING, OR OTHERWISE USING THIS SOFTWARE, YOU AGREE TO BE
+BOUND BY THE TERMS OF THIS LICENSE AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+INSTALL OR USE THE SOFTWARE.
+
+1. GRANT OF LICENSE
+   RomaTek AI grants you a non-exclusive, non-transferable, revocable license
+   to use ClawBridge ("the Software") for your personal or internal business
+   purposes, subject to the terms of this agreement.
+
+2. RESTRICTIONS
+   You may NOT:
+   a) Copy, redistribute, sublicense, sell, or resell the Software or any
+      portion thereof without prior written consent from RomaTek AI.
+   b) Reverse engineer, decompile, or disassemble the Software, except to
+      the extent permitted by applicable law.
+   c) Remove or alter any proprietary notices, labels, or marks on the Software.
+   d) Use the Software to build a competing product or service.
+   e) Share your license key or access credentials with any third party.
+
+3. INTELLECTUAL PROPERTY
+   The Software, including all code, algorithms, designs, and documentation,
+   is the exclusive property of RomaTek AI. This license does not transfer
+   any ownership rights to you.
+
+4. THIRD-PARTY COMPONENTS
+   The Software integrates with open-source components (browser-use, OpenClaw,
+   Playwright, and others) which are governed by their own respective licenses.
+   Your use of those components is subject to their license terms.
+
+5. DATA AND PRIVACY
+   a) The Software runs locally on your machine. Your data stays on your
+      infrastructure unless you explicitly enable cloud features.
+   b) BYOK (Bring Your Own Key) API keys are stored locally and are never
+      transmitted to RomaTek AI.
+   c) No telemetry or usage data is sent to RomaTek AI without your consent.
+
+6. DISCLAIMER OF WARRANTIES
+   THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED. ROMATEK AI DISCLAIMS ALL WARRANTIES INCLUDING MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+7. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL ROMATEK AI BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
+   SPECIAL, OR CONSEQUENTIAL DAMAGES ARISING FROM USE OF THE SOFTWARE.
+   ROMATEK AI'S TOTAL LIABILITY SHALL NOT EXCEED THE AMOUNT PAID FOR THE
+   SOFTWARE LICENSE IN THE TWELVE MONTHS PRECEDING THE CLAIM.
+
+8. TERMINATION
+   This license is effective until terminated. RomaTek AI may terminate this
+   license at any time if you breach any of its terms. Upon termination, you
+   must destroy all copies of the Software.
+
+9. GOVERNING LAW
+   This agreement shall be governed by the laws of the state in which
+   RomaTek AI is incorporated, without regard to conflict of law principles.
+
+For questions, contact: legal@romatek.ai

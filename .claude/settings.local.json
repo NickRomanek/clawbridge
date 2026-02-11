@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pip install:*)",
+      "Bash(python clawbridge.py:*)",
+      "Bash(python -m playwright:*)",
+      "Bash(python:*)",
+      "Bash(timeout:*)",
+      "Bash(curl:*)",
+      "Bash(ping:*)",
+      "mcp__Windows-MCP__Shell",
+      "Bash(echo:*)",
+      "Bash(where npm:*)",
+      "Bash(npm install:*)"
+    ]
+  }
+}

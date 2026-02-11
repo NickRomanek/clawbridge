@@ -1,0 +1,34 @@
+# ClawBridge MVP - Docker Compose
+# Run: docker-compose up
+# Dashboard: http://localhost:8765
+
+services:
+  clawbridge:
+    build: .
+    ports:
+      - "${CLAWBRIDGE_PORT:-8765}:8765"
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8765/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # OpenClaw agent (optional -- remove if not using OpenClaw engine)
+  openclaw:
+    image: node:22-slim
+    working_dir: /app
+    command: >
+      sh -c "
+        npm install -g openclaw@latest 2>/dev/null;
+        echo 'OpenClaw ready -- ClawBridge will manage lifecycle via gateway API';
+        sleep infinity
+      "
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    restart: unless-stopped

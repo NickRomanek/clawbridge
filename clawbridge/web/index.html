@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClawBridge</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <h1 class="logo">ClawBridge</h1>
+        <span class="version">v0.1.0</span>
+      </div>
+      <div class="header-right">
+        <div class="status-indicator" id="connectionStatus">
+          <span class="status-dot"></span>
+          <span class="status-text">Connecting...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Layout -->
+    <div class="main-layout">
+      <!-- Left Panel: Task Input + Engine Status -->
+      <aside class="sidebar">
+        <!-- Task Submission -->
+        <section class="card">
+          <h2>New Task</h2>
+          <form id="taskForm">
+            <textarea
+              id="taskPrompt"
+              placeholder="Describe your task... e.g. 'Research the latest Microsoft Exchange vulnerability CVE-2026-XXXX and draft a client advisory'"
+              rows="4"
+            ></textarea>
+            <div class="form-row">
+              <label for="engineSelect">Engine</label>
+              <select id="engineSelect">
+                <option value="auto">Auto (recommended)</option>
+                <option value="browser_use">browser-use</option>
+                <option value="openclaw">OpenClaw</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary" id="submitBtn">
+              Run Task
+            </button>
+          </form>
+        </section>
+
+        <!-- Engine Status -->
+        <section class="card">
+          <h2>Engines</h2>
+          <div id="engineList" class="engine-list">
+            <p class="muted">Loading engines...</p>
+          </div>
+        </section>
+
+        <!-- Config Summary -->
+        <section class="card">
+          <h2>Configuration</h2>
+          <div id="configSummary" class="config-summary">
+            <p class="muted">Loading...</p>
+          </div>
+        </section>
+      </aside>
+
+      <!-- Center: Task List + Results -->
+      <main class="content">
+        <section class="card">
+          <div class="card-header">
+            <h2>Tasks</h2>
+            <span class="task-count" id="taskCount">0 tasks</span>
+          </div>
+          <div id="taskList" class="task-list">
+            <p class="muted center">No tasks yet. Submit one to get started.</p>
+          </div>
+        </section>
+      </main>
+
+      <!-- Right Panel: Activity Feed -->
+      <aside class="sidebar sidebar-right">
+        <section class="card">
+          <h2>Activity Feed</h2>
+          <div id="activityFeed" class="activity-feed">
+            <p class="muted">Waiting for activity...</p>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
