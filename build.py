@@ -43,8 +43,6 @@ def build():
         "--console",  # Keep console for logging output
         "--workpath", str(BUILD_DIR),
         "--distpath", str(DIST_DIR),
-        # Include web dashboard files
-        "--add-data", f"{ROOT / 'clawbridge' / 'web'}{os.pathsep}clawbridge/web",
         # Include LICENSE
         "--add-data", f"{ROOT / 'LICENSE.txt'}{os.pathsep}.",
         # Hidden imports that PyInstaller may miss
@@ -59,7 +57,7 @@ def build():
         "--hidden-import", "uvicorn.protocols.websockets.auto",
         "--hidden-import", "uvicorn.lifespan.on",
         # Entry point
-        str(ROOT / "clawbridge" / "__main__.py"),
+        str(ROOT / "clawbridge.py"),
     ]
 
     print(f"  Building binary...")

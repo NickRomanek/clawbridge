@@ -5,19 +5,15 @@ Central HTTP/WebSocket server that ties together:
 - Engine status routes
 - Configuration routes
 - WebSocket for live dashboard updates
-- Static file serving for the web dashboard
 """
 
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-
 from clawbridge.config import get_settings
 from clawbridge.orchestrator.manager import get_task_manager
 from clawbridge.server.routes.tasks import router as tasks_router
@@ -26,9 +22,6 @@ from clawbridge.server.routes.config_routes import router as config_router
 from clawbridge.server.routes.ws import router as ws_router
 
 logger = logging.getLogger(__name__)
-
-WEB_DIR = Path(__file__).parent.parent / "web"
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,9 +81,5 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         return {"status": "ok", "version": "0.1.0"}
-
-    # Serve static dashboard
-    if WEB_DIR.exists():
-        app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="dashboard")
 
     return app
