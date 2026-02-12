@@ -166,12 +166,504 @@ def get_machine_id() -> str:
     id_file.write_text(mid)
     return mid
 
+# ---------------------------------------------------------------------------
+# Workspace directory (personality files, memory, templates, schedules)
+# ---------------------------------------------------------------------------
+
+WORKSPACE_DIR = Path(os.environ.get("CLAWBRIDGE_WORKSPACE", "workspace"))
+
+# Personality/Soul files — inspired by OpenClaw's programmable soul
+PERSONALITY_FILES = {
+    "SOUL.md": {
+        "description": "Core identity and worldview — who the agent IS",
+        "default": """# Soul
+
+## Core Truths
+- I prioritize genuine helpfulness over performative compliance
+- I develop authentic perspective rather than defaulting to generic responses
+- I solve problems independently before asking for help
+- I build credibility through competent, reliable action
+
+## Boundaries
+- I protect user privacy — never share data without explicit permission
+- I request permission before taking risky or irreversible actions
+- I maintain appropriate agent-user distinction
+
+## Vibe
+- Direct, concise, no corporate fluff
+- Technical when needed, plain when possible
+- I show my reasoning, not just my conclusions
+"""
+    },
+    "IDENTITY.md": {
+        "description": "Public-facing identity — name, role, capabilities",
+        "default": """# Identity
+
+**Name:** ClawBridge Agent
+**Role:** Desktop & browser automation assistant
+**Capabilities:** Web browsing, form filling, data extraction, desktop control, scheduled tasks
+**Style:** Efficient, task-focused, transparent about actions taken
+"""
+    },
+    "USER.md": {
+        "description": "Information about the user — preferences, context, projects",
+        "default": """# User
+
+## Preferences
+- Timezone: (auto-detected)
+- Language: English
+
+## Projects
+- (Add your active projects here)
+
+## Notes
+- (Add any context the agent should remember about you)
+"""
+    },
+}
+
+def _ensure_workspace():
+    """Create workspace directory and default personality files if missing."""
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    (WORKSPACE_DIR / "memory").mkdir(exist_ok=True)
+    (WORKSPACE_DIR / "templates").mkdir(exist_ok=True)
+    (WORKSPACE_DIR / "schedules").mkdir(exist_ok=True)
+    for filename, meta in PERSONALITY_FILES.items():
+        fpath = WORKSPACE_DIR / filename
+        if not fpath.exists():
+            fpath.write_text(meta["default"], encoding="utf-8")
+    # Create MEMORY.md if missing
+    mem_path = WORKSPACE_DIR / "MEMORY.md"
+    if not mem_path.exists():
+        mem_path.write_text("# Memory\n\nDurable long-term knowledge. Max ~100 lines.\n\n", encoding="utf-8")
+
+_ensure_workspace()
+
+# ---------------------------------------------------------------------------
+# Personality / Soul System
+# ---------------------------------------------------------------------------
+
+class PersonalityManager:
+    """Manages personality files (SOUL.md, IDENTITY.md, USER.md) and memory."""
+
+    def __init__(self, workspace: Path = WORKSPACE_DIR):
+        self.workspace = workspace
+
+    def get_file(self, name: str) -> str:
+        """Read a personality file."""
+        fpath = self.workspace / name
+        if fpath.exists():
+            return fpath.read_text(encoding="utf-8")
+        return ""
+
+    def save_file(self, name: str, content: str) -> None:
+        """Write a personality file."""
+        fpath = self.workspace / name
+        fpath.write_text(content, encoding="utf-8")
+
+    def list_files(self) -> list[dict]:
+        """List all personality files with metadata."""
+        result = []
+        for name, meta in PERSONALITY_FILES.items():
+            fpath = self.workspace / name
+            result.append({
+                "name": name,
+                "description": meta["description"],
+                "exists": fpath.exists(),
+                "size": fpath.stat().st_size if fpath.exists() else 0,
+                "modified": datetime.fromtimestamp(fpath.stat().st_mtime).isoformat() if fpath.exists() else None,
+            })
+        return result
+
+    def get_system_context(self) -> str:
+        """Build the full personality context string for injection into engine prompts."""
+        parts = []
+        for name in PERSONALITY_FILES:
+            content = self.get_file(name)
+            if content.strip():
+                parts.append(f"--- {name} ---\n{content.strip()}")
+        # Include durable memory
+        mem = self.get_file("MEMORY.md")
+        if mem.strip():
+            parts.append(f"--- MEMORY.md ---\n{mem.strip()}")
+        # Include today's daily log
+        today_log = self._get_daily_log()
+        if today_log.strip():
+            parts.append(f"--- Daily Log ({datetime.now().strftime('%Y-%m-%d')}) ---\n{today_log.strip()}")
+        return "\n\n".join(parts)
+
+    def _get_daily_log(self, date_str: str | None = None) -> str:
+        """Get a daily memory log."""
+        if date_str is None:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+        fpath = self.workspace / "memory" / f"{date_str}.md"
+        if fpath.exists():
+            return fpath.read_text(encoding="utf-8")
+        return ""
+
+    def append_memory(self, text: str, daily: bool = True) -> None:
+        """Append to daily log or durable memory."""
+        ts = datetime.now().strftime("%H:%M")
+        entry = f"- [{ts}] {text}\n"
+        if daily:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            fpath = self.workspace / "memory" / f"{date_str}.md"
+            if not fpath.exists():
+                fpath.write_text(f"# Daily Log — {date_str}\n\n", encoding="utf-8")
+            with open(fpath, "a", encoding="utf-8") as f:
+                f.write(entry)
+        else:
+            fpath = self.workspace / "MEMORY.md"
+            with open(fpath, "a", encoding="utf-8") as f:
+                f.write(entry)
+
+    def get_memory(self) -> dict:
+        """Get all memory data — durable + recent daily logs."""
+        durable = self.get_file("MEMORY.md")
+        mem_dir = self.workspace / "memory"
+        daily_logs = {}
+        if mem_dir.exists():
+            for f in sorted(mem_dir.glob("*.md"), reverse=True)[:7]:  # Last 7 days
+                daily_logs[f.stem] = f.read_text(encoding="utf-8")
+        return {"durable": durable, "daily_logs": daily_logs}
+
+    def search_memory(self, query: str) -> list[dict]:
+        """Simple keyword search across all memory files."""
+        results = []
+        query_lower = query.lower()
+        # Search durable memory
+        durable = self.get_file("MEMORY.md")
+        for i, line in enumerate(durable.splitlines()):
+            if query_lower in line.lower():
+                results.append({"source": "MEMORY.md", "line": i + 1, "text": line.strip()})
+        # Search daily logs
+        mem_dir = self.workspace / "memory"
+        if mem_dir.exists():
+            for f in sorted(mem_dir.glob("*.md"), reverse=True)[:30]:
+                content = f.read_text(encoding="utf-8")
+                for i, line in enumerate(content.splitlines()):
+                    if query_lower in line.lower():
+                        results.append({"source": f"memory/{f.name}", "line": i + 1, "text": line.strip()})
+        return results[:50]  # Cap results
+
+_personality = PersonalityManager()
+
+def get_personality() -> PersonalityManager:
+    return _personality
+
+# ---------------------------------------------------------------------------
+# Scheduled Tasks (Cron / Interval / One-shot)
+# ---------------------------------------------------------------------------
+
+class ScheduleType(str, Enum):
+    ONCE = "once"        # Run at a specific time
+    INTERVAL = "interval"  # Run every N seconds/minutes/hours
+    CRON = "cron"        # Cron expression
+
+class ScheduledTask(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    prompt: str = ""
+    engine: str = "auto"
+    schedule_type: str = "interval"  # once, interval, cron
+    schedule_value: str = ""  # ISO datetime for once, seconds for interval, cron expr
+    enabled: bool = True
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    last_run: str | None = None
+    next_run: str | None = None
+    run_count: int = 0
+    last_result: str | None = None
+
+class ScheduleManager:
+    """Manages scheduled/recurring tasks."""
+
+    def __init__(self, workspace: Path = WORKSPACE_DIR):
+        self.workspace = workspace
+        self.schedules_dir = workspace / "schedules"
+        self.schedules_dir.mkdir(parents=True, exist_ok=True)
+        self._schedules: dict[str, ScheduledTask] = {}
+        self._running = False
+        self._task_callback: Callable | None = None
+        self._load_schedules()
+
+    def _load_schedules(self):
+        """Load all schedules from disk."""
+        for f in self.schedules_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                sched = ScheduledTask(**data)
+                self._schedules[sched.id] = sched
+            except Exception as e:
+                logging.warning("Failed to load schedule %s: %s", f.name, e)
+
+    def _save_schedule(self, sched: ScheduledTask):
+        """Save a schedule to disk."""
+        fpath = self.schedules_dir / f"{sched.id}.json"
+        fpath.write_text(json.dumps(sched.model_dump(), indent=2), encoding="utf-8")
+
+    def _delete_schedule_file(self, sched_id: str):
+        """Remove schedule file from disk."""
+        fpath = self.schedules_dir / f"{sched_id}.json"
+        if fpath.exists():
+            fpath.unlink()
+
+    def create(self, name: str, prompt: str, engine: str, schedule_type: str, schedule_value: str) -> ScheduledTask:
+        """Create a new scheduled task."""
+        sched = ScheduledTask(
+            name=name,
+            prompt=prompt,
+            engine=engine,
+            schedule_type=schedule_type,
+            schedule_value=schedule_value,
+        )
+        # Calculate next_run
+        sched.next_run = self._calc_next_run(sched)
+        self._schedules[sched.id] = sched
+        self._save_schedule(sched)
+        return sched
+
+    def update(self, sched_id: str, updates: dict) -> ScheduledTask | None:
+        """Update a scheduled task."""
+        sched = self._schedules.get(sched_id)
+        if not sched:
+            return None
+        for k, v in updates.items():
+            if hasattr(sched, k):
+                setattr(sched, k, v)
+        sched.next_run = self._calc_next_run(sched)
+        self._save_schedule(sched)
+        return sched
+
+    def delete(self, sched_id: str) -> bool:
+        """Delete a scheduled task."""
+        if sched_id in self._schedules:
+            del self._schedules[sched_id]
+            self._delete_schedule_file(sched_id)
+            return True
+        return False
+
+    def list_all(self) -> list[ScheduledTask]:
+        """List all scheduled tasks."""
+        return sorted(self._schedules.values(), key=lambda s: s.created_at, reverse=True)
+
+    def get(self, sched_id: str) -> ScheduledTask | None:
+        return self._schedules.get(sched_id)
+
+    def _calc_next_run(self, sched: ScheduledTask) -> str | None:
+        """Calculate when this schedule should next run."""
+        now = datetime.utcnow()
+        if sched.schedule_type == "once":
+            try:
+                run_at = datetime.fromisoformat(sched.schedule_value)
+                if run_at > now:
+                    return run_at.isoformat()
+                return None  # Already past
+            except Exception:
+                return None
+        elif sched.schedule_type == "interval":
+            try:
+                seconds = self._parse_interval(sched.schedule_value)
+                if sched.last_run:
+                    last = datetime.fromisoformat(sched.last_run)
+                    return (last + __import__("datetime").timedelta(seconds=seconds)).isoformat()
+                return now.isoformat()  # Run immediately first time
+            except Exception:
+                return None
+        elif sched.schedule_type == "cron":
+            return self._next_cron_run(sched.schedule_value)
+        return None
+
+    def _parse_interval(self, value: str) -> int:
+        """Parse interval like '30m', '2h', '300s', '1d' into seconds."""
+        value = value.strip().lower()
+        if value.endswith("d"):
+            return int(value[:-1]) * 86400
+        elif value.endswith("h"):
+            return int(value[:-1]) * 3600
+        elif value.endswith("m"):
+            return int(value[:-1]) * 60
+        elif value.endswith("s"):
+            return int(value[:-1])
+        return int(value)  # Assume seconds
+
+    def _next_cron_run(self, cron_expr: str) -> str | None:
+        """Simple cron expression parser (minute hour day month weekday).
+        Supports: *, specific numbers, */N for step values.
+        """
+        try:
+            parts = cron_expr.strip().split()
+            if len(parts) != 5:
+                return None
+            now = datetime.utcnow()
+            # Simple: find next matching minute within the next 24 hours
+            from datetime import timedelta
+            check = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+            for _ in range(1440):  # Check every minute for 24 hours
+                if self._cron_matches(parts, check):
+                    return check.isoformat()
+                check += timedelta(minutes=1)
+            return None
+        except Exception:
+            return None
+
+    def _cron_matches(self, parts: list[str], dt: datetime) -> bool:
+        """Check if a datetime matches a cron expression."""
+        fields = [dt.minute, dt.hour, dt.day, dt.month, dt.weekday()]
+        ranges = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
+        for part, val, (lo, hi) in zip(parts, fields, ranges):
+            if part == "*":
+                continue
+            if "/" in part:
+                base, step = part.split("/", 1)
+                step = int(step)
+                if base == "*":
+                    base = lo
+                else:
+                    base = int(base)
+                if (val - base) % step != 0 or val < base:
+                    return False
+            elif "," in part:
+                if val not in [int(x) for x in part.split(",")]:
+                    return False
+            else:
+                if val != int(part):
+                    return False
+        return True
+
+    async def run_loop(self, submit_fn: Callable):
+        """Background loop that checks and runs scheduled tasks."""
+        self._task_callback = submit_fn
+        self._running = True
+        logging.info("Schedule manager started (%d schedules loaded)", len(self._schedules))
+        while self._running:
+            now = datetime.utcnow()
+            for sched in list(self._schedules.values()):
+                if not sched.enabled:
+                    continue
+                if not sched.next_run:
+                    continue
+                try:
+                    next_run = datetime.fromisoformat(sched.next_run)
+                except Exception:
+                    continue
+                if now >= next_run:
+                    logging.info("Scheduled task firing: %s (%s)", sched.name, sched.id[:8])
+                    # Create and submit task
+                    try:
+                        task = Task(
+                            prompt=sched.prompt,
+                            engine=EngineName(sched.engine) if sched.engine != "auto" else EngineName.AUTO,
+                        )
+                        if self._task_callback:
+                            await self._task_callback(task)
+                        sched.last_run = now.isoformat()
+                        sched.run_count += 1
+                        sched.last_result = f"Submitted task {task.id[:8]}"
+                        # Recalculate next run
+                        if sched.schedule_type == "once":
+                            sched.enabled = False  # One-shot, disable after run
+                            sched.next_run = None
+                        else:
+                            sched.next_run = self._calc_next_run(sched)
+                        self._save_schedule(sched)
+                        # Log to memory
+                        get_personality().append_memory(
+                            f"Scheduled task '{sched.name}' ran (run #{sched.run_count})", daily=True
+                        )
+                    except Exception as e:
+                        logging.error("Failed to run scheduled task %s: %s", sched.id, e)
+                        sched.last_result = f"Error: {e}"
+                        self._save_schedule(sched)
+            await asyncio.sleep(30)  # Check every 30 seconds
+
+    def stop(self):
+        self._running = False
+
+_schedule_mgr: ScheduleManager | None = None
+
+def get_schedule_manager() -> ScheduleManager:
+    global _schedule_mgr
+    if _schedule_mgr is None:
+        _schedule_mgr = ScheduleManager()
+    return _schedule_mgr
+
+# ---------------------------------------------------------------------------
+# Task Templates
+# ---------------------------------------------------------------------------
+
+class TaskTemplate(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    prompt: str = ""
+    engine: str = "auto"
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    use_count: int = 0
+
+class TemplateManager:
+    """Manages reusable task templates."""
+
+    def __init__(self, workspace: Path = WORKSPACE_DIR):
+        self.templates_dir = workspace / "templates"
+        self.templates_dir.mkdir(parents=True, exist_ok=True)
+        self._templates: dict[str, TaskTemplate] = {}
+        self._load_templates()
+
+    def _load_templates(self):
+        for f in self.templates_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                tmpl = TaskTemplate(**data)
+                self._templates[tmpl.id] = tmpl
+            except Exception as e:
+                logging.warning("Failed to load template %s: %s", f.name, e)
+
+    def _save_template(self, tmpl: TaskTemplate):
+        fpath = self.templates_dir / f"{tmpl.id}.json"
+        fpath.write_text(json.dumps(tmpl.model_dump(), indent=2), encoding="utf-8")
+
+    def create(self, name: str, prompt: str, engine: str = "auto") -> TaskTemplate:
+        tmpl = TaskTemplate(name=name, prompt=prompt, engine=engine)
+        self._templates[tmpl.id] = tmpl
+        self._save_template(tmpl)
+        return tmpl
+
+    def delete(self, tmpl_id: str) -> bool:
+        if tmpl_id in self._templates:
+            del self._templates[tmpl_id]
+            fpath = self.templates_dir / f"{tmpl_id}.json"
+            if fpath.exists():
+                fpath.unlink()
+            return True
+        return False
+
+    def list_all(self) -> list[TaskTemplate]:
+        return sorted(self._templates.values(), key=lambda t: t.created_at, reverse=True)
+
+    def get(self, tmpl_id: str) -> TaskTemplate | None:
+        return self._templates.get(tmpl_id)
+
+    def use(self, tmpl_id: str) -> TaskTemplate | None:
+        """Mark a template as used (increment counter)."""
+        tmpl = self._templates.get(tmpl_id)
+        if tmpl:
+            tmpl.use_count += 1
+            self._save_template(tmpl)
+        return tmpl
+
+_template_mgr: TemplateManager | None = None
+
+def get_template_manager() -> TemplateManager:
+    global _template_mgr
+    if _template_mgr is None:
+        _template_mgr = TemplateManager()
+    return _template_mgr
+
 def init_db():
     """Initialize SQLite database for task persistence."""
     conn = sqlite3.connect(Settings.db_path)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
-                 (id TEXT PRIMARY KEY, prompt TEXT, engine TEXT, status TEXT, 
+                 (id TEXT PRIMARY KEY, prompt TEXT, engine TEXT, status TEXT,
                   result TEXT, error TEXT, created_at TEXT, updated_at TEXT)''')
     conn.commit()
     conn.close()
@@ -1501,7 +1993,7 @@ class TaskManager:
         try:
             conn = sqlite3.connect(Settings.db_path)
             c = conn.cursor()
-            res_json = json.dumps(task.result.dict()) if task.result else None
+            res_json = json.dumps(task.result.model_dump()) if task.result else None
             c.execute("""INSERT OR REPLACE INTO tasks 
                          (id, prompt, engine, status, result, error, created_at, updated_at)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -1784,10 +2276,19 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 #liveImage:not([src=""])~#livePlaceholder{display:none;}
 @keyframes monitor-pulse{0%,100%{color:var(--ok);}50%{color:rgba(34,197,94,0.3);}}
 .monitor-active{animation:monitor-pulse 2s ease-in-out infinite;}
+
+/* View Tabs */
+.view-tab{display:inline-flex;align-items:center;gap:5px;background:none;border:none;color:var(--muted);cursor:pointer;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;transition:all 0.15s;letter-spacing:0.3px;}
+.view-tab:hover{color:var(--text);background:rgba(255,255,255,0.05);}
+.view-tab.active{color:var(--accent);background:rgba(99,102,241,0.12);}
+
+/* Soul Tabs */
+.soul-tab.active{background:rgba(99,102,241,0.15)!important;color:var(--accent)!important;}
+.soul-tab:hover{background:rgba(255,255,255,0.08)!important;color:var(--text)!important;}
 """
     # Inline JS
     js = """
-const state={ws:null,tasks:[],engines:[],connected:false};
+const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],activeView:'chat'};
 async function api(method,path,body=null){
   const r=await fetch(path,{method,headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):null});
   if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);
@@ -1797,7 +2298,7 @@ function connect(){
   state.ws=new WebSocket((location.protocol==="https:"?"wss:":"ws:")+"//"+location.host+"/ws");
   state.ws.onopen=()=>{state.connected=true;document.querySelector(".ws-status").previousElementSibling.className="status-dot connected";document.querySelector(".ws-status").textContent="Connected";};
   state.ws.onclose=()=>{state.connected=false;document.querySelector(".ws-status").previousElementSibling.className="status-dot error";document.querySelector(".ws-status").textContent="Disconnected";setTimeout(connect,3000);};
-  state.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="task_update")upsert(m.payload);else if(m.type==="task_list"){state.tasks=m.payload;render();}else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}else if(m.type==="audit_event")addActivity(m.payload);else if(m.type==="live_view")updateLiveView(m.payload);else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});else if(m.type==="tasks_cleared"){state.tasks=[];render();}};
+  state.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="task_update")upsert(m.payload);else if(m.type==="task_list"){state.tasks=m.payload;render();}else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}else if(m.type==="audit_event")addActivity(m.payload);else if(m.type==="live_view")updateLiveView(m.payload);else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});else if(m.type==="tasks_cleared"){state.tasks=[];render();}else if(m.type==="schedule_update"){state.schedules=m.payload;renderSchedules();}else if(m.type==="template_update"){state.templates=m.payload;renderTemplates();}};
 }
 let _liveTimer=null;
 function updateLiveView(p){
@@ -1878,6 +2379,11 @@ function render(){
     const hasError=t.error;
     let ctl="";
     if(t.status==="running")ctl='<div class="msg-actions"><button class="btn" onclick="cancel(\\''+t.id+'\\')">Stop</button></div>';
+    if(t.status==="complete")ctl='<div class="msg-actions">'
+      +'<button class="btn" style="background:rgba(255,255,255,0.06);color:var(--muted);font-size:10px;padding:3px 8px" onclick="copyResult(\\''+t.id+'\\',this)" title="Copy to clipboard"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy</button>'
+      +'<button class="btn" style="background:rgba(255,255,255,0.06);color:var(--muted);font-size:10px;padding:3px 8px" onclick="saveResultToFile(\\''+t.id+'\\')" title="Save to file"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Save</button>'
+      +'<button class="btn" style="background:rgba(255,255,255,0.06);color:var(--muted);font-size:10px;padding:3px 8px" onclick="saveTaskAsTemplate(\\''+t.id+'\\')">Template</button>'
+      +'</div>';
 
     let assistantHtml="";
     if(hasResult||hasError||t.status!=="pending"){
@@ -2028,6 +2534,266 @@ function addActivity(ev){
   c.insertAdjacentHTML("afterbegin",'<div class="activity-item"><span style="color:var(--muted);font-size:10px">'+new Date(ev.timestamp).toLocaleTimeString()+'</span> <strong>'+esc(ev.event_type)+'</strong><div style="color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(ev.detail)+'</div></div>');
   while(c.children.length>50)c.removeChild(c.lastChild);
 }
+// ── Schedule Management ──
+function renderSchedules(){
+  const c=document.getElementById("scheduleList");
+  if(!c)return;
+  if(!state.schedules.length){c.innerHTML='<p style="color:var(--muted);font-size:11px">No scheduled tasks</p>';return;}
+  c.innerHTML=state.schedules.map(s=>{
+    const sc=s.enabled?'color:var(--ok)':'color:var(--muted)';
+    const typeLabel=s.schedule_type==='once'?'Once':s.schedule_type==='interval'?'Every '+s.schedule_value:'Cron: '+s.schedule_value;
+    const lastRun=s.last_run?new Date(s.last_run).toLocaleString():'Never';
+    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center">'
+      +'<span style="font-size:12px;font-weight:600">'+esc(s.name)+'</span>'
+      +'<div style="display:flex;gap:4px">'
+      +'<button onclick="toggleSchedule(\''+s.id+'\','+!s.enabled+')" style="background:none;border:none;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:4px;'+(s.enabled?'color:var(--ok);background:rgba(34,197,94,0.1)':'color:var(--muted);background:rgba(255,255,255,0.05)')+'">'+(s.enabled?'ON':'OFF')+'</button>'
+      +'<button onclick="deleteSchedule(\''+s.id+'\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:10px;padding:2px 4px" title="Delete">✕</button>'
+      +'</div></div>'
+      +'<div style="font-size:10px;color:var(--muted)">'+typeLabel+' · Runs: '+s.run_count+' · Last: '+lastRun+'</div>'
+      +'<div style="font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(s.prompt)+'</div>'
+      +'</div>';
+  }).join("");
+}
+async function toggleSchedule(id,enabled){
+  try{await api("PATCH","/api/schedules/"+id,{enabled});}catch(e){console.error(e);}
+}
+async function deleteSchedule(id){
+  if(!confirm("Delete this scheduled task?"))return;
+  try{await api("DELETE","/api/schedules/"+id);}catch(e){console.error(e);}
+}
+function showNewScheduleForm(){
+  const d=document.getElementById("newScheduleForm");
+  d.style.display=d.style.display==="none"?"block":"none";
+}
+async function createSchedule(){
+  const name=document.getElementById("schedName").value.trim();
+  const prompt=document.getElementById("schedPrompt").value.trim();
+  const engine=document.getElementById("schedEngine").value;
+  const type=document.getElementById("schedType").value;
+  const value=document.getElementById("schedValue").value.trim();
+  if(!name||!prompt||!value){alert("Fill in all fields");return;}
+  try{
+    await api("POST","/api/schedules",{name,prompt,engine,schedule_type:type,schedule_value:value});
+    document.getElementById("schedName").value="";
+    document.getElementById("schedPrompt").value="";
+    document.getElementById("schedValue").value="";
+    document.getElementById("newScheduleForm").style.display="none";
+  }catch(e){alert("Error: "+e.message);}
+}
+
+// ── Template Management ──
+function renderTemplates(){
+  const c=document.getElementById("templateList");
+  if(!c)return;
+  if(!state.templates.length){c.innerHTML='<p style="color:var(--muted);font-size:11px">No templates yet. Save a task as a template to reuse it.</p>';return;}
+  c.innerHTML=state.templates.map(t=>{
+    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center">'
+      +'<span style="font-size:12px;font-weight:600">'+esc(t.name)+'</span>'
+      +'<div style="display:flex;gap:4px">'
+      +'<button onclick="runTemplate(\''+t.id+'\')" style="background:var(--accent);border:none;cursor:pointer;color:#fff;font-size:10px;padding:3px 8px;border-radius:4px">Run</button>'
+      +'<button onclick="deleteTemplate(\''+t.id+'\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:10px;padding:2px 4px" title="Delete">✕</button>'
+      +'</div></div>'
+      +'<div style="font-size:10px;color:var(--muted)">Used '+t.use_count+'x · '+esc(t.engine)+'</div>'
+      +'<div style="font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(t.prompt)+'</div>'
+      +'</div>';
+  }).join("");
+}
+async function runTemplate(id){
+  try{await api("POST","/api/templates/"+id+"/use");scrollToBottom();}catch(e){alert("Error: "+e.message);}
+}
+async function deleteTemplate(id){
+  if(!confirm("Delete this template?"))return;
+  try{
+    await api("DELETE","/api/templates/"+id);
+    state.templates=state.templates.filter(t=>t.id!==id);
+    renderTemplates();
+  }catch(e){console.error(e);}
+}
+function showNewTemplateForm(){
+  const d=document.getElementById("newTemplateForm");
+  d.style.display=d.style.display==="none"?"block":"none";
+}
+async function createTemplate(){
+  const name=document.getElementById("tmplName").value.trim();
+  const prompt=document.getElementById("tmplPrompt").value.trim();
+  const engine=document.getElementById("tmplEngine").value;
+  if(!name||!prompt){alert("Fill in name and prompt");return;}
+  try{
+    const t=await api("POST","/api/templates",{name,prompt,engine});
+    state.templates.push(t);
+    renderTemplates();
+    document.getElementById("tmplName").value="";
+    document.getElementById("tmplPrompt").value="";
+    document.getElementById("newTemplateForm").style.display="none";
+  }catch(e){alert("Error: "+e.message);}
+}
+async function saveTaskAsTemplate(taskId){
+  const t=state.tasks.find(x=>x.id===taskId);
+  if(!t)return;
+  const name=prompt("Template name:",t.prompt.substring(0,40));
+  if(!name)return;
+  try{
+    const tmpl=await api("POST","/api/templates",{name,prompt:t.prompt,engine:t.engine});
+    state.templates.push(tmpl);
+    renderTemplates();
+    addActivity({timestamp:new Date().toISOString(),event_type:"template",detail:"Saved template: "+name});
+  }catch(e){alert("Error: "+e.message);}
+}
+
+// ── Output Routing ──
+function copyResult(taskId,btn){
+  const t=state.tasks.find(x=>x.id===taskId);
+  if(!t||!t.result)return;
+  const text=t.result.summary||t.error||"";
+  navigator.clipboard.writeText(text).then(()=>{
+    const orig=btn.innerHTML;btn.innerHTML='<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Copied!';
+    btn.style.color='var(--ok)';
+    setTimeout(()=>{btn.innerHTML=orig;btn.style.color='var(--muted)';},1500);
+  }).catch(()=>{
+    const ta=document.createElement("textarea");ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);
+    const orig=btn.innerHTML;btn.innerHTML='Copied!';btn.style.color='var(--ok)';
+    setTimeout(()=>{btn.innerHTML=orig;btn.style.color='var(--muted)';},1500);
+  });
+}
+function saveResultToFile(taskId){
+  const t=state.tasks.find(x=>x.id===taskId);
+  if(!t)return;
+  let content="# ClawBridge Task Result\\n";
+  content+="Date: "+new Date(t.created_at).toLocaleString()+"\\n";
+  content+="Engine: "+t.engine+"\\n";
+  content+="Status: "+t.status+"\\n";
+  content+="Prompt: "+t.prompt+"\\n\\n";
+  if(t.result){
+    if(t.result.summary)content+="## Result\\n"+t.result.summary+"\\n\\n";
+    if(t.result.total_steps)content+="Steps: "+t.result.total_steps+"\\n";
+    if(t.result.total_duration_ms)content+="Duration: "+(t.result.total_duration_ms/1000).toFixed(1)+"s\\n";
+    if(t.result.tokens_in)content+="Tokens: "+(t.result.tokens_in+t.result.tokens_out).toLocaleString()+"\\n";
+    if(t.result.estimated_cost_usd)content+="Cost: $"+t.result.estimated_cost_usd.toFixed(4)+"\\n";
+  }
+  if(t.error)content+="## Error\\n"+t.error+"\\n";
+  const blob=new Blob([content],{type:"text/markdown"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;a.download="clawbridge-task-"+t.id.substring(0,8)+".md";
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ── Soul / Personality Editor ──
+let _currentSoulFile=null;
+async function switchView(view){
+  state.activeView=view;
+  document.getElementById("chatView").style.display=view==="chat"?"flex":"none";
+  document.getElementById("soulView").style.display=view==="soul"?"flex":"none";
+  document.getElementById("memoryView").style.display=view==="memory"?"flex":"none";
+  document.getElementById("scheduleView").style.display=view==="schedules"?"flex":"none";
+  // Update nav buttons
+  document.querySelectorAll(".view-tab").forEach(b=>{
+    b.classList.toggle("active",b.dataset.view===view);
+  });
+  if(view==="soul"&&!_currentSoulFile)loadSoulFile("SOUL.md");
+  if(view==="memory")loadMemory();
+  if(view==="schedules")loadScheduleView();
+}
+async function loadSoulFile(name){
+  _currentSoulFile=name;
+  document.querySelectorAll(".soul-tab").forEach(b=>b.classList.toggle("active",b.dataset.file===name));
+  const editor=document.getElementById("soulEditor");
+  editor.value="Loading...";
+  try{
+    const r=await api("GET","/api/personality/"+name);
+    editor.value=r.content;
+  }catch(e){editor.value="Error loading file: "+e.message;}
+}
+async function saveSoulFile(){
+  if(!_currentSoulFile)return;
+  const content=document.getElementById("soulEditor").value;
+  const st=document.getElementById("soulSaveStatus");
+  st.textContent="Saving...";st.style.color="var(--muted)";
+  try{
+    await api("PUT","/api/personality/"+_currentSoulFile,{content});
+    st.textContent="Saved!";st.style.color="var(--ok)";
+    setTimeout(()=>st.textContent="",2000);
+  }catch(e){st.textContent="Error: "+e.message;st.style.color="var(--err)";}
+}
+
+// ── Memory View ──
+async function loadMemory(){
+  try{
+    const m=await api("GET","/api/memory");
+    const durEl=document.getElementById("durableMemory");
+    const dailyEl=document.getElementById("dailyLogs");
+    durEl.value=m.durable||"";
+    let html="";
+    for(const[date,content]of Object.entries(m.daily_logs||{})){
+      html+='<div style="margin-bottom:8px"><div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:4px">'+date+'</div>'
+        +'<pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin:0;max-height:120px;overflow-y:auto">'+esc(content)+'</pre></div>';
+    }
+    dailyEl.innerHTML=html||'<p style="color:var(--muted);font-size:11px">No daily logs yet</p>';
+  }catch(e){console.error(e);}
+}
+async function saveDurableMemory(){
+  const content=document.getElementById("durableMemory").value;
+  const st=document.getElementById("memorySaveStatus");
+  st.textContent="Saving...";
+  try{
+    await api("PUT","/api/personality/MEMORY.md",{content});
+    st.textContent="Saved!";st.style.color="var(--ok)";
+    setTimeout(()=>st.textContent="",2000);
+  }catch(e){st.textContent="Error";st.style.color="var(--err)";}
+}
+async function addQuickMemory(){
+  const text=document.getElementById("quickMemoryInput").value.trim();
+  if(!text)return;
+  try{
+    await api("POST","/api/memory",{text,daily:true});
+    document.getElementById("quickMemoryInput").value="";
+    loadMemory();
+  }catch(e){alert("Error: "+e.message);}
+}
+async function searchMemory(){
+  const q=document.getElementById("memorySearchInput").value.trim();
+  if(!q)return;
+  const results=await api("GET","/api/memory/search?q="+encodeURIComponent(q));
+  const el=document.getElementById("memorySearchResults");
+  if(!results.length){el.innerHTML='<p style="color:var(--muted);font-size:11px">No results</p>';return;}
+  el.innerHTML=results.map(r=>'<div style="font-size:11px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)"><span style="color:var(--accent)">'+esc(r.source)+':'+r.line+'</span> '+esc(r.text)+'</div>').join("");
+}
+
+// ── Schedule View ──
+async function loadScheduleView(){
+  try{
+    const s=await api("GET","/api/schedules");
+    state.schedules=s;
+    renderScheduleView();
+  }catch(e){console.error(e);}
+}
+function renderScheduleView(){
+  const c=document.getElementById("scheduleViewList");
+  if(!c)return;
+  if(!state.schedules.length){c.innerHTML='<div style="text-align:center;padding:40px;color:var(--muted)"><p style="font-size:16px;margin-bottom:8px">No scheduled tasks yet</p><p style="font-size:12px">Create recurring tasks that run automatically on a schedule.</p></div>';return;}
+  c.innerHTML=state.schedules.map(s=>{
+    const typeIcon=s.schedule_type==='once'?'⏱':'🔄';
+    const typeLabel=s.schedule_type==='once'?'One-shot':s.schedule_type==='interval'?'Every '+s.schedule_value:'Cron: '+s.schedule_value;
+    const nextRun=s.next_run?new Date(s.next_run).toLocaleString():'—';
+    const lastRun=s.last_run?new Date(s.last_run).toLocaleString():'Never';
+    return '<div class="card" style="margin-bottom:8px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+      +'<div><span style="font-size:14px;font-weight:600">'+typeIcon+' '+esc(s.name)+'</span></div>'
+      +'<div style="display:flex;gap:6px;align-items:center">'
+      +'<button onclick="toggleSchedule(\''+s.id+'\','+!s.enabled+')" class="btn" style="font-size:11px;padding:4px 10px;'+(s.enabled?'background:var(--ok)':'background:var(--muted)')+'">'+(s.enabled?'Enabled':'Disabled')+'</button>'
+      +'<button onclick="deleteSchedule(\''+s.id+'\')" class="btn" style="font-size:11px;padding:4px 10px;background:rgba(239,68,68,0.15);color:var(--err)">Delete</button>'
+      +'</div></div>'
+      +'<div style="font-size:12px;color:var(--text);margin-bottom:4px">'+esc(s.prompt)+'</div>'
+      +'<div style="display:flex;gap:16px;font-size:11px;color:var(--muted)">'
+      +'<span>'+typeLabel+'</span><span>Runs: '+s.run_count+'</span><span>Next: '+nextRun+'</span><span>Last: '+lastRun+'</span>'
+      +'</div>'
+      +'</div>';
+  }).join("");
+}
+
 document.addEventListener("DOMContentLoaded",()=>{
   const prompt = document.getElementById("prompt");
   prompt.onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submit();}};
@@ -2035,7 +2801,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   document.getElementById("taskForm").onsubmit=e=>{e.preventDefault();submit();};
   
   if(localStorage.getItem('sidebar_left')==='true') toggleSidebar('left');
-  ['engines','config','activity','liveview'].forEach(id=>{
+  ['engines','config','activity','liveview','schedules','templates'].forEach(id=>{
     const c=document.getElementById(id+'Content');
     const card=document.getElementById('card-'+id);
     if(c&&card&&localStorage.getItem('section_'+id)==='1'){c.classList.add('collapsed');card.querySelector('.chevron')?.classList.add('collapsed');}
@@ -2087,6 +2853,12 @@ document.addEventListener("DOMContentLoaded",()=>{
         </div>
         <div onclick="toggleSidebar('left')" title="Browser View">
           <svg id="monitorIconCollapsed" class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+        </div>
+        <div onclick="toggleSidebar('left')" title="Schedules">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        </div>
+        <div onclick="toggleSidebar('left')" title="Templates">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
         </div>
       </div>
       <div class="card expandable" id="card-engines">
@@ -2154,10 +2926,53 @@ document.addEventListener("DOMContentLoaded",()=>{
           </div>
         </div>
       </div>
+      <div class="card expandable" id="card-schedules">
+        <h2 class="expandable-header" onclick="toggleSection('schedules')">
+          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Schedules</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </h2>
+        <div class="expandable-content collapsed" id="schedulesContent">
+          <div id="scheduleList"><p style="color:var(--muted);font-size:11px">No scheduled tasks</p></div>
+          <button class="btn" style="width:100%;font-size:11px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="switchView('schedules')">Manage Schedules</button>
+        </div>
+      </div>
+      <div class="card expandable" id="card-templates">
+        <h2 class="expandable-header" onclick="toggleSection('templates')">
+          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>Templates</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </h2>
+        <div class="expandable-content collapsed" id="templatesContent">
+          <div id="templateList"><p style="color:var(--muted);font-size:11px">No templates yet</p></div>
+          <button class="btn" style="width:100%;font-size:11px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="showNewTemplateForm()">+ New Template</button>
+          <div id="newTemplateForm" style="display:none;margin-top:8px">
+            <input id="tmplName" placeholder="Template name" style="margin-bottom:6px;font-size:12px">
+            <textarea id="tmplPrompt" placeholder="Task prompt..." style="margin-bottom:6px;font-size:12px;min-height:50px"></textarea>
+            <select id="tmplEngine" style="margin-bottom:6px;font-size:12px;width:100%!important"><option value="auto">Auto</option><option value="browser_use">browser-use</option><option value="computer_use">computer-use</option><option value="openclaw">OpenClaw</option></select>
+            <button class="btn" style="width:100%;font-size:11px" onclick="createTemplate()">Save Template</button>
+          </div>
+        </div>
+      </div>
     </aside>
     <main>
       <div class="chat-header">
-        <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)">Chat & Tasks</h2>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <button class="view-tab active" data-view="chat" onclick="switchView('chat')" title="Chat">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            Chat
+          </button>
+          <button class="view-tab" data-view="soul" onclick="switchView('soul')" title="Soul & Personality">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+            Soul
+          </button>
+          <button class="view-tab" data-view="memory" onclick="switchView('memory')" title="Memory">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+            Memory
+          </button>
+          <button class="view-tab" data-view="schedules" onclick="switchView('schedules')" title="Schedules">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            Schedules
+          </button>
+        </div>
         <div style="display:flex;align-items:center;gap:10px;">
           <span id="taskCount" style="font-size:12px;color:var(--muted)">0 tasks</span>
           <button id="clearChatBtn" onclick="clearChat()" title="Clear chat" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;cursor:pointer;color:var(--muted);display:flex;align-items:center;gap:4px;font-size:11px;transition:all 0.15s;" onmouseenter="this.style.color='var(--err)';this.style.borderColor='var(--err)'" onmouseleave="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
@@ -2166,23 +2981,109 @@ document.addEventListener("DOMContentLoaded",()=>{
           </button>
         </div>
       </div>
-      <div id="taskList" class="task-list">
-        <p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>
+      <!-- Chat View (default) -->
+      <div id="chatView" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+        <div id="taskList" class="task-list">
+          <p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>
+        </div>
+        <div class="input-area">
+          <form id="taskForm" class="input-container">
+            <select id="engine">
+              <option value="auto">Auto</option>
+              <option value="browser_use">browser-use</option>
+              <option value="computer_use">computer-use</option>
+              <option value="openclaw">OpenClaw</option>
+            </select>
+            <textarea id="prompt" placeholder="Send a message..." rows="1"></textarea>
+            <button type="submit" class="btn" id="submitBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              Send
+            </button>
+          </form>
+        </div>
       </div>
-      <div class="input-area">
-        <form id="taskForm" class="input-container">
-          <select id="engine">
-            <option value="auto">Auto</option>
-            <option value="browser_use">browser-use</option>
-            <option value="computer_use">computer-use</option>
-            <option value="openclaw">OpenClaw</option>
-          </select>
-          <textarea id="prompt" placeholder="Send a message..." rows="1"></textarea>
-          <button type="submit" class="btn" id="submitBtn">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-            Send
-          </button>
-        </form>
+      <!-- Soul Editor View -->
+      <div id="soulView" style="display:none;flex-direction:column;flex:1;overflow:hidden;padding:20px;">
+        <div style="max-width:800px;margin:0 auto;width:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <div>
+              <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Programmable Soul</h3>
+              <p style="font-size:12px;color:var(--muted)">Define who your agent is — personality, identity, and user context. Injected into every engine prompt.</p>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <button class="soul-tab active" data-file="SOUL.md" onclick="loadSoulFile('SOUL.md')" style="background:rgba(99,102,241,0.15);color:var(--accent);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">SOUL.md</button>
+            <button class="soul-tab" data-file="IDENTITY.md" onclick="loadSoulFile('IDENTITY.md')" style="background:rgba(255,255,255,0.05);color:var(--muted);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">IDENTITY.md</button>
+            <button class="soul-tab" data-file="USER.md" onclick="loadSoulFile('USER.md')" style="background:rgba(255,255,255,0.05);color:var(--muted);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">USER.md</button>
+          </div>
+          <textarea id="soulEditor" style="width:100%;min-height:400px;font-family:monospace;font-size:13px;line-height:1.6;padding:16px;border-radius:12px;resize:vertical;" placeholder="Loading..."></textarea>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;">
+            <span id="soulSaveStatus" style="font-size:12px;color:var(--muted)"></span>
+            <button class="btn" onclick="saveSoulFile()" style="font-size:13px;">Save Changes</button>
+          </div>
+        </div>
+      </div>
+      <!-- Memory View -->
+      <div id="memoryView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
+        <div style="max-width:800px;margin:0 auto;width:100%;">
+          <div style="margin-bottom:16px;">
+            <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Agent Memory</h3>
+            <p style="font-size:12px;color:var(--muted)">Durable memory persists forever. Daily logs capture transient notes and are auto-loaded for context.</p>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:16px;">
+            <input id="quickMemoryInput" placeholder="Quick note — appends to today's log..." style="flex:1;font-size:12px">
+            <button class="btn" onclick="addQuickMemory()" style="font-size:12px;white-space:nowrap">+ Add Note</button>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:16px;">
+            <input id="memorySearchInput" placeholder="Search memory..." style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter')searchMemory()">
+            <button class="btn" onclick="searchMemory()" style="font-size:12px;background:#2d3748;border:1px solid var(--border)">Search</button>
+          </div>
+          <div id="memorySearchResults" style="margin-bottom:16px"></div>
+          <div class="card" style="margin-bottom:16px">
+            <h2 style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:8px">Durable Memory (MEMORY.md)</h2>
+            <textarea id="durableMemory" style="width:100%;min-height:200px;font-family:monospace;font-size:12px;line-height:1.5;resize:vertical" placeholder="Loading..."></textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+              <span id="memorySaveStatus" style="font-size:11px;color:var(--muted)"></span>
+              <button class="btn" onclick="saveDurableMemory()" style="font-size:12px">Save Memory</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2 style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:8px">Daily Logs (Recent)</h2>
+            <div id="dailyLogs" style="max-height:300px;overflow-y:auto"><p style="color:var(--muted);font-size:11px">Loading...</p></div>
+          </div>
+        </div>
+      </div>
+      <!-- Schedule View -->
+      <div id="scheduleView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
+        <div style="max-width:800px;margin:0 auto;width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <div>
+              <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Scheduled Tasks</h3>
+              <p style="font-size:12px;color:var(--muted)">Create recurring tasks that run automatically. Supports one-shot, interval, and cron expressions.</p>
+            </div>
+            <button class="btn" onclick="showNewScheduleForm()" style="font-size:13px">+ New Schedule</button>
+          </div>
+          <div id="newScheduleForm" style="display:none;margin-bottom:16px" class="card">
+            <h2 style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:12px">Create Schedule</h2>
+            <input id="schedName" placeholder="Schedule name (e.g. Check inbox)" style="margin-bottom:8px;font-size:13px">
+            <textarea id="schedPrompt" placeholder="Task prompt..." style="margin-bottom:8px;font-size:13px;min-height:60px"></textarea>
+            <div style="display:flex;gap:8px;margin-bottom:8px;">
+              <select id="schedEngine" style="font-size:12px;width:auto!important;flex:1"><option value="auto">Auto</option><option value="browser_use">browser-use</option><option value="computer_use">computer-use</option><option value="openclaw">OpenClaw</option></select>
+              <select id="schedType" style="font-size:12px;width:auto!important;flex:1"><option value="interval">Interval</option><option value="cron">Cron</option><option value="once">One-shot</option></select>
+            </div>
+            <input id="schedValue" placeholder="e.g. 30m, 2h, 1d (interval) or 0 */2 * * * (cron) or 2026-02-15T10:00:00 (once)" style="margin-bottom:8px;font-size:12px">
+            <div style="font-size:10px;color:var(--muted);margin-bottom:12px;line-height:1.4">
+              <strong>Interval:</strong> 30m, 2h, 1d, 300s &nbsp;|&nbsp;
+              <strong>Cron:</strong> minute hour day month weekday (e.g. 0 9 * * 1-5 = 9am weekdays) &nbsp;|&nbsp;
+              <strong>Once:</strong> ISO datetime
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="btn" onclick="createSchedule()" style="flex:1;font-size:13px">Create</button>
+              <button class="btn" onclick="showNewScheduleForm()" style="flex:0;font-size:13px;background:#2d3748;border:1px solid var(--border)">Cancel</button>
+            </div>
+          </div>
+          <div id="scheduleViewList"></div>
+        </div>
       </div>
     </main>
   </div>
@@ -2206,6 +3107,8 @@ def create_app() -> FastAPI:
         # Link audit logger to websocket broadcast
         get_audit()._on_log = lambda ev: asyncio.create_task(_broadcast({"type": "audit_event", "payload": ev.model_dump(mode="json")}))
         asyncio.create_task(get_manager().remote_bridge_loop())
+        # Start schedule manager loop
+        asyncio.create_task(get_schedule_manager().run_loop(get_manager().submit))
 
     connections: list[WebSocket] = []
 
@@ -2476,6 +3379,142 @@ def create_app() -> FastAPI:
     async def get_audit_events(limit: int = 50, task_id: str | None = None):
         return [e.model_dump(mode="json") for e in get_audit().recent(limit=limit, task_id=task_id)]
 
+    # ── Personality / Soul Endpoints ────────────────────────────────────────
+    @app.get("/api/personality")
+    async def list_personality_files():
+        return get_personality().list_files()
+
+    @app.get("/api/personality/context")
+    async def get_personality_context():
+        return {"context": get_personality().get_system_context()}
+
+    @app.get("/api/personality/{filename}")
+    async def get_personality_file(filename: str):
+        if filename not in PERSONALITY_FILES and filename != "MEMORY.md":
+            raise HTTPException(404, f"Unknown personality file: {filename}")
+        content = get_personality().get_file(filename)
+        return {"name": filename, "content": content}
+
+    @app.put("/api/personality/{filename}")
+    async def save_personality_file(filename: str, body: dict):
+        if filename not in PERSONALITY_FILES and filename != "MEMORY.md":
+            raise HTTPException(400, f"Unknown personality file: {filename}")
+        content = body.get("content", "")
+        get_personality().save_file(filename, content)
+        get_personality().append_memory(f"Updated {filename}", daily=True)
+        return {"status": "ok", "name": filename}
+
+    # ── Memory Endpoints ────────────────────────────────────────────────────
+    @app.get("/api/memory")
+    async def get_memory():
+        return get_personality().get_memory()
+
+    @app.post("/api/memory")
+    async def add_memory(body: dict):
+        text = body.get("text", "").strip()
+        daily = body.get("daily", True)
+        if not text:
+            raise HTTPException(400, "text is required")
+        get_personality().append_memory(text, daily=daily)
+        return {"status": "ok"}
+
+    @app.get("/api/memory/search")
+    async def search_memory(q: str = ""):
+        if not q.strip():
+            return []
+        return get_personality().search_memory(q)
+
+    # ── Schedule Endpoints ──────────────────────────────────────────────────
+    @app.get("/api/schedules")
+    async def list_schedules():
+        return [s.model_dump() for s in get_schedule_manager().list_all()]
+
+    @app.post("/api/schedules")
+    async def create_schedule(body: dict):
+        name = body.get("name", "").strip()
+        prompt = body.get("prompt", "").strip()
+        engine = body.get("engine", "auto")
+        schedule_type = body.get("schedule_type", "interval")
+        schedule_value = body.get("schedule_value", "")
+        if not name or not prompt:
+            raise HTTPException(400, "name and prompt are required")
+        if schedule_type not in ("once", "interval", "cron"):
+            raise HTTPException(400, f"Invalid schedule_type: {schedule_type}")
+        sched = get_schedule_manager().create(name, prompt, engine, schedule_type, schedule_value)
+        get_personality().append_memory(f"Created schedule '{name}' ({schedule_type}: {schedule_value})", daily=True)
+        await _broadcast({"type": "schedule_update", "payload": [s.model_dump() for s in get_schedule_manager().list_all()]})
+        return sched.model_dump()
+
+    @app.patch("/api/schedules/{sched_id}")
+    async def update_schedule(sched_id: str, body: dict):
+        sched = get_schedule_manager().update(sched_id, body)
+        if not sched:
+            raise HTTPException(404, "Schedule not found")
+        await _broadcast({"type": "schedule_update", "payload": [s.model_dump() for s in get_schedule_manager().list_all()]})
+        return sched.model_dump()
+
+    @app.delete("/api/schedules/{sched_id}")
+    async def delete_schedule(sched_id: str):
+        if not get_schedule_manager().delete(sched_id):
+            raise HTTPException(404, "Schedule not found")
+        await _broadcast({"type": "schedule_update", "payload": [s.model_dump() for s in get_schedule_manager().list_all()]})
+        return {"status": "ok"}
+
+    # ── Template Endpoints ──────────────────────────────────────────────────
+    @app.get("/api/templates")
+    async def list_templates():
+        return [t.model_dump() for t in get_template_manager().list_all()]
+
+    @app.post("/api/templates")
+    async def create_template(body: dict):
+        name = body.get("name", "").strip()
+        prompt = body.get("prompt", "").strip()
+        engine = body.get("engine", "auto")
+        if not name or not prompt:
+            raise HTTPException(400, "name and prompt are required")
+        tmpl = get_template_manager().create(name, prompt, engine)
+        return tmpl.model_dump()
+
+    @app.delete("/api/templates/{tmpl_id}")
+    async def delete_template(tmpl_id: str):
+        if not get_template_manager().delete(tmpl_id):
+            raise HTTPException(404, "Template not found")
+        return {"status": "ok"}
+
+    @app.post("/api/templates/{tmpl_id}/use")
+    async def use_template(tmpl_id: str):
+        tmpl = get_template_manager().use(tmpl_id)
+        if not tmpl:
+            raise HTTPException(404, "Template not found")
+        # Create and submit a task from the template
+        task = Task(prompt=tmpl.prompt, engine=EngineName(tmpl.engine) if tmpl.engine != "auto" else EngineName.AUTO)
+        result = await get_manager().submit(task)
+        return {"template": tmpl.model_dump(), "task": result.model_dump(mode="json")}
+
+    # ── Webhook Endpoint ────────────────────────────────────────────────────
+    @app.post("/api/webhook/{webhook_id}")
+    async def webhook_trigger(webhook_id: str, body: dict = {}):
+        """External trigger — POST a prompt to run a task.
+        The webhook_id can be a template ID (runs that template) or 'run' (runs body.prompt).
+        """
+        # Check if webhook_id is a template
+        tmpl = get_template_manager().get(webhook_id)
+        if tmpl:
+            tmpl.use_count += 1
+            get_template_manager()._save_template(tmpl)
+            task = Task(prompt=tmpl.prompt, engine=EngineName(tmpl.engine) if tmpl.engine != "auto" else EngineName.AUTO)
+        elif webhook_id == "run":
+            prompt = body.get("prompt", "").strip()
+            if not prompt:
+                raise HTTPException(400, "prompt is required")
+            engine = body.get("engine", "auto")
+            task = Task(prompt=prompt, engine=EngineName(engine) if engine != "auto" else EngineName.AUTO)
+        else:
+            raise HTTPException(404, f"Unknown webhook ID: {webhook_id}. Use a template ID or 'run'.")
+        result = await get_manager().submit(task)
+        get_personality().append_memory(f"Webhook triggered: {task.prompt[:60]}...", daily=True)
+        return {"status": "submitted", "task": result.model_dump(mode="json")}
+
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
         await websocket.accept()
@@ -2483,6 +3522,8 @@ def create_app() -> FastAPI:
         try:
             await websocket.send_json({"type": "engine_status", "payload": await get_manager().engine_infos()})
             await websocket.send_json({"type": "task_list", "payload": [t.model_dump(mode="json") for t in get_manager().list_tasks()]})
+            await websocket.send_json({"type": "schedule_update", "payload": [s.model_dump() for s in get_schedule_manager().list_all()]})
+            await websocket.send_json({"type": "template_update", "payload": [t.model_dump() for t in get_template_manager().list_all()]})
             while True:
                 data = await websocket.receive_json()
                 if data.get("type") == "ping":
