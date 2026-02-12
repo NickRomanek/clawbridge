@@ -279,10 +279,15 @@ class BrowserUseEngine(EngineBase):
     async def initialize(self) -> None:
         try:
             from browser_use import Agent, Browser, BrowserProfile
+            from browser_use.browser.profile import ViewportSize
             self._Agent = Agent
             self._Browser = Browser
             settings = get_settings()
-            profile = BrowserProfile(headless=settings.browser_headless)
+            profile = BrowserProfile(
+                headless=settings.browser_headless,
+                viewport=ViewportSize(width=400, height=700),
+                window_size=ViewportSize(width=400, height=700),
+            )
             self._browser = Browser(browser_profile=profile)
             if settings.has_anthropic_key():
                 from browser_use.llm import ChatAnthropic
@@ -707,12 +712,14 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;background:r
 .activity-item{padding:8px;background:rgba(255,255,255,0.02);border-radius:8px;margin-bottom:8px;border-left:2px solid var(--accent);}
 .status-dot.error{background:var(--err);}
 
-/* Live View Panel */
-.live-view-container{margin:12px;display:flex;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;max-height:400px;overflow:hidden;}
-.live-view-title{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;display:flex;justify-content:space-between;align-items:center;}
-#liveImage{width:100%;height:auto;border-radius:8px;background:#0f0f0f;object-fit:contain;}
-#livePlaceholder{display:flex;align-items:center;justify-content:center;min-height:120px;color:var(--muted);font-size:12px;text-align:center;padding:16px;}
+/* Live View in Sidebar */
+.live-view-img-wrap{background:#0a0a0f;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:80px;}
+#liveImage{max-width:100%;display:block;border-radius:8px;}
+#livePlaceholder{color:var(--muted);font-size:11px;text-align:center;padding:16px;}
+#liveImage[src=""]{display:none;}
 #liveImage:not([src=""])~#livePlaceholder{display:none;}
+@keyframes monitor-pulse{0%,100%{color:var(--ok);}50%{color:rgba(34,197,94,0.3);}}
+.monitor-active{animation:monitor-pulse 2s ease-in-out infinite;}
 """
     # Inline JS
     js = """
@@ -728,15 +735,29 @@ function connect(){
   state.ws.onclose=()=>{state.connected=false;document.querySelector(".ws-status").previousElementSibling.className="status-dot error";document.querySelector(".ws-status").textContent="Disconnected";setTimeout(connect,3000);};
   state.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="task_update")upsert(m.payload);else if(m.type==="task_list"){state.tasks=m.payload;render();}else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}else if(m.type==="audit_event")addActivity(m.payload);else if(m.type==="live_view")updateLiveView(m.payload);else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});};
 }
+let _liveTimer=null;
 function updateLiveView(p){
   if(!p||!p.image)return;
   const i=document.getElementById("liveImage");
   const ph=document.getElementById("livePlaceholder");
   const st=document.getElementById("liveStatus");
+  const icon=document.getElementById("monitorIcon");
   i.src="data:image/png;base64,"+p.image;
   i.style.display="block";
   if(ph)ph.style.display="none";
   if(st){st.textContent="Streaming";st.style.color="var(--ok)";}
+  if(icon)icon.classList.add("monitor-active");
+  // Auto-expand the liveview section if collapsed
+  const content=document.getElementById("liveviewContent");
+  if(content&&content.classList.contains("collapsed")){
+    toggleSection("liveview");
+  }
+  // Reset idle timer - collapse after 10s of no frames
+  clearTimeout(_liveTimer);
+  _liveTimer=setTimeout(()=>{
+    if(st){st.textContent="Idle";st.style.color="var(--muted)";}
+    if(icon)icon.classList.remove("monitor-active");
+  },10000);
 }
 function toggleSidebar(side){
   const l=document.getElementById("mainLayout");
@@ -857,7 +878,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   document.getElementById("taskForm").onsubmit=e=>{e.preventDefault();submit();};
   
   if(localStorage.getItem('sidebar_left')==='true') toggleSidebar('left');
-  ['engines','config','activity'].forEach(id=>{
+  ['engines','config','activity','liveview'].forEach(id=>{
     const c=document.getElementById(id+'Content');
     const card=document.getElementById('card-'+id);
     if(c&&card&&localStorage.getItem('section_'+id)==='1'){c.classList.add('collapsed');card.querySelector('.chevron')?.classList.add('collapsed');}
@@ -905,6 +926,9 @@ document.addEventListener("DOMContentLoaded",()=>{
         <div onclick="toggleSidebar('left')" title="Activity">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
         </div>
+        <div onclick="toggleSidebar('left')" title="Browser View">
+          <svg id="monitorIconCollapsed" class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+        </div>
       </div>
       <div class="card expandable" id="card-engines">
         <h2 class="expandable-header" onclick="toggleSection('engines')">
@@ -933,13 +957,28 @@ document.addEventListener("DOMContentLoaded",()=>{
           <button class="btn" id="toggleKeyBtn" style="width:100%;font-size:12px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="toggleKeyForm()">Add / Update API Keys</button>
         </div>
       </div>
-      <div class="card expandable" id="card-activity" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+      <div class="card expandable" id="card-activity">
         <h2 class="expandable-header" onclick="toggleSection('activity')">
           <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>Activity</span>
           <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </h2>
-        <div class="expandable-content" id="activityContent" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
-          <div id="activityFeed" class="activity-feed" style="overflow-y:auto;flex:1;max-height:200px;"><p class="muted">Waiting for activity...</p></div>
+        <div class="expandable-content" id="activityContent">
+          <div id="activityFeed" class="activity-feed" style="overflow-y:auto;max-height:150px;"><p class="muted">Waiting for activity...</p></div>
+        </div>
+      </div>
+      <div class="card expandable" id="card-liveview">
+        <h2 class="expandable-header" onclick="toggleSection('liveview')">
+          <span style="display:flex;align-items:center;gap:8px;"><svg id="monitorIcon" class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Browser</span>
+          <span style="display:flex;align-items:center;gap:6px;">
+            <span id="liveStatus" style="font-size:9px;color:var(--muted)">Idle</span>
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </span>
+        </h2>
+        <div class="expandable-content collapsed" id="liveviewContent">
+          <div class="live-view-img-wrap">
+            <img id="liveImage" src="" alt="Live Browser Feed">
+            <div id="livePlaceholder">Streams here when a task runs</div>
+          </div>
         </div>
       </div>
     </aside>
@@ -947,14 +986,6 @@ document.addEventListener("DOMContentLoaded",()=>{
       <div class="chat-header">
         <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)">Chat & Tasks</h2>
         <span id="taskCount" style="font-size:12px;color:var(--muted)">0 tasks</span>
-      </div>
-      <div id="liveView" class="live-view-container">
-        <div class="live-view-title">
-          <span>Live Browser View</span>
-          <span id="liveStatus" style="font-size:10px;color:var(--muted)">Idle</span>
-        </div>
-        <div id="livePlaceholder">Browser view streams here when a task is running.</div>
-        <img id="liveImage" src="" alt="Live Browser Feed">
       </div>
       <div id="taskList" class="task-list">
         <p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>

@@ -30,10 +30,10 @@ def main() -> None:
 
     # Print banner
     print()
-    print("  ╔═══════════════════════════════════════╗")
-    print("  ║         ClawBridge v0.1.0             ║")
-    print("  ║  Bridging AI Agents to Your Machine   ║")
-    print("  ╚═══════════════════════════════════════╝")
+    print("  +---------------------------------------+")
+    print("  |         ClawBridge v0.1.0             |")
+    print("  |  Bridging AI Agents to Your Machine   |")
+    print("  +---------------------------------------+")
     print()
 
     if not settings.has_any_key:
