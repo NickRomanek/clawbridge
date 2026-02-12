@@ -31,6 +31,7 @@ class EngineName(str, Enum):
     """Available agent engines."""
     BROWSER_USE = "browser_use"
     OPENCLAW = "openclaw"
+    COMPUTER_USE = "computer_use"
     AUTO = "auto"  # Let orchestrator decide
 
 

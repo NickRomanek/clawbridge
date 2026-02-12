@@ -17,6 +17,7 @@ from typing import Any, Callable
 from clawbridge.config import get_settings
 from clawbridge.engines.base import EngineBase, EngineError
 from clawbridge.engines.browser_use_engine import BrowserUseEngine
+from clawbridge.engines.computer_use_engine import ComputerUseEngine
 from clawbridge.engines.openclaw_engine import OpenClawEngine
 from clawbridge.policy.safety import evaluate_policy, scan_for_prompt_injection
 from clawbridge.shared.schemas import (
@@ -75,6 +76,14 @@ class TaskManager:
             await engine.initialize()
             self._engines[EngineName.OPENCLAW] = engine
 
+        if EngineName.COMPUTER_USE in enabled:
+            cu_engine = ComputerUseEngine()
+            cu_engine.on_screenshot = lambda frame: asyncio.create_task(
+                self._broadcast_browser_frame(frame)
+            )
+            await cu_engine.initialize()
+            self._engines[EngineName.COMPUTER_USE] = cu_engine
+
         # Start Remote Bridge Polling if configured
         if settings.remote_bridge_url:
             asyncio.create_task(self.remote_bridge_loop())
@@ -121,11 +130,14 @@ class TaskManager:
             infos.append(info.model_dump())
         return infos
 
-    async def _select_engine(self, preferred: EngineName) -> EngineBase:
+    async def _select_engine(
+        self, preferred: EngineName, prompt: str = ""
+    ) -> EngineBase:
         """Select the best available engine.
 
-        If preferred is AUTO, pick browser-use first (faster for research tasks),
-        fall back to OpenClaw.
+        If preferred is AUTO, use heuristics:
+        - Desktop-sounding tasks → computer-use
+        - Everything else → browser-use first, then computer-use, then OpenClaw
         """
         if preferred != EngineName.AUTO and preferred in self._engines:
             engine = self._engines[preferred]
@@ -138,8 +150,25 @@ class TaskManager:
                 recoverable=True
             )
 
-        # Auto-select: prefer browser-use for speed
-        for name in [EngineName.BROWSER_USE, EngineName.OPENCLAW]:
+        # Auto-select: check if the task looks like a desktop task
+        from clawbridge.engines.computer_use_engine import looks_like_desktop_task
+
+        if prompt and looks_like_desktop_task(prompt):
+            # Prefer computer-use for desktop-oriented tasks
+            priority = [
+                EngineName.COMPUTER_USE,
+                EngineName.BROWSER_USE,
+                EngineName.OPENCLAW,
+            ]
+        else:
+            # Default: browser-use for web tasks, computer-use as fallback
+            priority = [
+                EngineName.BROWSER_USE,
+                EngineName.COMPUTER_USE,
+                EngineName.OPENCLAW,
+            ]
+
+        for name in priority:
             if name in self._engines:
                 engine = self._engines[name]
                 status = await engine.get_status()
@@ -200,7 +229,7 @@ class TaskManager:
             await self._broadcast_task_update(task)
 
             # Select engine
-            engine = await self._select_engine(task.engine)
+            engine = await self._select_engine(task.engine, prompt=task.prompt)
             actual_engine = engine.name
             task.engine = actual_engine
 

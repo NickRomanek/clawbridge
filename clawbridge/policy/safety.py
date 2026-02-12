@@ -94,6 +94,11 @@ def classify_action(step: TaskStep) -> ActionClass:
         action_class = ActionClass.SENSITIVE_WRITE
     elif action in ("upload", "download", "clipboard", "exec", "launch"):
         action_class = ActionClass.HIGH_RISK
+    # Computer-use actions: full desktop control is always high-risk
+    elif action in ("mouse_move", "left_click", "right_click", "double_click",
+                    "left_click_drag", "cursor_position", "desktop_screenshot",
+                    "key_press", "desktop_type", "computer_action"):
+        action_class = ActionClass.HIGH_RISK
     else:
         # Unknown action -> treat as sensitive
         action_class = ActionClass.SENSITIVE_WRITE

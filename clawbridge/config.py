@@ -30,8 +30,14 @@ class Settings(BaseSettings):
     default_model: str = Field(default="claude-3-5-sonnet-20241022", alias="DEFAULT_MODEL")
 
     # ── Engines ───────────────────────────────────────────────────────────
-    enabled_engines: str = Field(default="browser_use,openclaw", alias="ENABLED_ENGINES")
+    enabled_engines: str = Field(default="browser_use,openclaw,computer_use", alias="ENABLED_ENGINES")
     openclaw_path: str = Field(default="", alias="OPENCLAW_PATH")
+
+    # ── Computer-Use ──────────────────────────────────────────────────────
+    computer_use_model: str = Field(default="anthropic/claude-sonnet-4.5", alias="COMPUTER_USE_MODEL")
+    computer_use_max_screen_width: int = Field(default=1920, alias="COMPUTER_USE_MAX_SCREEN_WIDTH")
+    computer_use_max_screen_height: int = Field(default=1080, alias="COMPUTER_USE_MAX_SCREEN_HEIGHT")
+    computer_use_action_delay_ms: int = Field(default=500, alias="COMPUTER_USE_ACTION_DELAY_MS")
 
     # ── Browser ───────────────────────────────────────────────────────────
     browser_headless: bool = Field(default=True, alias="BROWSER_HEADLESS")
