@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated EULA with clearer AI automation disclaimer and liability protection
 - Added Automation Mode setting (Supervised/Autonomous) for controlling action approval
 
+### Supervised Mode Features
+- **Approval workflow**: High-risk actions pause and show approval modal
+- **Sensitive domain detection**: Banking, shopping, email, cloud admin sites trigger approval
+- **High-risk action patterns**: Purchases, form submissions, file deletion, etc.
+- **WebSocket-based communication**: Real-time approval requests/responses
+- **2-minute timeout**: Actions denied if no response within timeout
+- **Activity feed integration**: Shows approval requests and responses
+
 ### Fixed
 - DPI awareness for consistent coordinate systems in computer-use engine
 - Screenshot scaling and stale detection in computer-use engine

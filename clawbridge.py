@@ -240,6 +240,157 @@ def safety_redact(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Supervised Mode: High-Risk Action Detection & Approval
+# ---------------------------------------------------------------------------
+
+# Sensitive domains that trigger approval in supervised mode
+SENSITIVE_DOMAINS = [
+    # Banking & Finance
+    "bank", "chase", "wellsfargo", "bankofamerica", "citibank", "capitalone",
+    "paypal", "venmo", "stripe", "square", "coinbase", "binance", "kraken",
+    # Shopping & Purchases
+    "amazon", "ebay", "walmart", "target", "bestbuy", "etsy", "shopify",
+    "checkout", "cart", "payment", "billing",
+    # Email & Communication
+    "gmail", "outlook", "mail", "email", "slack", "discord", "teams",
+    # Cloud & Admin
+    "aws.amazon", "console.cloud", "azure", "portal.office", "admin",
+    # Social Media (posting)
+    "twitter", "x.com", "facebook", "instagram", "linkedin", "tiktok",
+]
+
+# High-risk action patterns (in action descriptions or UI elements)
+HIGH_RISK_PATTERNS = [
+    re.compile(r"(?i)\b(buy|purchase|order|checkout|pay|submit\s*order)\b"),
+    re.compile(r"(?i)\b(send|post|publish|tweet|share|reply|comment)\b"),
+    re.compile(r"(?i)\b(delete|remove|erase|clear|destroy)\b"),
+    re.compile(r"(?i)\b(transfer|withdraw|deposit|wire)\b"),
+    re.compile(r"(?i)\b(sign\s*in|log\s*in|login|sign\s*up|register)\b"),
+    re.compile(r"(?i)\b(confirm|agree|accept|approve|authorize)\b"),
+    re.compile(r"(?i)\b(download|install|run|execute)\b"),
+    re.compile(r"(?i)\b(unsubscribe|cancel|terminate|close\s*account)\b"),
+]
+
+# Actions that always need approval (regardless of context)
+ALWAYS_APPROVE_ACTIONS = [
+    "purchase", "buy", "checkout", "pay", "send_money", "transfer",
+    "delete_file", "format", "uninstall", "send_email", "post_message",
+]
+
+
+def is_high_risk_action(action: str, context: str = "", url: str = "") -> tuple[bool, str]:
+    """Check if an action requires approval in supervised mode.
+
+    Returns (is_high_risk, reason).
+    """
+    action_lower = action.lower()
+    context_lower = context.lower() if context else ""
+    url_lower = url.lower() if url else ""
+
+    # Check sensitive domains
+    for domain in SENSITIVE_DOMAINS:
+        if domain in url_lower:
+            return True, f"Sensitive site detected: {domain}"
+
+    # Check high-risk patterns in action
+    for pattern in HIGH_RISK_PATTERNS:
+        if pattern.search(action_lower) or pattern.search(context_lower):
+            match = pattern.pattern.replace("(?i)", "").replace("\\b", "")[:30]
+            return True, f"High-risk action: {match}"
+
+    # Check always-approve actions
+    for keyword in ALWAYS_APPROVE_ACTIONS:
+        if keyword in action_lower:
+            return True, f"Action requires approval: {keyword}"
+
+    return False, ""
+
+
+class ApprovalManager:
+    """Manages pending approval requests for supervised mode."""
+
+    def __init__(self):
+        self._pending: dict[str, asyncio.Future] = {}
+        self._timeout_seconds = 120  # 2 minute timeout for approval
+
+    async def request_approval(
+        self,
+        task_id: str,
+        action: str,
+        reason: str,
+        details: dict = None,
+        broadcast_fn: Callable = None,
+    ) -> bool:
+        """Request user approval for an action.
+
+        Sends approval request via WebSocket and waits for response.
+        Returns True if approved, False if denied or timeout.
+        """
+        request_id = f"{task_id}_{uuid.uuid4().hex[:8]}"
+
+        # Create future to wait for response
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+        self._pending[request_id] = future
+
+        # Broadcast approval request to dashboard
+        if broadcast_fn:
+            await broadcast_fn({
+                "type": "approval_request",
+                "payload": {
+                    "request_id": request_id,
+                    "task_id": task_id,
+                    "action": action,
+                    "reason": reason,
+                    "details": details or {},
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
+            })
+
+        logging.info(f"Approval requested: {action} (reason: {reason})")
+
+        try:
+            # Wait for response with timeout
+            approved = await asyncio.wait_for(future, timeout=self._timeout_seconds)
+            return approved
+        except asyncio.TimeoutError:
+            logging.warning(f"Approval request {request_id} timed out after {self._timeout_seconds}s")
+            return False
+        finally:
+            self._pending.pop(request_id, None)
+
+    def respond(self, request_id: str, approved: bool) -> bool:
+        """Handle approval response from dashboard.
+
+        Returns True if the request was found and handled.
+        """
+        future = self._pending.get(request_id)
+        if future and not future.done():
+            future.set_result(approved)
+            logging.info(f"Approval response: {request_id} -> {'approved' if approved else 'denied'}")
+            return True
+        return False
+
+    def cancel_all(self, task_id: str):
+        """Cancel all pending approvals for a task."""
+        to_remove = [k for k in self._pending if k.startswith(task_id)]
+        for key in to_remove:
+            future = self._pending.pop(key, None)
+            if future and not future.done():
+                future.set_result(False)
+
+
+# Global approval manager
+_approval_manager: ApprovalManager | None = None
+
+def get_approval_manager() -> ApprovalManager:
+    global _approval_manager
+    if _approval_manager is None:
+        _approval_manager = ApprovalManager()
+    return _approval_manager
+
+
+# ---------------------------------------------------------------------------
 # Workspace directory (personality files, memory, templates, schedules)
 # ---------------------------------------------------------------------------
 
@@ -1598,6 +1749,9 @@ class ComputerUseEngine(EngineBase):
         self.on_step = None  # Callback: receives step metadata dict
         self._last_ui_elements: list[dict] = []  # cached element list for click_element
         self._cancel_requested = False
+        self._broadcast_fn = None  # For approval requests in supervised mode
+        self._current_task_id = ""  # Current task ID for approval context
+        self._current_context = ""  # Current context (window title, etc.)
 
     @property
     def name(self) -> EngineName:
@@ -1805,9 +1959,48 @@ class ComputerUseEngine(EngineBase):
             lines.append(f"  [{el['id']}] {el['type']}: \"{el['name']}\" at ({el['center_x']},{el['center_y']})")
         return "\n".join(lines)
 
-    async def _execute_action(self, tool_input: dict) -> str:
+    async def _execute_action(self, tool_input: dict, action_context: str = "") -> str:
         import pyautogui; loop = asyncio.get_event_loop()
         action = tool_input.get("action", "")
+
+        # ── Supervised mode: check if action needs approval ──
+        settings = get_settings()
+        if settings.automation_mode == "supervised" and action not in ("screenshot", "cursor_position", "mouse_move"):
+            # Build action description for approval
+            action_desc = action
+            if action in ("left_click", "right_click", "double_click", "click_element"):
+                if action == "click_element" and "element_id" in tool_input:
+                    eid = int(tool_input.get("element_id", 0))
+                    if 0 <= eid < len(self._last_ui_elements):
+                        el = self._last_ui_elements[eid]
+                        action_desc = f"Click: [{el.get('type', 'element')}] \"{el.get('name', 'unknown')}\""
+                else:
+                    coord = tool_input.get("coordinate", [0, 0])
+                    action_desc = f"Click at coordinates ({coord[0]}, {coord[1]})"
+            elif action == "type":
+                text = tool_input.get("text", "")
+                preview = text[:50] + "..." if len(text) > 50 else text
+                action_desc = f"Type text: \"{preview}\""
+            elif action == "key":
+                action_desc = f"Press key: {tool_input.get('text', '')}"
+            elif action == "scroll":
+                action_desc = f"Scroll {tool_input.get('amount', 0)} clicks"
+
+            # Check if high-risk
+            is_risky, reason = is_high_risk_action(action_desc, self._current_context)
+            if is_risky:
+                logging.info("High-risk action detected: %s (reason: %s)", action_desc, reason)
+                # Request approval
+                approved = await get_approval_manager().request_approval(
+                    task_id=self._current_task_id,
+                    action=action_desc,
+                    reason=reason,
+                    details={"context": self._current_context, "raw_action": action},
+                    broadcast_fn=self._broadcast_fn,
+                )
+                if not approved:
+                    logging.info("Action denied by user: %s", action_desc)
+                    return "action_denied_by_user"
         def _sc(coord):
             x, y = coord
             sx = max(0, min(int(x * self._screen_width / self._scaled_width), self._screen_width - 1))
@@ -1987,10 +2180,16 @@ class ComputerUseEngine(EngineBase):
                 return app_name
         return None
 
+    def set_broadcast_fn(self, fn):
+        """Set the broadcast function for approval requests."""
+        self._broadcast_fn = fn
+
     async def run_task(self, task: Task) -> Task:
         if self._status != EngineStatus.AVAILABLE:
             task.status = TaskStatus.ERROR; task.error = "computer-use engine not available"; return task
         self._status = EngineStatus.RUNNING
+        self._current_task_id = task.id
+        self._current_context = f"Task: {task.prompt[:100]}"
         self._cancel_requested = False
         start = time.monotonic()
         settings = get_settings()
@@ -2234,6 +2433,7 @@ class TaskManager:
                 e = ComputerUseEngine()
                 e.on_screenshot = lambda img: asyncio.create_task(self._broadcast({"type": "live_view", "payload": {"image": img}})) if self._broadcast else None
                 e.on_step = on_step_cb
+                e.set_broadcast_fn(lambda msg: self._broadcast(msg) if self._broadcast else None)
                 await e.initialize()
                 self._engines[EngineName.COMPUTER_USE] = e
 
@@ -2784,6 +2984,8 @@ function connect(){
       else if(m.type==="tasks_cleared"){state.tasks=[];render();}
       else if(m.type==="schedule_update"){state.schedules=m.payload;renderSchedules();updateTabBadges();}
       else if(m.type==="template_update"){state.templates=m.payload;renderTemplates();}
+      else if(m.type==="approval_request"){showApprovalModal(m.payload);}
+      else if(m.type==="config_update"){if(m.payload.automation_mode){state.automationMode=m.payload.automation_mode;updateAutomationModeUI();}}
     }catch(err){console.error("[ClawBridge] WS message parse error:",err);}
   };
 }
@@ -2880,6 +3082,72 @@ function handleSafetyWarning(p){
   if(!p)return;
   const flags=(p.flags||[]).join(", ");
   addActivity({timestamp:new Date().toISOString(),event_type:"safety",detail:"⚠ Safety: "+flags+" (policy: "+p.policy+")"});
+}
+// ── Approval Modal (Supervised Mode) ──────────────────────────────────
+function showApprovalModal(p){
+  if(!p||!p.request_id)return;
+  addActivity({timestamp:new Date().toISOString(),event_type:"approval",detail:"⏸ Approval needed: "+p.action});
+
+  // Remove any existing approval modal
+  const existing=document.getElementById("approvalOverlay");
+  if(existing)existing.remove();
+
+  // Create overlay
+  const overlay=document.createElement("div");
+  overlay.id="approvalOverlay";
+  overlay.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center";
+
+  // Create modal
+  const modal=document.createElement("div");
+  modal.style.cssText="background:var(--bg);border:2px solid #f59e0b;border-radius:16px;padding:28px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5)";
+
+  const details=p.details||{};
+  const urlInfo=details.url?'<div style="margin-top:8px;padding:8px 12px;background:rgba(255,255,255,0.05);border-radius:6px;font-family:monospace;font-size:11px;color:var(--muted);word-break:break-all">'+esc(details.url)+'</div>':'';
+  const contextInfo=details.context?'<div style="margin-top:8px;font-size:12px;color:var(--muted);line-height:1.5">'+esc(details.context.substring(0,200))+'</div>':'';
+
+  modal.innerHTML=
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">'
+    +'<div style="width:48px;height:48px;border-radius:50%;background:rgba(245,158,11,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+    +'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
+    +'</div>'
+    +'<div>'
+    +'<h3 style="margin:0;font-size:18px;font-weight:600;color:var(--fg)">Approval Required</h3>'
+    +'<div style="font-size:12px;color:var(--muted);margin-top:2px">Supervised Mode</div>'
+    +'</div>'
+    +'</div>'
+    +'<div style="margin-bottom:20px">'
+    +'<div style="font-size:14px;color:var(--fg);font-weight:500;margin-bottom:6px">The agent wants to:</div>'
+    +'<div style="font-size:15px;color:#f59e0b;font-weight:600;padding:12px 16px;background:rgba(245,158,11,0.1);border-radius:8px;border-left:3px solid #f59e0b">'+esc(p.action)+'</div>'
+    +urlInfo
+    +contextInfo
+    +'</div>'
+    +'<div style="font-size:12px;color:var(--muted);margin-bottom:20px;padding:10px 14px;background:rgba(99,102,241,0.08);border-radius:8px">'
+    +'<strong>Reason:</strong> '+esc(p.reason)
+    +'</div>'
+    +'<div style="display:flex;gap:12px">'
+    +'<button onclick="sendApprovalResponse(\\''+p.request_id+'\\',false)" style="flex:1;padding:14px;border:1px solid var(--border);border-radius:10px;background:#2d3748;color:var(--fg);font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseenter="this.style.background=\\'rgba(239,68,68,0.2)\\';this.style.borderColor=\\'var(--err)\\'" onmouseleave="this.style.background=\\'#2d3748\\';this.style.borderColor=\\'var(--border)\\'">Deny</button>'
+    +'<button onclick="sendApprovalResponse(\\''+p.request_id+'\\',true)" style="flex:1;padding:14px;border:none;border-radius:10px;background:var(--ok);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseenter="this.style.opacity=\\'0.85\\'" onmouseleave="this.style.opacity=\\'1\\'">Approve</button>'
+    +'</div>'
+    +'<div style="margin-top:16px;font-size:10px;color:var(--muted);text-align:center">Request will timeout in 2 minutes if no response</div>';
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  // Focus the approve button
+  modal.querySelector("button:last-child").focus();
+}
+function sendApprovalResponse(requestId,approved){
+  if(!state.ws||state.ws.readyState!==1)return;
+  state.ws.send(JSON.stringify({
+    type:"approval_response",
+    payload:{request_id:requestId,approved:approved}
+  }));
+  const overlay=document.getElementById("approvalOverlay");
+  if(overlay){
+    overlay.style.opacity="0";
+    setTimeout(()=>overlay.remove(),200);
+  }
+  addActivity({timestamp:new Date().toISOString(),event_type:approved?"approved":"denied",detail:(approved?"✓ Approved":"✗ Denied")+": action request"});
 }
 function toggleSidebar(side){
   const l=document.getElementById("mainLayout");
@@ -3857,7 +4125,6 @@ async function loadInitialData(){
         <div class="input-area">
           <form id="taskForm" class="input-container">
             <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
-              <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;">Engine:</span>
               <select id="engine">
                 <option value="auto">Auto</option>
                 <option value="browser_use">browser-use</option>
@@ -4635,6 +4902,17 @@ button:hover{{background:#4f46e5}}</style></head>
                 data = await websocket.receive_json()
                 if data.get("type") == "ping":
                     await websocket.send_json({"type": "pong"})
+                elif data.get("type") == "approval_response":
+                    # Handle approval response from dashboard
+                    payload = data.get("payload", {})
+                    request_id = payload.get("request_id")
+                    approved = payload.get("approved", False)
+                    if request_id:
+                        handled = get_approval_manager().respond(request_id, approved)
+                        await websocket.send_json({
+                            "type": "approval_ack",
+                            "payload": {"request_id": request_id, "handled": handled}
+                        })
         except WebSocketDisconnect:
             pass
         finally:
