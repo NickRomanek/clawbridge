@@ -14,7 +14,26 @@ Submit a task, pick an engine (or let Auto choose), and watch it run. Everything
 
 **GitHub:** [NickRomanek/clawbridge](https://github.com/NickRomanek/clawbridge)
 
-## Quick Start (Single File)
+## Installation
+
+### Windows Installer (Recommended)
+
+Download `ClawBridge-Setup-0.1.0.exe` and run it. The installer:
+
+1. Installs ClawBridge to `C:\Program Files\ClawBridge` (or user folder)
+2. Bundles Python 3.12, Playwright, and all dependencies
+3. Creates Start Menu shortcuts
+4. Optionally installs OpenClaw engine (can also install later from dashboard)
+5. Creates `.env` from template on first run
+
+**Optional installer tasks**:
+- **Desktop shortcut**: Quick access from your desktop
+- **Start with Windows**: Auto-launch on login
+- **Install OpenClaw**: Adds memory & skills support (recommended for power users)
+
+After installation, launch ClawBridge from the Start Menu and open **http://127.0.0.1:8765** in your browser.
+
+### Quick Start (Single File)
 
 The monolith `clawbridge.py` is the primary entry point — one file, no package structure needed:
 
@@ -218,6 +237,50 @@ REMOTE_BRIDGE_URL=
 REMOTE_AUTH_TOKEN=
 ```
 
+## Automation Modes
+
+ClawBridge supports two automation modes to balance speed vs. safety:
+
+| Mode | Behavior | Best For |
+|------|----------|----------|
+| **Supervised** (default) | Pauses for approval before high-risk actions | Financial tasks, unfamiliar workflows, production systems |
+| **Autonomous** | Runs without interruption | Trusted tasks, development, demos |
+
+### Supervised Mode Features
+
+When running in Supervised mode, ClawBridge automatically detects and pauses for:
+
+**Sensitive Domains** (banking, shopping, cloud admin):
+- Banking: chase.com, bankofamerica.com, wellsfargo.com, paypal.com, etc.
+- Shopping: amazon.com, ebay.com, walmart.com checkout pages
+- Cloud: console.aws.amazon.com, portal.azure.com, console.cloud.google.com
+- Email: gmail.com, outlook.com (compose/send actions)
+
+**High-Risk Actions**:
+- Purchases and payments (`buy`, `purchase`, `checkout`, `pay`)
+- Form submissions (`submit`, `confirm`, `send`)
+- Deletions (`delete`, `remove`, `clear`)
+- Account changes (`password`, `settings`, `account`)
+
+When a high-risk action is detected:
+1. Task pauses and shows an approval modal in the dashboard
+2. You see exactly what action the AI wants to take
+3. Click **Approve** to proceed or **Deny** to block
+4. 2-minute timeout auto-denies if no response
+
+### Changing Modes
+
+**From Dashboard**: Use the Automation Mode toggle in the Config panel
+
+**From .env**:
+```env
+AUTOMATION_MODE=supervised   # or: autonomous
+```
+
+**Tip**: Start with Supervised mode until you're comfortable with the AI's behavior, then switch to Autonomous for trusted workflows.
+
+---
+
 ## Security
 
 - All data stays on your machine in local mode. No cloud egress.
@@ -239,12 +302,31 @@ REMOTE_AUTH_TOKEN=
 | `PATCH` | `/api/tasks/{id}` | Pause/resume/cancel |
 | `DELETE` | `/api/tasks/{id}` | Remove task |
 | `DELETE` | `/api/tasks` | Clear all tasks |
+| `GET` | `/api/tasks/{id}/steps` | Get step-by-step replay |
 | `GET` | `/api/engines` | List engines + status |
-| `GET` | `/api/config` | Get config (keys redacted) |
+| `POST` | `/api/engines/openclaw/install` | Install OpenClaw engine |
+| `GET` | `/api/config` | Get config (keys redacted, includes version) |
 | `POST` | `/api/config/keys` | Save API keys to .env |
+| `POST` | `/api/config/automation` | Set automation mode (supervised/autonomous) |
 | `POST` | `/api/browser/launch` | Launch Chrome with CDP |
 | `GET` | `/api/browser/status` | Check Chrome connection |
-| `WS` | `/ws` | WebSocket (tasks, frames, audit) |
+| `GET` | `/api/schedules` | List task schedules |
+| `POST` | `/api/schedules` | Create recurring schedule |
+| `DELETE` | `/api/schedules/{id}` | Delete schedule |
+| `GET` | `/api/templates` | List task templates |
+| `POST` | `/api/templates` | Create task template |
+| `WS` | `/ws` | WebSocket (tasks, frames, audit, approvals) |
+
+### WebSocket Events
+
+| Event Type | Direction | Description |
+|------------|-----------|-------------|
+| `task_update` | Server → Client | Task status change |
+| `browser_frame` | Server → Client | Screenshot stream (base64) |
+| `audit_event` | Server → Client | Audit log entry |
+| `approval_request` | Server → Client | High-risk action needs approval |
+| `approval_response` | Client → Server | User approves/denies action |
+| `approval_ack` | Server → Client | Confirmation of approval processing |
 
 ## Remote Bridge (Beta)
 
