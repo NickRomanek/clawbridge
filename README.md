@@ -6,6 +6,8 @@ ClawBridge is a local-first AI agent platform that unifies multiple automation e
 
 Submit a task, pick an engine (or let Auto choose), and watch it run. Everything stays on your machine — or bridge to the cloud.
 
+**Version:** 0.1.0 | [Changelog](CHANGELOG.md)
+
 ---
 
 ## Repository
@@ -50,6 +52,39 @@ python -m clawbridge
 
 ---
 
+## Getting Started
+
+When you first open ClawBridge, you'll see a **Getting Started** checklist to help you set up:
+
+### 1. Configure an API Key
+
+ClawBridge requires at least one LLM provider API key. Get yours here:
+
+| Provider | Get Key | Used By |
+|----------|---------|---------|
+| **Anthropic** | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) | browser-use, computer-use |
+| **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | browser-use |
+| **OpenRouter** | [openrouter.ai/keys](https://openrouter.ai/keys) | All engines (proxy) |
+
+Add your key in the dashboard's Config panel or edit `.env` directly.
+
+### 2. Set Your Identity (Optional)
+
+Customize the agent's personality by editing `workspace/memory/IDENTITY.md`. This gives the AI context about who it's helping.
+
+### 3. Run Your First Task
+
+Type a task in the chat input and press Enter:
+- **Web task**: "Search Google for ClawBridge AI"
+- **Desktop task**: "Open Notepad and write Hello World"
+- **Research task**: "What are the top 3 news stories today?"
+
+### 4. Launch Browser Engine
+
+For authenticated web tasks (tasks that need your logins), click **Launch Chrome Session** in the Config panel. This opens Chrome with a persistent profile where you can sign into your accounts once.
+
+---
+
 ## Architecture
 
 ClawBridge has two deployment forms that share the same logic:
@@ -90,10 +125,19 @@ browser-use  computer-use  OpenClaw
 | **computer-use** | Anthropic API + pyautogui + mss + pywinauto | Full desktop control — any app, any window | Working (accessibility-first navigation) |
 | **OpenClaw** | Node.js + Chrome DevTools Protocol | AI agent with persistent memory & skills | Requires separate install (`npm i -g openclaw`) |
 
-### Engine Selection
+### Engine Selection (Smart Default)
 
-- **Auto mode**: Analyzes the prompt — desktop keywords → computer-use, web keywords → browser-use, fallback → first available
-- **Manual mode**: User picks engine from dropdown in dashboard
+ClawBridge uses intelligent engine selection to pick the best engine for each task:
+
+| Task Type | Priority Order | Reason |
+|-----------|---------------|--------|
+| **Desktop tasks** | computer-use → browser-use → OpenClaw | Desktop keywords detected (notepad, excel, app, window, etc.) |
+| **Non-desktop tasks** | OpenClaw → browser-use → computer-use | OpenClaw has memory/skills support for better context |
+
+- **Auto mode** (default): Smart selection based on task content
+- **Manual mode**: User picks engine explicitly from dropdown
+
+The engine selector checks availability status before selecting — if the preferred engine isn't available, it falls back to the next option.
 
 ### Computer-Use Engine Details
 
@@ -245,12 +289,26 @@ clawbridge/
 
 ## Roadmap
 
+### Completed
+- [x] Dashboard UI overhaul (chat interface, activity feed, live view)
+- [x] Smart engine selection (auto-detects desktop vs web tasks)
+- [x] OpenClaw one-click install from dashboard
+- [x] Windows installer via Inno Setup
+- [x] Onboarding checklist for first-time users
+- [x] Task scheduling and templates
+- [x] Personality/memory system
+
+### In Progress
 - [ ] Fix browser-use engine import compatibility
 - [ ] Test & stabilize "Launch Chrome Session" persistent profile flow
-- [ ] OpenClaw engine proper integration & auto-install
+
+### Planned
+- [ ] Code signing certificate for Windows installer
+- [ ] Auto-update mechanism
 - [ ] Remote Bridge cloud service
 - [ ] Hosted engine backends (cloud browser-use, cloud OpenClaw)
 - [ ] `pip install clawbridge` one-command setup
+- [ ] macOS build support
 - [ ] Multi-machine fleet management via Remote Bridge
 
 ## License

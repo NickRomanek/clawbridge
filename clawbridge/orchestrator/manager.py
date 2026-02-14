@@ -135,14 +135,18 @@ class TaskManager:
     ) -> EngineBase:
         """Select the best available engine.
 
-        If preferred is AUTO, use heuristics:
-        - Desktop-sounding tasks → computer-use
-        - Everything else → browser-use first, then computer-use, then OpenClaw
+        Smart default priority:
+        - Desktop tasks: computer-use → browser-use → openclaw
+        - Non-desktop tasks: openclaw (when available) → browser-use → computer-use
+
+        OpenClaw is preferred for non-desktop tasks because it has memory/skills support.
         """
+        # Explicit engine selection (not AUTO)
         if preferred != EngineName.AUTO and preferred in self._engines:
             engine = self._engines[preferred]
             status = await engine.get_status()
             if status == EngineStatus.AVAILABLE:
+                logger.info("Engine selected: %s (explicit)", engine.display_name)
                 return engine
             raise EngineError(
                 preferred,
@@ -153,26 +157,32 @@ class TaskManager:
         # Auto-select: check if the task looks like a desktop task
         from clawbridge.engines.computer_use_engine import looks_like_desktop_task
 
-        if prompt and looks_like_desktop_task(prompt):
-            # Prefer computer-use for desktop-oriented tasks
-            priority = [
-                EngineName.COMPUTER_USE,
-                EngineName.BROWSER_USE,
-                EngineName.OPENCLAW,
-            ]
-        else:
-            # Default: browser-use for web tasks, computer-use as fallback
-            priority = [
-                EngineName.BROWSER_USE,
-                EngineName.COMPUTER_USE,
-                EngineName.OPENCLAW,
-            ]
+        is_desktop = prompt and looks_like_desktop_task(prompt)
 
+        if is_desktop:
+            # Desktop tasks: prefer computer-use for native app control
+            priority = [
+                EngineName.COMPUTER_USE,
+                EngineName.BROWSER_USE,
+                EngineName.OPENCLAW,
+            ]
+            reason = "desktop task detected"
+        else:
+            # Non-desktop tasks: prefer OpenClaw (has memory/skills), then browser-use
+            priority = [
+                EngineName.OPENCLAW,
+                EngineName.BROWSER_USE,
+                EngineName.COMPUTER_USE,
+            ]
+            reason = "smart default (OpenClaw preferred when available)"
+
+        # Find first available engine in priority order
         for name in priority:
             if name in self._engines:
                 engine = self._engines[name]
                 status = await engine.get_status()
                 if status == EngineStatus.AVAILABLE:
+                    logger.info("Engine selected: %s (%s)", engine.display_name, reason)
                     return engine
 
         raise EngineError(

@@ -11,6 +11,8 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
+__version__ = "0.1.0"
+
 import os
 import shutil
 import subprocess
@@ -35,6 +37,8 @@ def _ensure_dependencies() -> None:
         "pyautogui",
         "Pillow",
         "mss",
+        "pystray",
+        "pywinauto",
     ]
     # Map pip package names to their actual import names where they differ
     import_names = {"python-dotenv": "dotenv", "Pillow": "PIL"}
@@ -52,8 +56,8 @@ def _ensure_dependencies() -> None:
     print()
     # Use --user if system Python site-packages is not writable
     pip_cmd = [sys.executable, "-m", "pip", "install", "-q"]
-    import site
-    site_dir = site.getsitepackages()[0] if site.getsitepackages() else None
+    import site as _site
+    site_dir = _site.getsitepackages()[0] if _site.getsitepackages() else None
     if site_dir and not os.access(site_dir, os.W_OK):
         pip_cmd.append("--user")
         print("  (using --user install -- system Python detected)")
@@ -64,10 +68,18 @@ def _ensure_dependencies() -> None:
         check=True,
     )
     print()
-    print("Setup complete. Run the script again:")
-    print("  python clawbridge.py")
+    print("Dependencies installed! Continuing startup...")
     print()
-    sys.exit(0)
+    # Refresh importlib so freshly installed packages are importable
+    import importlib
+    importlib.invalidate_caches()
+    # Refresh sys.path to pick up newly installed packages
+    if site_dir and site_dir not in sys.path:
+        sys.path.insert(0, site_dir)
+    # Also try user site-packages
+    user_site = _site.getusersitepackages() if hasattr(_site, 'getusersitepackages') else None
+    if user_site and user_site not in sys.path:
+        sys.path.insert(0, user_site)
 
 _ensure_dependencies()
 
@@ -84,6 +96,7 @@ import base64
 import io
 import json
 import logging
+import re
 import sqlite3
 import time
 import uuid
@@ -96,7 +109,7 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 import uvicorn
 
 # ---------------------------------------------------------------------------
@@ -126,9 +139,14 @@ class Settings:
     # OpenClaw engine settings
     openclaw_gateway_port = int(_env("OPENCLAW_GATEWAY_PORT", "18789"))
     openclaw_api_key = _env("OPENCLAW_API_KEY", "")  # Optional bearer token for gateway auth
+    openclaw_model = _env("OPENCLAW_MODEL", "")  # Model for OpenClaw (e.g. openrouter/anthropic/claude-sonnet-4). Empty = use gateway default.
     policy_mode = _env("POLICY_MODE", "guarded")
+    automation_mode = _env("AUTOMATION_MODE", "supervised")  # "supervised" (asks approval) | "autonomous" (runs freely)
+    dashboard_token = _env("DASHBOARD_TOKEN", "")  # Optional: set to require auth for dashboard access
     max_concurrent_tasks = int(_env("MAX_CONCURRENT_TASKS", "3"))
     max_actions_per_task = int(_env("MAX_ACTIONS_PER_TASK", "50"))
+    max_task_retries = int(_env("MAX_TASK_RETRIES", "2"))  # Auto-retry failed tasks (0=disabled)
+    retry_base_delay = float(_env("RETRY_BASE_DELAY", "2.0"))  # Base delay in seconds for exponential backoff
     log_level = _env("LOG_LEVEL", "INFO")
     db_path = _env("CLAWBRIDGE_DB", "clawbridge.db")
     remote_bridge_url = _env("REMOTE_BRIDGE_URL", "")
@@ -165,6 +183,61 @@ def get_machine_id() -> str:
     mid = str(uuid.uuid4())
     id_file.write_text(mid)
     return mid
+
+# ---------------------------------------------------------------------------
+# Safety / Policy Engine (inline — adapted from clawbridge/policy/safety.py)
+# ---------------------------------------------------------------------------
+
+# Credential patterns — detect but never extract/return actual values
+_CREDENTIAL_PATTERNS = [
+    re.compile(r"(?i)(password|passwd|pwd)\s*[:=]\s*\S+"),
+    re.compile(r"(?i)(api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*\S+"),
+    re.compile(r"(?i)(access[_-]?token|auth[_-]?token|bearer)\s*[:=]\s*\S+"),
+    re.compile(r"(?i)(private[_-]?key)\s*[:=]\s*\S+"),
+    re.compile(r"sk-[a-zA-Z0-9]{20,}"),           # OpenAI-style keys
+    re.compile(r"sk-ant-[a-zA-Z0-9-]{20,}"),       # Anthropic keys
+    re.compile(r"ghp_[a-zA-Z0-9]{36}"),            # GitHub PATs
+    re.compile(r"xox[bsapr]-[a-zA-Z0-9-]+"),      # Slack tokens
+]
+_PII_PATTERNS = [
+    re.compile(r"\b\d{3}[-.]?\d{2}[-.]?\d{4}\b"),                    # SSN
+    re.compile(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b"),      # Credit card
+]
+_INJECTION_PATTERNS = [
+    re.compile(r"(?i)ignore\s+(previous|above|all)\s+(instructions?|prompts?|rules?)"),
+    re.compile(r"(?i)you\s+are\s+now\s+"),
+    re.compile(r"(?i)forget\s+(everything|all|your)\s+"),
+    re.compile(r"(?i)disregard\s+(previous|above|all)\s+"),
+    re.compile(r"(?i)new\s+instructions?\s*:"),
+    re.compile(r"(?i)override\s+(previous|system)\s+"),
+]
+
+
+def safety_scan_prompt(text: str) -> dict:
+    """Scan a task prompt for credentials, PII, and prompt injection.
+    Returns {credentials: bool, pii: bool, injection_flags: list[str], clean: bool}.
+    Designed to flag — not block — so guardrails aren't too restrictive.
+    """
+    creds = any(p.search(text) for p in _CREDENTIAL_PATTERNS)
+    pii = any(p.search(text) for p in _PII_PATTERNS)
+    injections = [p.pattern[:50] for p in _INJECTION_PATTERNS if p.search(text)]
+    return {
+        "credentials": creds,
+        "pii": pii,
+        "injection_flags": injections,
+        "clean": not creds and not pii and not injections,
+    }
+
+
+def safety_redact(text: str) -> str:
+    """Redact credentials and PII from text before logging/storing."""
+    result = text
+    for p in _CREDENTIAL_PATTERNS:
+        result = p.sub("[REDACTED_CREDENTIAL]", result)
+    for p in _PII_PATTERNS:
+        result = p.sub("[REDACTED_PII]", result)
+    return result
+
 
 # ---------------------------------------------------------------------------
 # Workspace directory (personality files, memory, templates, schedules)
@@ -665,6 +738,28 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
                  (id TEXT PRIMARY KEY, prompt TEXT, engine TEXT, status TEXT,
                   result TEXT, error TEXT, created_at TEXT, updated_at TEXT)''')
+    # Step traces for task replay
+    c.execute('''CREATE TABLE IF NOT EXISTS task_steps
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  task_id TEXT NOT NULL,
+                  step_num INTEGER NOT NULL,
+                  max_steps INTEGER DEFAULT 0,
+                  action TEXT DEFAULT '',
+                  detail TEXT DEFAULT '',
+                  reasoning TEXT DEFAULT '',
+                  tokens_in INTEGER DEFAULT 0,
+                  tokens_out INTEGER DEFAULT 0,
+                  timestamp TEXT NOT NULL,
+                  FOREIGN KEY (task_id) REFERENCES tasks(id))''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_task_steps_task_id ON task_steps(task_id)')
+    # Persistent audit log
+    c.execute('''CREATE TABLE IF NOT EXISTS audit_log
+                 (id TEXT PRIMARY KEY,
+                  task_id TEXT DEFAULT '',
+                  event_type TEXT DEFAULT '',
+                  detail TEXT DEFAULT '',
+                  timestamp TEXT NOT NULL)''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_audit_task_id ON audit_log(task_id)')
     conn.commit()
     conn.close()
 
@@ -713,6 +808,7 @@ class TaskResult(BaseModel):
     estimated_cost_usd: float = 0.0
 
 class Task(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     prompt: str = ""
     engine: EngineName = EngineName.AUTO
@@ -721,6 +817,7 @@ class Task(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     result: TaskResult | None = None
     error: str | None = None
+    _personality_context: str = PrivateAttr(default="")  # injected at runtime, not serialized
 
 class AuditEvent(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -740,6 +837,17 @@ class AuditLogger:
 
     def log(self, event: AuditEvent) -> None:
         self._buffer.append(event)
+        # Persist to SQLite
+        try:
+            conn = sqlite3.connect(Settings.db_path)
+            conn.execute(
+                "INSERT OR IGNORE INTO audit_log (id, task_id, event_type, detail, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (event.id, event.task_id, event.event_type, event.detail, event.timestamp.isoformat())
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
         if self._on_log:
             try:
                 self._on_log(event)
@@ -747,15 +855,77 @@ class AuditLogger:
                 pass
 
     def recent(self, limit: int = 50, task_id: str | None = None) -> list[AuditEvent]:
-        events = list(self._buffer)
-        if task_id:
-            events = [e for e in events if e.task_id == task_id]
-        return events[-limit:]
+        # Try DB first for fuller history, fall back to buffer
+        try:
+            conn = sqlite3.connect(Settings.db_path)
+            if task_id:
+                rows = conn.execute(
+                    "SELECT id, task_id, event_type, detail, timestamp FROM audit_log WHERE task_id = ? ORDER BY timestamp DESC LIMIT ?",
+                    (task_id, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, task_id, event_type, detail, timestamp FROM audit_log ORDER BY timestamp DESC LIMIT ?",
+                    (limit,)
+                ).fetchall()
+            conn.close()
+            return [AuditEvent(id=r[0], task_id=r[1], event_type=r[2], detail=r[3], timestamp=datetime.fromisoformat(r[4])) for r in reversed(rows)]
+        except Exception:
+            events = list(self._buffer)
+            if task_id:
+                events = [e for e in events if e.task_id == task_id]
+            return events[-limit:]
 
 _audit = AuditLogger()
 
 def get_audit() -> AuditLogger:
     return _audit
+
+# ---------------------------------------------------------------------------
+# Step persistence (for task replay)
+# ---------------------------------------------------------------------------
+
+def save_step_to_db(step_data: dict) -> None:
+    """Persist a single step to the task_steps table."""
+    try:
+        conn = sqlite3.connect(Settings.db_path)
+        conn.execute(
+            """INSERT INTO task_steps (task_id, step_num, max_steps, action, detail, reasoning, tokens_in, tokens_out, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                step_data.get("task_id", ""),
+                step_data.get("step", 0),
+                step_data.get("max_steps", 0),
+                step_data.get("action", ""),
+                step_data.get("detail", "")[:500],
+                step_data.get("reasoning", "")[:1000],
+                step_data.get("tokens_in", 0),
+                step_data.get("tokens_out", 0),
+                datetime.utcnow().isoformat(),
+            )
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.debug("Failed to save step: %s", e)
+
+
+def get_steps_for_task(task_id: str) -> list[dict]:
+    """Retrieve all persisted steps for a task."""
+    try:
+        conn = sqlite3.connect(Settings.db_path)
+        rows = conn.execute(
+            "SELECT step_num, max_steps, action, detail, reasoning, tokens_in, tokens_out, timestamp FROM task_steps WHERE task_id = ? ORDER BY step_num",
+            (task_id,)
+        ).fetchall()
+        conn.close()
+        return [
+            {"step": r[0], "max_steps": r[1], "action": r[2], "detail": r[3],
+             "reasoning": r[4], "tokens_in": r[5], "tokens_out": r[6], "timestamp": r[7]}
+            for r in rows
+        ]
+    except Exception:
+        return []
 
 # ---------------------------------------------------------------------------
 # Engines (browser-use only in single-file; OpenClaw stubbed)
@@ -810,6 +980,7 @@ class BrowserUseEngine(EngineBase):
     name = EngineName.BROWSER_USE
     display_name = "browser-use"
     on_screenshot: Callable[[str], Any] | None = None  # receives base64 image string
+    on_step: Callable[[dict], Any] | None = None  # receives step metadata dict
 
     async def initialize(self) -> None:
         try:
@@ -877,7 +1048,12 @@ class BrowserUseEngine(EngineBase):
             return task
         self._status = EngineStatus.RUNNING
         try:
-            agent = self._Agent(task=task.prompt, llm=self._llm, browser=self._browser)
+            # ── Inject personality/memory context into prompt ────────────
+            prompt_text = task.prompt
+            personality_ctx = getattr(task, '_personality_context', '')
+            if personality_ctx:
+                prompt_text = f"[AGENT CONTEXT]\n{personality_ctx}\n[END AGENT CONTEXT]\n\nTask: {task.prompt}"
+            agent = self._Agent(task=prompt_text, llm=self._llm, browser=self._browser)
             import time
             import base64
 
@@ -1070,7 +1246,7 @@ class OpenClawEngine(EngineBase):
         try:
             logging.info("Starting OpenClaw gateway...")
             self._gateway_proc = subprocess.Popen(
-                [self._openclaw_bin, "gateway", "start"],
+                [self._openclaw_bin, "gateway", "run", "--port", str(settings.openclaw_gateway_port)],
                 env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -1090,27 +1266,34 @@ class OpenClawEngine(EngineBase):
         return False
 
     async def run_task(self, task: Task) -> Task:
-        if self._status != EngineStatus.AVAILABLE:
+        if self._status in (EngineStatus.NOT_INSTALLED, EngineStatus.ERROR, EngineStatus.STOPPED):
             task.status = TaskStatus.ERROR
             task.error = f"OpenClaw engine not available ({self._error_hint or 'unknown'})"
             return task
         if not await self._ensure_gateway():
             task.status = TaskStatus.ERROR
-            task.error = "OpenClaw gateway not responding. Start it with: openclaw gateway start"
+            task.error = "OpenClaw gateway not responding. Start it with: openclaw gateway run"
             return task
-        self._status = EngineStatus.RUNNING
         t0 = time.monotonic()
         try:
             settings = get_settings()
             headers = {}
             if settings.openclaw_api_key:
                 headers["Authorization"] = f"Bearer {settings.openclaw_api_key}"
+            # ── Inject personality/memory context ────────────────────
+            personality_ctx = getattr(task, '_personality_context', '')
+            messages = []
+            if personality_ctx:
+                messages.append({"role": "system", "content": personality_ctx})
+            messages.append({"role": "user", "content": task.prompt})
             # Use OpenAI-compatible chat completions endpoint
+            model = settings.openclaw_model or None  # None = use gateway's configured default model
             payload = {
-                "model": "openclaw",
-                "messages": [{"role": "user", "content": task.prompt}],
+                "messages": messages,
                 "stream": False,
             }
+            if model:
+                payload["model"] = model
             resp = await self._http_client.post(
                 "/v1/chat/completions",
                 json=payload,
@@ -1412,6 +1595,7 @@ class ComputerUseEngine(EngineBase):
         self._scaled_width = 0
         self._scaled_height = 0
         self.on_screenshot = None
+        self.on_step = None  # Callback: receives step metadata dict
         self._last_ui_elements: list[dict] = []  # cached element list for click_element
         self._cancel_requested = False
 
@@ -1552,7 +1736,7 @@ class ComputerUseEngine(EngineBase):
                         if w.window_text() == fg_title:
                             target_win = w
                             break
-                    except:
+                    except Exception:
                         pass
                 if not target_win:
                     # Fallback: try partial match
@@ -1562,7 +1746,7 @@ class ComputerUseEngine(EngineBase):
                             if wt and fg_title and fg_title[:20] in wt:
                                 target_win = w
                                 break
-                        except:
+                        except Exception:
                             pass
                 if not target_win:
                     return []
@@ -1601,7 +1785,7 @@ class ComputerUseEngine(EngineBase):
                         })
                         if len(elements) >= 40:
                             break
-                    except:
+                    except Exception:
                         pass
                 return elements
             except Exception as exc:
@@ -1758,7 +1942,7 @@ class ComputerUseEngine(EngineBase):
                             w.set_focus()
                             import time as _t; _t.sleep(0.5)
                             return True
-                    except:
+                    except Exception:
                         pass
                 # Fallback: try win32 backend for apps like Telegram
                 d2 = Desktop(backend='win32')
@@ -1769,7 +1953,7 @@ class ComputerUseEngine(EngineBase):
                             w.set_focus()
                             import time as _t; _t.sleep(0.5)
                             return True
-                    except:
+                    except Exception:
                         pass
             except Exception as exc:
                 logging.debug("Failed to bring %s to foreground: %s", app_keyword, exc)
@@ -1829,7 +2013,7 @@ class ComputerUseEngine(EngineBase):
             init_ss = await self._take_screenshot()
             if self.on_screenshot:
                 try: self.on_screenshot(init_ss)
-                except: pass
+                except Exception: pass
             screen_desc = await self._describe_screen()
             if screen_desc:
                 logging.info("Screen description:\n%s", screen_desc)
@@ -1839,6 +2023,10 @@ class ComputerUseEngine(EngineBase):
             func_tool = [{"name": "computer", "description": f"Control the computer screen ({self._scaled_width}x{self._scaled_height}). Returns a screenshot and a list of interactive UI elements after every action. PREFER click_element over coordinate-based clicks for buttons, fields, and other named UI elements.", "input_schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["screenshot", "mouse_move", "left_click", "right_click", "double_click", "middle_click", "left_click_drag", "type", "key", "cursor_position", "scroll", "click_element"], "description": "The action to perform. Use 'click_element' with 'element_id' to click a UI element by its ID from the INTERACTIVE ELEMENTS list — this is MORE RELIABLE than coordinate-based clicks."}, "coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] pixel coordinates for mouse actions (not needed for click_element)"}, "start_coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] start coordinates for drag"}, "text": {"type": "string", "description": "Text to type, or key combo like 'ctrl+c'"}, "amount": {"type": "integer", "description": "Scroll amount (positive=up, negative=down)"}, "element_id": {"type": "integer", "description": "ID of the UI element to click (from the INTERACTIVE ELEMENTS list). Use with action='click_element'."}}, "required": ["action"]}}]
             tools = native_tool if not self._is_openrouter else func_tool
             sys_prompt = SYSTEM_PROMPT_TEMPLATE.format(scaled_width=self._scaled_width, scaled_height=self._scaled_height)
+            # ── Inject personality/memory context into system prompt ─────
+            personality_ctx = getattr(task, '_personality_context', '')
+            if personality_ctx:
+                sys_prompt += f"\n\n================================================================\nAGENT IDENTITY & MEMORY\n================================================================\n{personality_ctx}\n"
             ctx = ""
             if target_app and focused:
                 ctx += f"IMPORTANT: {target_app} has ALREADY been brought to the foreground for you. It is the active window. Do NOT click the taskbar or try to switch to it — just interact with its UI elements directly.\n\n"
@@ -1902,7 +2090,24 @@ class ComputerUseEngine(EngineBase):
                     ss = await self._take_screenshot()
                     if self.on_screenshot:
                         try: self.on_screenshot(ss)
-                        except: pass
+                        except Exception: pass
+                    # ── Broadcast step update to dashboard ────────────
+                    if self.on_step and not is_ss_only:
+                        try:
+                            reasoning = ""
+                            if txt_blocks:
+                                reasoning = txt_blocks[-1][:300]
+                            self.on_step({
+                                "task_id": task.id,
+                                "step": step_count,
+                                "max_steps": max_steps,
+                                "action": action_name,
+                                "detail": json.dumps(tb.input)[:200] if hasattr(tb, 'input') else "",
+                                "reasoning": reasoning,
+                                "tokens_in": total_in,
+                                "tokens_out": total_out,
+                            })
+                        except Exception: pass
                     step_desc = await self._describe_screen()
                     # Refresh UI elements after each action
                     self._last_ui_elements = await self._get_ui_elements()
@@ -2004,11 +2209,21 @@ class TaskManager:
         except Exception as e:
             logging.error(f"Failed to save task to DB: {e}")
 
+    def _make_on_step(self):
+        """Create an on_step callback that broadcasts AND persists step data."""
+        def on_step(s):
+            save_step_to_db(s)  # persist to SQLite
+            if self._broadcast:
+                asyncio.create_task(self._broadcast({"type": "step_update", "payload": s}))
+        return on_step
+
     async def init_engines(self) -> None:
+        on_step_cb = self._make_on_step()
         for name in get_settings().enabled_engine_list():
             if name == EngineName.BROWSER_USE.value or name == "browser_use":
                 e = BrowserUseEngine()
                 e.on_screenshot = lambda img: asyncio.create_task(self._broadcast({"type": "live_view", "payload": {"image": img}})) if self._broadcast else None
+                e.on_step = on_step_cb
                 await e.initialize()
                 self._engines[EngineName.BROWSER_USE] = e
             elif name == EngineName.OPENCLAW.value or name == "openclaw":
@@ -2018,19 +2233,54 @@ class TaskManager:
             elif name == EngineName.COMPUTER_USE.value or name == "computer_use":
                 e = ComputerUseEngine()
                 e.on_screenshot = lambda img: asyncio.create_task(self._broadcast({"type": "live_view", "payload": {"image": img}})) if self._broadcast else None
+                e.on_step = on_step_cb
                 await e.initialize()
                 self._engines[EngineName.COMPUTER_USE] = e
 
     def _engine_for(self, preferred: EngineName, prompt: str = "") -> EngineBase | None:
+        """Select the best available engine for a task.
+
+        Smart default priority:
+        - Desktop tasks: computer-use → browser-use → openclaw
+        - Non-desktop tasks: openclaw (when available) → browser-use → computer-use
+
+        OpenClaw is preferred for non-desktop tasks because it has memory/skills support.
+        """
+        # Explicit engine selection (not AUTO)
         if preferred != EngineName.AUTO and preferred in self._engines:
-            return self._engines[preferred]
-        # Auto-select: desktop-sounding tasks prefer computer-use
-        if prompt and any(kw in prompt.lower() for kw in DESKTOP_KEYWORDS):
-            if EngineName.COMPUTER_USE in self._engines:
-                return self._engines[EngineName.COMPUTER_USE]
-        return (self._engines.get(EngineName.BROWSER_USE)
-                or self._engines.get(EngineName.COMPUTER_USE)
-                or self._engines.get(EngineName.OPENCLAW))
+            engine = self._engines[preferred]
+            logging.info("Engine selected: %s (explicit)", engine.display_name)
+            return engine
+
+        # Determine priority order based on task type
+        is_desktop = prompt and any(kw in prompt.lower() for kw in DESKTOP_KEYWORDS)
+
+        if is_desktop:
+            # Desktop tasks: prefer computer-use for native app control
+            priority = [EngineName.COMPUTER_USE, EngineName.BROWSER_USE, EngineName.OPENCLAW]
+            reason = "desktop task detected"
+        else:
+            # Non-desktop tasks: prefer OpenClaw (has memory/skills), then browser-use
+            priority = [EngineName.OPENCLAW, EngineName.BROWSER_USE, EngineName.COMPUTER_USE]
+            reason = "smart default (OpenClaw preferred when available)"
+
+        # Find first available engine in priority order
+        for name in priority:
+            if name in self._engines:
+                engine = self._engines[name]
+                if engine._status == EngineStatus.AVAILABLE:
+                    logging.info("Engine selected: %s (%s)", engine.display_name, reason)
+                    return engine
+
+        # Fallback: return any engine even if not fully available (let run_task handle errors)
+        for name in priority:
+            if name in self._engines:
+                engine = self._engines[name]
+                logging.warning("Engine selected: %s (fallback, status=%s)", engine.display_name, engine._status.value)
+                return engine
+
+        logging.error("No engines available for task")
+        return None
 
     async def submit(self, task: Task) -> Task:
         get_audit().log(AuditEvent(task_id=task.id, event_type="task_created", detail=task.prompt[:100]))
@@ -2050,7 +2300,47 @@ class TaskManager:
         self._save_task_to_db(task)
         if self._broadcast:
             await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
-        
+
+        # ── Safety screening ─────────────────────────────────────────────
+        original_prompt = task.prompt  # preserve for logging
+        try:
+            scan = safety_scan_prompt(task.prompt)
+            policy = get_settings().policy_mode
+            if not scan["clean"]:
+                flags = []
+                if scan["credentials"]: flags.append("credentials detected")
+                if scan["pii"]: flags.append("PII detected")
+                if scan["injection_flags"]: flags.append(f"injection patterns: {len(scan['injection_flags'])}")
+                flag_str = ", ".join(flags)
+                logging.warning("Safety scan for task %s: %s (policy=%s)", task.id[:8], flag_str, policy)
+                get_audit().log(AuditEvent(task_id=task.id, event_type="safety_flag", detail=flag_str))
+                if self._broadcast:
+                    await self._broadcast({"type": "safety_warning", "payload": {"task_id": task.id, "flags": flags, "policy": policy}})
+                # In strict mode, block tasks containing credentials
+                if policy == "strict" and scan["credentials"]:
+                    task.status = TaskStatus.ERROR
+                    task.error = "Blocked by safety policy: credentials detected in prompt. Remove credentials and retry, or switch to 'guarded' policy mode."
+                    self._running -= 1
+                    self._save_task_to_db(task)
+                    if self._broadcast:
+                        await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
+                    return
+        except Exception as e:
+            logging.warning("Safety scan error: %s", e)
+
+        # ── Inject personality + memory context into task ────────────────
+        try:
+            personality_ctx = get_personality().get_system_context()
+            if personality_ctx.strip():
+                # Store context separately so engines can use it as system prompt OR prepend
+                task._personality_context = personality_ctx
+                logging.info("Injected personality/memory context (%d chars) into task %s", len(personality_ctx), task.id[:8])
+            else:
+                task._personality_context = ""
+        except Exception as e:
+            logging.warning("Failed to load personality context: %s", e)
+            task._personality_context = ""
+
         engine = self._engine_for(task.engine, prompt=task.prompt)
         if not engine:
             task.status = TaskStatus.ERROR
@@ -2058,13 +2348,60 @@ class TaskManager:
         else:
             task.engine = engine.name
             get_audit().log(AuditEvent(task_id=task.id, event_type="task_started", detail=engine.display_name))
-            try:
-                task = await engine.run_task(task)
-            except asyncio.CancelledError:
-                task.status = TaskStatus.CANCELLED
-                task.error = None
-                logging.info("Task %s cancelled", task.id)
+            # ── Execute with retry logic ──────────────────────────────
+            max_retries = get_settings().max_task_retries
+            base_delay = get_settings().retry_base_delay
+            attempt = 0
+            while True:
+                try:
+                    task = await engine.run_task(task)
+                except asyncio.CancelledError:
+                    task.status = TaskStatus.CANCELLED
+                    task.error = None
+                    logging.info("Task %s cancelled", task.id)
+                    break
+                except Exception as run_err:
+                    task.status = TaskStatus.ERROR
+                    task.error = safety_redact(str(run_err))[:500]
+                    logging.error("Task %s engine error: %s", task.id[:8], run_err)
+
+                # Check if retry is needed and allowed
+                if task.status == TaskStatus.ERROR and attempt < max_retries:
+                    attempt += 1
+                    delay = base_delay * (2 ** (attempt - 1))  # exponential backoff: 2s, 4s, 8s...
+                    logging.info("Task %s failed (attempt %d/%d), retrying in %.1fs: %s",
+                                 task.id[:8], attempt, max_retries + 1, delay, task.error)
+                    get_audit().log(AuditEvent(task_id=task.id, event_type="task_retry",
+                                               detail=f"Attempt {attempt + 1}/{max_retries + 1} after {delay:.0f}s delay: {task.error[:100]}"))
+                    if self._broadcast:
+                        await self._broadcast({"type": "task_update", "payload": {
+                            **task.model_dump(mode="json"),
+                            "status": "retrying",
+                            "_retry_attempt": attempt,
+                            "_retry_max": max_retries + 1,
+                            "_retry_delay": delay,
+                        }})
+                    await asyncio.sleep(delay)
+                    task.status = TaskStatus.RUNNING
+                    task.error = None
+                    continue
+                break  # success, cancelled, or max retries exhausted
+
             get_audit().log(AuditEvent(task_id=task.id, event_type="task_completed" if task.status == TaskStatus.COMPLETE else "task_cancelled" if task.status == TaskStatus.CANCELLED else "task_error", detail=task.error or "ok"))
+            # ── Auto-log task to daily memory ────────────────────────────
+            try:
+                status_str = task.status.value if hasattr(task.status, 'value') else str(task.status)
+                retry_note = f" (after {attempt + 1} attempts)" if attempt > 0 else ""
+                summary = safety_redact(original_prompt[:120].replace('\n', ' '))
+                result_preview = ""
+                if task.result and task.result.summary:
+                    result_preview = f" → {safety_redact(task.result.summary[:80].replace(chr(10), ' '))}"
+                get_personality().append_memory(
+                    f"Task [{status_str}] via {engine.display_name}{retry_note}: {summary}{result_preview}",
+                    daily=True
+                )
+            except Exception as e:
+                logging.warning("Failed to auto-log task to memory: %s", e)
 
         self._running -= 1
         self._futures.pop(task.id, None)
@@ -2178,7 +2515,7 @@ def get_manager() -> TaskManager:
 def _dashboard_html() -> str:
     # Inline CSS (enhanced for chat-like experience)
     css = """
-:root{--bg:#0f1117;--card:#1e2130;--border:#2d3148;--text:#e4e6f0;--muted:#a0aec0;--accent:#6366f1;--ok:#22c55e;--err:#ef4444;}
+:root{--bg:#0f1117;--card:#1e2130;--border:#2d3148;--text:#e4e6f0;--fg:#e4e6f0;--muted:#a0aec0;--accent:#6366f1;--ok:#22c55e;--err:#ef4444;--warn:#f59e0b;}
 *{margin:0;padding:0;box-sizing:border-box;}
 html,body{overflow:hidden;width:100%;height:100%;}
 body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;}
@@ -2196,7 +2533,9 @@ aside{border-right:1px solid var(--border);padding:16px;overflow-y:auto;display:
 
 .collapsed-icons{display:none;flex-direction:column;align-items:center;gap:12px;padding-top:16px;}
 aside.collapsed .collapsed-icons{display:flex;}
-aside.collapsed .card, aside.collapsed .btn, aside.collapsed h2{display:none;}
+aside.collapsed .card, aside.collapsed .btn, aside.collapsed h2, aside.collapsed .sidebar-section-label{display:none;}
+.sidebar-section-label{font-size:9px;text-transform:uppercase;color:rgba(160,174,192,0.5);letter-spacing:1.2px;font-weight:700;margin:14px 0 6px 4px;}
+.sidebar-section-label:first-of-type{margin-top:0;}
 aside.collapsed{padding:10px;overflow:hidden;min-width:52px;}
 
 .toggle-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:8px;z-index:10;transition:color 0.2s;display:flex;align-items:center;justify-content:center;border-radius:8px;}
@@ -2225,6 +2564,7 @@ select{width:auto !important;min-width:0;padding:8px 32px 8px 12px;font-size:13p
 select option{background:#1e2130;color:#e4e6f0;padding:8px 12px;}
 textarea{min-height:44px;max-height:120px;resize:none;line-height:1.4;flex:1;}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 20px;border:none;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;background:var(--accent);color:#fff;transition:all 0.2s;white-space:nowrap;}
+.mode-btn{flex-direction:column;align-items:center;background:#2d3748;border:1px solid var(--border);transition:all 0.2s;}.mode-btn:hover{background:rgba(99,102,241,0.15);}
 .btn:hover{opacity:.9;transform:translateY(-1px);box-shadow:0 4px 12px rgba(99,102,241,0.3);}
 .btn:active{transform:translateY(0);}
 .btn:disabled{background:var(--muted);cursor:not-allowed;transform:none;box-shadow:none;}
@@ -2248,25 +2588,111 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .msg-user{padding:16px 0;border-bottom:1px solid rgba(255,255,255,0.04);}
 .msg-user-bubble{display:flex;justify-content:flex-end;}
 .msg-user-inner{background:var(--accent);color:#fff;padding:10px 16px;border-radius:18px 18px 4px 18px;max-width:75%;font-size:14px;line-height:1.5;word-break:break-word;}
-.msg-assistant{padding:16px 0;border-bottom:1px solid rgba(255,255,255,0.04);}
-.msg-meta{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:11px;color:var(--muted);}
-.msg-meta .engine-tag{background:rgba(99,102,241,0.15);color:var(--accent);padding:2px 8px;border-radius:6px;font-weight:600;font-size:10px;text-transform:uppercase;}
-.msg-status{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;}
-.msg-status.running{background:rgba(245,158,11,0.2);color:#f59e0b;}
-.msg-status.complete{background:rgba(34,197,94,0.15);color:var(--ok);}
-.msg-status.error{background:rgba(239,68,68,0.15);color:var(--err);}
-.msg-status.cancelled{background:rgba(160,174,192,0.15);color:var(--muted);}
-.msg-status.pending{background:rgba(160,174,192,0.15);color:var(--muted);}
-.msg-body{font-size:14px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word;}
-.msg-cost{font-size:10px;color:var(--muted);margin-left:auto;display:flex;gap:8px;align-items:center;}
-.msg-cost span{background:rgba(255,255,255,0.05);padding:2px 6px;border-radius:4px;}
-.msg-error{margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:var(--err);font-size:13px;word-break:break-word;}
+.msg-assistant{padding:16px 0;border-bottom:1px solid rgba(255,255,255,0.04);position:relative;}
+.msg-info-wrap{position:relative;display:inline-block;margin-bottom:6px;}
+.msg-info-btn{width:18px;height:18px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.15);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px;font-weight:700;font-style:italic;font-family:Georgia,serif;transition:all 0.2s;line-height:1;}
+.msg-info-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(99,102,241,0.08);}
+.msg-info-btn.status-running{border-color:rgba(245,158,11,0.5);color:#f59e0b;animation:pulse 1.5s ease-in-out infinite;}
+.msg-info-btn.status-error{border-color:rgba(239,68,68,0.4);color:var(--err);}
+.msg-info-tip{display:none;position:absolute;left:24px;top:-4px;background:var(--card);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px 14px;font-size:11px;color:var(--text);white-space:nowrap;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:160px;}
+.msg-info-wrap:hover .msg-info-tip,.msg-info-wrap:focus-within .msg-info-tip{display:block;}
+.msg-info-tip .tip-row{display:flex;justify-content:space-between;gap:16px;padding:2px 0;}
+.msg-info-tip .tip-label{color:var(--muted);}
+.msg-info-tip .tip-val{font-weight:600;}
+.msg-info-tip .tip-val.status-running{color:#f59e0b;}
+.msg-info-tip .tip-val.status-complete{color:var(--ok);}
+.msg-info-tip .tip-val.status-error{color:var(--err);}
+.msg-info-tip .tip-val.status-cancelled,.msg-info-tip .tip-val.status-pending{color:var(--muted);}
+.msg-info-tip .tip-val.status-retrying{color:#f59e0b;}
+.msg-info-tip .tip-divider{border-top:1px solid rgba(255,255,255,0.06);margin:4px 0;}
+.msg-icon-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;}
+.msg-icon-btn{width:18px;height:18px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.1);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);transition:all 0.2s;padding:0;}
+.msg-icon-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(99,102,241,0.08);}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
+@keyframes msgSlideUp{0%{opacity:0;transform:translateY(18px);}60%{opacity:1;transform:translateY(-2px);}100%{opacity:1;transform:translateY(0);}}
+.msg-group.msg-enter{animation:msgSlideUp 0.35s cubic-bezier(0.16,1,0.3,1) both;}
+.msg-assistant.msg-enter{animation:msgSlideUp 0.35s cubic-bezier(0.16,1,0.3,1) 0.05s both;}
+.msg-body{font-size:14px;line-height:1.6;color:var(--text);word-break:break-word;overflow-wrap:break-word;}
+.msg-body h1,.msg-body h2,.msg-body h3{color:var(--text);margin:12px 0 6px;font-weight:600;}
+.msg-body h1{font-size:1.4em;border-bottom:1px solid var(--border);padding-bottom:4px;}
+.msg-body h2{font-size:1.2em;}
+.msg-body h3{font-size:1.05em;}
+.msg-body code{background:rgba(99,102,241,0.1);padding:2px 6px;border-radius:4px;font-family:monospace;font-size:0.9em;color:var(--accent);}
+.msg-body pre{background:rgba(0,0,0,0.3);padding:12px;border-radius:8px;overflow-x:auto;margin:10px 0;border:1px solid var(--border);}
+.msg-body pre code{background:none;padding:0;color:var(--text);}
+.msg-body ul,.msg-body ol{margin:8px 0 8px 20px;}
+.msg-body li{margin:4px 0;line-height:1.6;}
+.msg-body strong{font-weight:600;color:var(--text);}
+.msg-body em{font-style:italic;}
+.msg-body a{color:var(--accent);text-decoration:underline;text-decoration-style:dotted;}
+.msg-body a:hover{text-decoration-style:solid;}
+.msg-body blockquote{border-left:3px solid var(--accent);padding-left:12px;margin:10px 0;color:var(--muted);font-style:italic;}
+.msg-body hr{border:none;border-top:1px solid var(--border);margin:12px 0;}
+.msg-body table{border-collapse:collapse;width:100%;margin:10px 0;}
+.msg-body th,.msg-body td{border:1px solid var(--border);padding:6px 10px;text-align:left;}
+.msg-body th{background:rgba(99,102,241,0.1);font-weight:600;}
+.msg-body p{margin:6px 0;}
 .msg-actions{margin-top:8px;}
 .msg-actions .btn{padding:4px 12px;font-size:11px;}
+.msg-error{margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:var(--err);font-size:13px;word-break:break-word;}
+.step-stream{margin-top:4px;transition:all 0.3s ease;}
 
 .activity-feed{font-size:11px;}
-.activity-item{padding:8px;background:rgba(255,255,255,0.02);border-radius:8px;margin-bottom:8px;border-left:2px solid var(--accent);}
+.activity-item{padding:8px 10px;background:rgba(255,255,255,0.02);border-radius:8px;margin-bottom:6px;border-left:3px solid var(--border);transition:background 0.15s;}
+.activity-item:hover{background:rgba(255,255,255,0.04);}
+.activity-item.ev-task_completed,.activity-item.ev-complete{border-left-color:var(--ok);}
+.activity-item.ev-task_failed,.activity-item.ev-error,.activity-item.ev-safety_flag{border-left-color:var(--err);}
+.activity-item.ev-task_retry,.activity-item.ev-install,.activity-item.ev-warning,.activity-item.ev-safety{border-left-color:var(--warn);}
+.activity-item.ev-task_created,.activity-item.ev-task_started,.activity-item.ev-step{border-left-color:var(--accent);}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block;flex-shrink:0;}
+.status-dot.connected{background:var(--ok);}
 .status-dot.error{background:var(--err);}
+.muted{color:var(--muted);}
+.system-health{position:relative;font-size:12px;display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 12px;border-radius:8px;transition:background 0.2s;}
+.system-health:hover{background:rgba(255,255,255,0.05);}
+.system-health-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;transition:background 0.3s;}
+.system-health-dot.sh-ok{background:var(--ok);}
+.system-health-dot.sh-warn{background:var(--warn);}
+.system-health-dot.sh-err{background:var(--err);}
+.system-health-dropdown{display:none;position:absolute;top:100%;right:0;margin-top:8px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px;min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,0.4);z-index:100;}
+.system-health:hover .system-health-dropdown,.system-health:focus-within .system-health-dropdown{display:block;}
+.health-row{display:flex;justify-content:space-between;padding:6px 0;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.05);}
+.health-row:last-child{border-bottom:none;}
+.health-label{color:var(--muted);}
+.health-value{font-weight:600;}
+.health-value.h-ok{color:var(--ok);}.health-value.h-warn{color:var(--warn);}.health-value.h-err{color:var(--err);}
+.config-chip{display:inline-block;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;letter-spacing:0.3px;}
+.config-chip.configured{background:rgba(34,197,94,0.15);color:var(--ok);border:1px solid rgba(34,197,94,0.2);}
+.config-chip.not-set{background:rgba(160,174,192,0.08);color:var(--muted);border:1px solid rgba(160,174,192,0.15);}
+.config-provider-primary{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:12px;padding:8px 12px;background:rgba(99,102,241,0.08);border-radius:8px;border:1px solid rgba(99,102,241,0.15);}
+.config-advanced-toggle{font-size:10px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;padding:4px 0;user-select:none;}
+.config-advanced-toggle:hover{color:var(--accent);}
+.config-advanced-content{margin-top:8px;display:none;}
+.config-advanced-content.visible{display:block;}
+.history-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
+.history-table{width:100%;border-collapse:collapse;font-size:12px;}
+.history-table thead{background:rgba(99,102,241,0.08);border-bottom:2px solid var(--border);}
+.history-table th{text-align:left;padding:10px 12px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);}
+.history-table tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);cursor:pointer;transition:background 0.15s;}
+.history-table tbody tr:hover{background:rgba(99,102,241,0.05);}
+.history-table td{padding:12px;}
+.history-badge{display:inline-block;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;text-transform:uppercase;}
+.history-badge.complete{background:rgba(34,197,94,0.15);color:var(--ok);}
+.history-badge.error{background:rgba(239,68,68,0.15);color:var(--err);}
+.history-badge.running{background:rgba(245,158,11,0.15);color:var(--warn);}
+.history-badge.pending,.history-badge.cancelled{background:rgba(160,174,192,0.15);color:var(--muted);}
+.history-expanded{background:rgba(99,102,241,0.03)!important;}
+.history-detail{padding:16px;border-top:1px solid var(--border);background:rgba(0,0,0,0.2);}
+.history-result{font-size:12px;line-height:1.6;max-height:200px;overflow-y:auto;margin-bottom:12px;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;border:1px solid var(--border);}
+.onboarding-card{background:linear-gradient(135deg,rgba(99,102,241,0.08) 0%,rgba(99,102,241,0.02) 100%);border:1px solid rgba(99,102,241,0.2);border-radius:12px;padding:20px;margin:16px 24px;max-width:760px;margin-left:auto;margin-right:auto;transition:all 0.3s;}
+.onboarding-item{display:flex;align-items:center;gap:12px;padding:10px 12px;background:rgba(0,0,0,0.15);border-radius:8px;cursor:pointer;transition:all 0.15s;border:1px solid transparent;margin-bottom:8px;}
+.onboarding-item:hover{background:rgba(0,0,0,0.25);border-color:rgba(99,102,241,0.3);}
+.onboarding-item.done{opacity:0.6;cursor:default;}
+.onboarding-item.done:hover{background:rgba(0,0,0,0.15);border-color:transparent;}
+.onboarding-check{width:20px;height:20px;border:2px solid var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.2s;font-size:14px;font-weight:700;color:transparent;}
+.onboarding-item.done .onboarding-check{background:var(--ok);border-color:var(--ok);color:#fff;}
+.onboarding-progress-bar{flex:1;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;}
+.onboarding-progress-fill{height:100%;background:var(--ok);transition:width 0.3s;border-radius:2px;}
 
 /* Live View in Sidebar */
 .live-view-img-wrap{background:#0a0a0f;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:80px;}
@@ -2278,9 +2704,14 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .monitor-active{animation:monitor-pulse 2s ease-in-out infinite;}
 
 /* View Tabs */
-.view-tab{display:inline-flex;align-items:center;gap:5px;background:none;border:none;color:var(--muted);cursor:pointer;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;transition:all 0.15s;letter-spacing:0.3px;}
+.view-tab{display:inline-flex;align-items:center;gap:5px;background:none;border:none;color:var(--muted);cursor:pointer;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;transition:all 0.15s;letter-spacing:0.3px;position:relative;}
 .view-tab:hover{color:var(--text);background:rgba(255,255,255,0.05);}
 .view-tab.active{color:var(--accent);background:rgba(99,102,241,0.12);}
+.tab-badge{position:absolute;top:2px;right:4px;background:var(--accent);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:10px;min-width:16px;text-align:center;line-height:1;}
+.tab-badge.dot{width:6px;height:6px;padding:0;min-width:0;border-radius:50%;top:4px;right:6px;}
+.tab-badge.unsaved{background:var(--warn);}
+.tab-tooltip{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:10px;white-space:nowrap;margin-bottom:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3);display:none;z-index:100;pointer-events:none;}
+.view-tab:hover .tab-tooltip{display:block;}
 
 /* Soul Tabs */
 .soul-tab.active{background:rgba(99,102,241,0.15)!important;color:var(--accent)!important;}
@@ -2288,17 +2719,73 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 """
     # Inline JS
     js = """
-const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],activeView:'chat'};
+const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised'};
+function updateSystemHealth(){
+  const dot=document.getElementById("healthDot"),txt=document.getElementById("healthText");
+  const wsEl=document.getElementById("healthWS"),engEl=document.getElementById("healthEngines"),brEl=document.getElementById("healthBridge");
+  if(!dot)return;
+  // WS
+  if(state.connected){wsEl.textContent="Connected";wsEl.className="health-value h-ok";}
+  else if(state.wsRetryCount>0){wsEl.textContent="Reconnecting ("+state.wsRetryCount+")...";wsEl.className="health-value h-warn";}
+  else{wsEl.textContent="Disconnected";wsEl.className="health-value h-err";}
+  // Bridge
+  if(state.bridgeActive){brEl.textContent="Active";brEl.className="health-value h-ok";}
+  else{brEl.textContent="Offline";brEl.className="health-value";brEl.style.color="var(--muted)";}
+  // Engines
+  const avail=state.engines.filter(e=>e.status==="available").length;
+  const total=state.engines.length;
+  engEl.textContent=avail+" / "+total;
+  engEl.className=avail>0?"health-value h-ok":"health-value h-warn";
+  // Overall
+  if(state.connected&&(state.bridgeActive||avail>0)){dot.className="system-health-dot sh-ok";txt.textContent="Connected";}
+  else if(state.connected||state.bridgeActive||avail>0){dot.className="system-health-dot sh-warn";txt.textContent="Partial";}
+  else{dot.className="system-health-dot sh-err";txt.textContent="Disconnected";}
+}
 async function api(method,path,body=null){
   const r=await fetch(path,{method,headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):null});
   if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);
   return r.json();
 }
 function connect(){
-  state.ws=new WebSocket((location.protocol==="https:"?"wss:":"ws:")+"//"+location.host+"/ws");
-  state.ws.onopen=()=>{state.connected=true;document.querySelector(".ws-status").previousElementSibling.className="status-dot connected";document.querySelector(".ws-status").textContent="Connected";};
-  state.ws.onclose=()=>{state.connected=false;document.querySelector(".ws-status").previousElementSibling.className="status-dot error";document.querySelector(".ws-status").textContent="Disconnected";setTimeout(connect,3000);};
-  state.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="task_update")upsert(m.payload);else if(m.type==="task_list"){state.tasks=m.payload;render();}else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}else if(m.type==="audit_event")addActivity(m.payload);else if(m.type==="live_view")updateLiveView(m.payload);else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});else if(m.type==="tasks_cleared"){state.tasks=[];render();}else if(m.type==="schedule_update"){state.schedules=m.payload;renderSchedules();}else if(m.type==="template_update"){state.templates=m.payload;renderTemplates();}};
+  const wsUrl=(location.protocol==="https:"?"wss:":"ws:")+"//"+location.host+"/ws";
+  console.log("[ClawBridge] Connecting WebSocket:",wsUrl);
+  try{
+    state.ws=new WebSocket(wsUrl);
+  }catch(e){console.error("[ClawBridge] WebSocket create error:",e);return;}
+  state.ws.onopen=()=>{
+    console.log("[ClawBridge] WebSocket connected");
+    state.connected=true;state.wsRetryCount=0;
+    updateSystemHealth();
+  };
+  state.ws.onclose=(ev)=>{
+    console.log("[ClawBridge] WebSocket closed, code:",ev.code,"reason:",ev.reason);
+    state.connected=false;
+    if(state.wsRetryCount<state.wsRetryMax){
+      state.wsRetryCount++;
+      const delay=Math.min(3000*Math.pow(1.5,state.wsRetryCount-1),60000);
+      updateSystemHealth();
+      setTimeout(connect,delay);
+    }else{
+      updateSystemHealth();
+    }
+  };
+  state.ws.onerror=(ev)=>{console.error("[ClawBridge] WebSocket error:",ev);};
+  state.ws.onmessage=e=>{
+    try{
+      const m=JSON.parse(e.data);
+      if(m.type==="task_update")upsert(m.payload);
+      else if(m.type==="task_list"){state.tasks=m.payload;settleAll(m.payload);render();}
+      else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}
+      else if(m.type==="audit_event")addActivity(m.payload);
+      else if(m.type==="live_view")updateLiveView(m.payload);
+      else if(m.type==="step_update")handleStepUpdate(m.payload);
+      else if(m.type==="safety_warning")handleSafetyWarning(m.payload);
+      else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});
+      else if(m.type==="tasks_cleared"){state.tasks=[];render();}
+      else if(m.type==="schedule_update"){state.schedules=m.payload;renderSchedules();updateTabBadges();}
+      else if(m.type==="template_update"){state.templates=m.payload;renderTemplates();}
+    }catch(err){console.error("[ClawBridge] WS message parse error:",err);}
+  };
 }
 let _liveTimer=null;
 function updateLiveView(p){
@@ -2312,6 +2799,7 @@ function updateLiveView(p){
   if(ph)ph.style.display="none";
   if(st){st.textContent="Streaming";st.style.color="var(--ok)";}
   if(icon)icon.classList.add("monitor-active");
+  localStorage.setItem("last_browser_session",new Date().toISOString());
   // Auto-expand the liveview section if collapsed
   const content=document.getElementById("liveviewContent");
   if(content&&content.classList.contains("collapsed")){
@@ -2322,7 +2810,76 @@ function updateLiveView(p){
   _liveTimer=setTimeout(()=>{
     if(st){st.textContent="Idle";st.style.color="var(--muted)";}
     if(icon)icon.classList.remove("monitor-active");
+    showLastSession();
   },10000);
+}
+function showLastSession(){
+  const el=document.getElementById("lastSessionTime");
+  const ts=localStorage.getItem("last_browser_session");
+  if(el&&ts){el.textContent="Last session: "+new Date(ts).toLocaleString();}
+}
+// ── Step-level streaming handler ────────────────────────────────────
+function handleStepUpdate(p){
+  if(!p||!p.task_id)return;
+  // Update the running task's step info in the chat
+  const el=document.getElementById("steps-"+p.task_id);
+  if(el){
+    el.innerHTML='<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(99,102,241,0.08);border-radius:8px;font-size:12px;margin-top:8px">'
+      +'<span style="color:var(--accent);font-weight:600">Step '+p.step+'/'+p.max_steps+'</span>'
+      +'<span style="color:var(--muted)">'+esc(p.action||"")+'</span>'
+      +(p.reasoning?'<span style="color:var(--muted);font-style:italic;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.reasoning.substring(0,120))+'</span>':'')
+      +'<span style="color:var(--muted);margin-left:auto;font-size:10px">'+(p.tokens_in+p.tokens_out)+' tokens</span>'
+      +'</div>';
+  }
+  // Also add to activity feed
+  addActivity({timestamp:new Date().toISOString(),event_type:"step",detail:"Step "+p.step+"/"+p.max_steps+": "+p.action});
+}
+// ── Task Replay Viewer ────────────────────────────────────────────
+async function showReplay(taskId){
+  try{
+    const data=await api("GET","/api/tasks/"+taskId+"/steps");
+    if(!data.steps||!data.steps.length){alert("No step data recorded for this task.");return;}
+    const overlay=document.createElement("div");
+    overlay.id="replayOverlay";
+    overlay.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center";
+    const modal=document.createElement("div");
+    modal.style.cssText="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto";
+    const task=state.tasks.find(t=>t.id===taskId);
+    const title=task?task.prompt.substring(0,80):"Task";
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">'
+      +'<h3 style="margin:0;font-size:16px;color:var(--fg)">Replay: '+esc(title)+'</h3>'
+      +'<button onclick="document.getElementById(\\'replayOverlay\\').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">&times;</button></div>';
+    html+='<div style="font-size:11px;color:var(--muted);margin-bottom:12px">'+data.steps.length+' steps recorded</div>';
+    html+='<div style="display:flex;flex-direction:column;gap:8px">';
+    data.steps.forEach((s,i)=>{
+      const tok=(s.tokens_in||0)+(s.tokens_out||0);
+      const tokStr=tok>0?' &middot; '+tok.toLocaleString()+' tok':'';
+      const ts=s.timestamp?new Date(s.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'';
+      html+='<div style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.12);border-radius:8px;padding:10px 14px">'
+        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+        +'<span style="color:var(--accent);font-weight:600;font-size:12px">Step '+s.step+'/'+s.max_steps+'</span>'
+        +'<span style="color:var(--fg);font-size:12px;font-weight:500">'+esc(s.action||"unknown")+'</span>'
+        +'<span style="color:var(--muted);font-size:10px;margin-left:auto">'+ts+tokStr+'</span>'
+        +'</div>';
+      if(s.reasoning){
+        html+='<div style="color:var(--muted);font-size:11px;font-style:italic;margin-top:4px;line-height:1.4">'+esc(s.reasoning.substring(0,300))+'</div>';
+      }
+      if(s.detail&&s.detail!=='{}'){
+        html+='<div style="color:var(--muted);font-size:10px;margin-top:4px;font-family:monospace;background:rgba(0,0,0,0.15);padding:4px 8px;border-radius:4px;overflow-x:auto">'+esc(s.detail.substring(0,200))+'</div>';
+      }
+      html+='</div>';
+    });
+    html+='</div>';
+    modal.innerHTML=html;
+    overlay.appendChild(modal);
+    overlay.addEventListener("click",e=>{if(e.target===overlay)overlay.remove();});
+    document.body.appendChild(overlay);
+  }catch(e){console.error("Replay error:",e);alert("Failed to load replay data.");}
+}
+function handleSafetyWarning(p){
+  if(!p)return;
+  const flags=(p.flags||[]).join(", ");
+  addActivity({timestamp:new Date().toISOString(),event_type:"safety",detail:"⚠ Safety: "+flags+" (policy: "+p.policy+")"});
 }
 function toggleSidebar(side){
   const l=document.getElementById("mainLayout");
@@ -2346,72 +2903,95 @@ async function submit(){
   const engine=document.getElementById("engine").value;
   const btn=document.getElementById("submitBtn");btn.disabled=true;
   try {
-    if(engine!=="computer_use")await ensureBrowser();
+    if(engine==="browser_use")await ensureBrowser();
     await api("POST","/api/tasks",{prompt,engine});
     document.getElementById("prompt").value="";
     document.getElementById("prompt").style.height = "auto";
     scrollToBottom();
+    setTimeout(checkOnboarding,500);
+  } catch(e) {
+    addActivity({timestamp:new Date().toISOString(),event_type:"error",detail:"Task failed: "+e.message});
   } finally {
     btn.disabled=false;
   }
 }
-async function cancel(id){
-  const btn=event&&event.target?event.target.closest('button'):null;
+async function cancel(id,ev){
+  const btn=ev&&ev.target?ev.target.closest('button'):null;
   if(btn){btn.disabled=true;btn.style.background='rgba(239,68,68,0.4)';btn.style.color='#fff';btn.textContent='Stopping...';}
   try{await api("PATCH","/api/tasks/"+id,{action:"cancel"});}catch(e){console.error(e);}
   if(btn){btn.style.background='rgba(160,174,192,0.3)';btn.textContent='Stopped';}
 }
 async function clearChat(){
   if(!state.tasks.length)return;
-  try{await api("DELETE","/api/tasks");state.tasks=[];render();}catch(e){console.error("Clear failed:",e);}
+  try{await api("DELETE","/api/tasks");state.tasks=[];_settledTaskIds.clear();_settledReplyIds.clear();render();}catch(e){console.error("Clear failed:",e);}
 }
 function esc(s){if(!s)return"";const d=document.createElement("div");d.textContent=s;return d.innerHTML;}
+function renderMarkdown(text){
+  if(!text)return"";
+  if(typeof marked==="undefined")return esc(text);
+  try{marked.setOptions({breaks:true,gfm:true});return marked.parse(text);}
+  catch(e){console.error("Markdown render error:",e);return esc(text);}
+}
+let _settledTaskIds=new Set();
+let _settledReplyIds=new Set();
+function settleAll(tasks){tasks.forEach(t=>{_settledTaskIds.add(t.id);if(t.result||t.error||t.status!=="pending")_settledReplyIds.add(t.id);});}
 function render(){
   const c=document.getElementById("taskList");const n=document.getElementById("taskCount");
-  n.textContent=state.tasks.length+" task(s)";
+  // Calculate session totals
+  let totalCost=0,totalTokens=0,completedTasks=0;
+  state.tasks.forEach(t=>{if(t.result){totalCost+=t.result.estimated_cost_usd||0;totalTokens+=(t.result.tokens_in||0)+(t.result.tokens_out||0);if(t.status==="complete")completedTasks++;}});
+  const costStr=totalCost>0?' · $'+totalCost.toFixed(4):'';
+  const tokStr=totalTokens>0?' · '+totalTokens.toLocaleString()+' tok':'';
+  n.textContent=state.tasks.length+" task(s)"+costStr+tokStr;
   if(!state.tasks.length){c.innerHTML='<p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>';return;}
 
   const items = [...state.tasks].sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
 
   c.innerHTML=items.map(t=>{
+    const isNewMsg=!_settledTaskIds.has(t.id);
+    const hasReply=(t.result&&t.result.summary)||t.error||t.status!=="pending";
+    const isNewReply=hasReply&&!_settledReplyIds.has(t.id);
+    if(isNewMsg)setTimeout(()=>_settledTaskIds.add(t.id),400);
+    if(isNewReply)setTimeout(()=>_settledReplyIds.add(t.id),400);
     const time=new Date(t.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     const hasResult=t.result&&t.result.summary;
     const hasError=t.error;
     let ctl="";
-    if(t.status==="running")ctl='<div class="msg-actions"><button class="btn" onclick="cancel(\\''+t.id+'\\')">Stop</button></div>';
-    if(t.status==="complete")ctl='<div class="msg-actions">'
-      +'<button class="btn" style="background:rgba(255,255,255,0.06);color:var(--muted);font-size:10px;padding:3px 8px" onclick="copyResult(\\''+t.id+'\\',this)" title="Copy to clipboard"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy</button>'
-      +'<button class="btn" style="background:rgba(255,255,255,0.06);color:var(--muted);font-size:10px;padding:3px 8px" onclick="saveResultToFile(\\''+t.id+'\\')" title="Save to file"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Save</button>'
-      +'<button class="btn" style="background:rgba(255,255,255,0.06);color:var(--muted);font-size:10px;padding:3px 8px" onclick="saveTaskAsTemplate(\\''+t.id+'\\')">Template</button>'
-      +'</div>';
+    if(t.status==="running")ctl='<div class="msg-actions"><button class="btn" onclick="cancel(\\''+t.id+'\\',event)">Stop</button></div>';
 
     let assistantHtml="";
     if(hasResult||hasError||t.status!=="pending"){
-      let costHtml='';
+      // Build tooltip rows
+      let tipRows='<div class="tip-row"><span class="tip-label">Status</span><span class="tip-val status-'+t.status+'">'+t.status+'</span></div>'
+        +'<div class="tip-row"><span class="tip-label">Engine</span><span class="tip-val">'+esc(t.engine)+'</span></div>'
+        +'<div class="tip-row"><span class="tip-label">Time</span><span class="tip-val">'+time+'</span></div>';
       if(t.result&&t.result.tokens_in){
         const ti=t.result.tokens_in;const to=t.result.tokens_out;const c=t.result.estimated_cost_usd;
         const steps=t.result.total_steps||0;const dur=t.result.total_duration_ms||0;
         const durStr=dur>=60000?(dur/60000).toFixed(1)+'m':(dur/1000).toFixed(1)+'s';
-        costHtml='<div class="msg-cost">'
-          +'<span>'+steps+' steps</span>'
-          +'<span>'+durStr+'</span>'
-          +'<span>'+(ti+to).toLocaleString()+' tok</span>'
-          +'<span>$'+c.toFixed(4)+'</span>'
-          +'</div>';
+        tipRows+='<div class="tip-divider"></div>'
+          +'<div class="tip-row"><span class="tip-label">Steps</span><span class="tip-val">'+steps+'</span></div>'
+          +'<div class="tip-row"><span class="tip-label">Duration</span><span class="tip-val">'+durStr+'</span></div>'
+          +'<div class="tip-row"><span class="tip-label">Tokens</span><span class="tip-val">'+(ti+to).toLocaleString()+'</span></div>'
+          +'<div class="tip-row"><span class="tip-label">Cost</span><span class="tip-val">$'+c.toFixed(4)+'</span></div>';
       }
-      assistantHtml='<div class="msg-assistant"><div class="msg-meta">'
-        +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>'
-        +'<span class="engine-tag">'+esc(t.engine)+'</span>'
-        +'<span class="msg-status '+t.status+'">'+t.status+'</span>'
-        +'<span>'+time+'</span>'
-        +costHtml
-        +'</div>';
-      if(hasResult)assistantHtml+='<div class="msg-body">'+esc(t.result.summary)+'</div>';
+      const btnStatusCls=t.status==="running"?" status-running":t.status==="error"?" status-error":"";
+      let inlineIcons='';
+      if(t.status==="complete"&&hasResult){
+        inlineIcons+='<button class="msg-icon-btn" onclick="copyResult(\\''+t.id+'\\',this)" title="Copy"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>';
+        if(t.result&&t.result.total_steps>0)inlineIcons+='<button class="msg-icon-btn" onclick="showReplay(\\''+t.id+'\\')" title="Replay steps"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>';
+      }
+      assistantHtml='<div class="msg-assistant'+(isNewReply?' msg-enter':'')+'" data-reply="'+t.id+'">'
+        +'<div class="msg-icon-row"><div class="msg-info-wrap"><button class="msg-info-btn'+btnStatusCls+'" tabindex="0">i</button>'
+        +'<div class="msg-info-tip">'+tipRows+'</div></div>'+inlineIcons+'</div>';
+      if(hasResult)assistantHtml+='<div class="msg-body">'+renderMarkdown(t.result.summary)+'</div>';
       if(hasError)assistantHtml+='<div class="msg-error">'+esc(t.error)+'</div>';
+      // Step streaming container — shows live step info for running tasks
+      if(t.status==="running")assistantHtml+='<div id="steps-'+t.id+'" class="step-stream"></div>';
       assistantHtml+=ctl+'</div>';
     }
 
-    return '<div class="msg-group">'
+    return '<div class="msg-group'+(isNewMsg?' msg-enter':'')+'" data-tid="'+t.id+'">'
       +'<div class="msg-user"><div class="msg-user-bubble"><div class="msg-user-inner">'+esc(t.prompt)+'</div></div></div>'
       +assistantHtml
       +'</div>';
@@ -2425,14 +3005,15 @@ function renderEngines(){
     const sc=e.status==="available"?"color:var(--ok)":e.status==="no_api_key"?"color:#f59e0b":e.status==="error"?"color:var(--err)":"color:var(--muted)";
     let extra="";
     if(e.error_hint)extra+='<div style="font-size:10px;color:var(--muted);margin-top:2px">'+esc(e.error_hint)+'</div>';
-    if(e.status==="not_installed"&&e.name==="openclaw")extra+='<button class="btn" style="font-size:10px;padding:4px 10px;margin-top:6px" onclick="installEngine(\\'openclaw\\')">Install</button>';
-    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)"><div style="display:flex;justify-content:space-between"><span>'+esc(e.display_name)+'</span><span style="font-weight:600;'+sc+'">'+e.status+'</span></div>'+extra+'</div>';
+    if(e.status==="not_installed"&&e.name==="openclaw")extra+='<button class="btn" style="font-size:10px;padding:4px 10px;margin-top:6px" onclick="installEngine(\\'openclaw\\',event)">Install</button>';
+    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)"><div style="display:flex;justify-content:space-between"><span>'+esc(e.display_name)+'</span><span style="font-weight:600;'+sc+'">'+esc(e.status)+'</span></div>'+extra+'</div>';
   }).join("");
+  updateSystemHealth();
 }
-async function installEngine(name){
-  const btn=event.target;btn.disabled=true;btn.textContent="Installing...";
+async function installEngine(name,ev){
+  const btn=ev&&ev.target?ev.target:null;if(btn){btn.disabled=true;btn.textContent="Installing...";}
   try{await api("POST","/api/engines/"+name+"/install");}
-  catch(e){btn.textContent="Retry";btn.disabled=false;addActivity({timestamp:new Date().toISOString(),event_type:"install_error",detail:name+": "+e.message});}
+  catch(e){if(btn){btn.textContent="Retry";btn.disabled=false;}addActivity({timestamp:new Date().toISOString(),event_type:"install_error",detail:name+": "+e.message});}
 }
 function toggleKeyForm(){
   const f=document.getElementById("keyForm");f.style.display=f.style.display==="none"?"block":"none";
@@ -2504,35 +3085,107 @@ async function checkBrowserStatus(){
     }
   }catch(e){}
 }
+function renderConfigSummary(c){
+  if(!c||!c.keys)return;
+  const k=c.keys;
+  const chip=v=>v?'<span class="config-chip configured">Configured</span>':'<span class="config-chip not-set">Not set</span>';
+  let primary="None";
+  if(k.openrouter_configured)primary="OpenRouter";
+  else if(k.anthropic_configured)primary="Anthropic";
+  else if(k.openai_configured)primary="OpenAI";
+  const mid=esc(c.machine_id||"");
+  document.getElementById("configSummary").innerHTML=
+    '<div class="config-provider-primary">Active: '+esc(primary)+'</div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0"><span style="color:var(--muted)">Anthropic</span>'+chip(k.anthropic_configured)+'</div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0"><span style="color:var(--muted)">OpenAI</span>'+chip(k.openai_configured)+'</div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0"><span style="color:var(--muted)">OpenRouter</span>'+chip(k.openrouter_configured)+'</div>'
+    +'<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">'
+    +'<div class="config-advanced-toggle" onclick="var el=document.getElementById(\\'configAdvanced\\');el.classList.toggle(\\'visible\\');">&#9656; Advanced</div>'
+    +'<div id="configAdvanced" class="config-advanced-content">'
+    +'<div style="font-size:10px;color:var(--muted);margin-bottom:4px">MACHINE ID</div>'
+    +'<div style="word-break:break-all;color:var(--accent);font-size:10px;font-family:monospace">'+mid+'</div></div></div>';
+}
 function refreshConfig(){
   api("GET","/api/config").then(c=>{
-    document.getElementById("configSummary").innerHTML='<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--muted)">Anthropic</span><span>'+(c.keys.anthropic_configured?"Yes":"No")+'</span></div><div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--muted)">OpenAI</span><span>'+(c.keys.openai_configured?"Yes":"No")+'</span></div><div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--muted)">OpenRouter</span><span>'+(c.keys.openrouter_configured?"Yes":"No")+'</span></div><div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.05);font-size:10px;"><div style="color:var(--muted);margin-bottom:4px">MACHINE ID</div><div style="word-break:break-all;color:var(--accent)">'+c.machine_id+'</div></div>';
-    
-    // Update remote bridge status in header
-    const rdot = document.getElementById("remoteDot");
-    const rtext = document.getElementById("remoteText");
-    if(c.remote.configured){
-      rdot.className="status-dot connected";
-      rtext.textContent="Bridge Active";
-      rtext.style.color="var(--ok)";
-    } else {
-      rdot.className="status-dot";
-      rtext.textContent="Bridge Offline";
-      rtext.style.color="var(--muted)";
-    }
+    renderConfigSummary(c);
+
+    // Update remote bridge status
+    state.bridgeActive=!!c.remote.configured;
+    updateSystemHealth();
     // Show detected Chrome path
     if(c.browser){
       const cei=document.getElementById("chromeExeInfo");
       if(cei&&c.browser.chrome_exe&&c.browser.chrome_exe!=="not found")cei.textContent="Chrome: "+c.browser.chrome_exe;
     }
+    // Update automation mode UI
+    if(c.automation){
+      state.automationMode=c.automation.mode||"supervised";
+      updateAutomationModeUI();
+    }
     checkBrowserStatus();
-  }).catch(()=>{});
+  }).catch(e=>{console.error("refreshConfig error:",e);document.getElementById("configSummary").innerHTML='<p class="muted" style="color:var(--err)">Failed to load config</p>';});
 }
+function updateAutomationModeUI(){
+  const supBtn=document.getElementById("modeSupervised");
+  const autoBtn=document.getElementById("modeAutonomous");
+  const hint=document.getElementById("automationModeHint");
+  if(!supBtn||!autoBtn)return;
+  const isSupervised=state.automationMode==="supervised";
+  supBtn.style.background=isSupervised?"rgba(99,102,241,0.2)":"#2d3748";
+  supBtn.style.borderColor=isSupervised?"var(--accent)":"var(--border)";
+  autoBtn.style.background=isSupervised?"#2d3748":"rgba(245,158,11,0.15)";
+  autoBtn.style.borderColor=isSupervised?"var(--border)":"#f59e0b";
+  if(hint){
+    hint.innerHTML=isSupervised
+      ?'<strong>Supervised:</strong> Pauses before high-risk actions (purchases, form submissions, sensitive sites). Recommended for learning the system.'
+      :'<strong style="color:#f59e0b">Autonomous:</strong> Runs without interruption. Monitor the Live View! You are responsible for any actions taken.';
+    hint.style.background=isSupervised?"rgba(99,102,241,0.08)":"rgba(245,158,11,0.1)";
+  }
+}
+async function setAutomationMode(mode){
+  try{
+    await api("POST","/api/config/automation",{mode});
+    state.automationMode=mode;
+    updateAutomationModeUI();
+    addActivity({timestamp:new Date().toISOString(),event_type:"config",detail:"Automation mode set to "+mode});
+  }catch(e){
+    console.error("Failed to set automation mode:",e);
+  }
+}
+function activityIcon(t){const m={"task_completed":"\\u2713","complete":"\\u2713","task_failed":"\\u2715","error":"\\u2715","safety_flag":"\\u26A0","safety":"\\u26A0","warning":"\\u26A0","task_retry":"\\u21BB","install":"\\u2B07","task_created":"\\u2192","task_started":"\\u25B6","step":"\\u2022"};return m[t]||"\\u00B7";}
 function addActivity(ev){
   const c=document.getElementById("activityFeed");
   if(c.querySelector(".muted"))c.innerHTML="";
-  c.insertAdjacentHTML("afterbegin",'<div class="activity-item"><span style="color:var(--muted);font-size:10px">'+new Date(ev.timestamp).toLocaleTimeString()+'</span> <strong>'+esc(ev.event_type)+'</strong><div style="color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(ev.detail)+'</div></div>');
+  const evCls="activity-item ev-"+ev.event_type.replace(/_/g,"_");
+  const time=new Date(ev.timestamp).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  // Make task events clickable to open history
+  const isTaskEvent=ev.task_id&&ev.event_type.startsWith("task_");
+  const clickAttr=isTaskEvent?'onclick="goToHistoryTask(\\''+ev.task_id+'\\')" style="cursor:pointer" title="View in History"':'';
+  c.insertAdjacentHTML("afterbegin",
+    '<div class="'+evCls+'" '+clickAttr+'>'
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">'
+    +'<span style="font-size:12px">'+activityIcon(ev.event_type)+'</span>'
+    +'<span style="font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.4px">'+esc(ev.event_type)+'</span>'
+    +(isTaskEvent?'<span style="font-size:9px;color:var(--accent);opacity:0.6" title="Click to view in history">\\u2197</span>':'')
+    +'<span style="color:rgba(160,174,192,0.6);font-size:9px;margin-left:auto">'+time+'</span>'
+    +'</div>'
+    +'<div style="color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px">'+esc(ev.detail)+'</div>'
+    +'</div>');
   while(c.children.length>50)c.removeChild(c.lastChild);
+}
+function goToHistoryTask(taskId){
+  // Switch to history view and scroll to/highlight the task
+  switchView('history');
+  renderHistory();
+  setTimeout(()=>{
+    const row=document.getElementById('hrow-'+taskId);
+    if(row){
+      row.scrollIntoView({behavior:'smooth',block:'center'});
+      row.style.background='rgba(99,102,241,0.15)';
+      setTimeout(()=>row.style.background='',2000);
+      toggleHistoryRow(taskId);
+    }
+  },100);
 }
 // ── Schedule Management ──
 function renderSchedules(){
@@ -2547,8 +3200,8 @@ function renderSchedules(){
       +'<div style="display:flex;justify-content:space-between;align-items:center">'
       +'<span style="font-size:12px;font-weight:600">'+esc(s.name)+'</span>'
       +'<div style="display:flex;gap:4px">'
-      +'<button onclick="toggleSchedule(\''+s.id+'\','+!s.enabled+')" style="background:none;border:none;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:4px;'+(s.enabled?'color:var(--ok);background:rgba(34,197,94,0.1)':'color:var(--muted);background:rgba(255,255,255,0.05)')+'">'+(s.enabled?'ON':'OFF')+'</button>'
-      +'<button onclick="deleteSchedule(\''+s.id+'\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:10px;padding:2px 4px" title="Delete">✕</button>'
+      +'<button onclick="toggleSchedule(\\''+s.id+'\\','+!s.enabled+')" style="background:none;border:none;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:4px;'+(s.enabled?'color:var(--ok);background:rgba(34,197,94,0.1)':'color:var(--muted);background:rgba(255,255,255,0.05)')+'">'+(s.enabled?'ON':'OFF')+'</button>'
+      +'<button onclick="deleteSchedule(\\''+s.id+'\\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:10px;padding:2px 4px" title="Delete">✕</button>'
       +'</div></div>'
       +'<div style="font-size:10px;color:var(--muted)">'+typeLabel+' · Runs: '+s.run_count+' · Last: '+lastRun+'</div>'
       +'<div style="font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(s.prompt)+'</div>'
@@ -2592,8 +3245,8 @@ function renderTemplates(){
       +'<div style="display:flex;justify-content:space-between;align-items:center">'
       +'<span style="font-size:12px;font-weight:600">'+esc(t.name)+'</span>'
       +'<div style="display:flex;gap:4px">'
-      +'<button onclick="runTemplate(\''+t.id+'\')" style="background:var(--accent);border:none;cursor:pointer;color:#fff;font-size:10px;padding:3px 8px;border-radius:4px">Run</button>'
-      +'<button onclick="deleteTemplate(\''+t.id+'\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:10px;padding:2px 4px" title="Delete">✕</button>'
+      +'<button onclick="runTemplate(\\''+t.id+'\\')" style="background:var(--accent);border:none;cursor:pointer;color:#fff;font-size:10px;padding:3px 8px;border-radius:4px">Run</button>'
+      +'<button onclick="deleteTemplate(\\''+t.id+'\\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:10px;padding:2px 4px" title="Delete">✕</button>'
       +'</div></div>'
       +'<div style="font-size:10px;color:var(--muted)">Used '+t.use_count+'x · '+esc(t.engine)+'</div>'
       +'<div style="font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(t.prompt)+'</div>'
@@ -2632,7 +3285,7 @@ async function createTemplate(){
 async function saveTaskAsTemplate(taskId){
   const t=state.tasks.find(x=>x.id===taskId);
   if(!t)return;
-  const name=prompt("Template name:",t.prompt.substring(0,40));
+  const name=window.prompt("Template name:",t.prompt.substring(0,40));
   if(!name)return;
   try{
     const tmpl=await api("POST","/api/templates",{name,prompt:t.prompt,engine:t.engine});
@@ -2678,7 +3331,7 @@ function saveResultToFile(taskId){
   const a=document.createElement("a");
   a.href=url;a.download="clawbridge-task-"+t.id.substring(0,8)+".md";
   document.body.appendChild(a);a.click();document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
 // ── Soul / Personality Editor ──
@@ -2689,14 +3342,71 @@ async function switchView(view){
   document.getElementById("soulView").style.display=view==="soul"?"flex":"none";
   document.getElementById("memoryView").style.display=view==="memory"?"flex":"none";
   document.getElementById("scheduleView").style.display=view==="schedules"?"flex":"none";
+  const hv=document.getElementById("historyView");if(hv)hv.style.display=view==="history"?"flex":"none";
   // Update nav buttons
   document.querySelectorAll(".view-tab").forEach(b=>{
     b.classList.toggle("active",b.dataset.view===view);
   });
-  if(view==="soul"&&!_currentSoulFile)loadSoulFile("SOUL.md");
-  if(view==="memory")loadMemory();
+  if(view==="soul"){if(!_currentSoulFile)loadSoulFile("SOUL.md");localStorage.setItem("onboarding_soul_customized","true");checkOnboarding();}
+  if(view==="memory"){loadMemory();const mb=document.getElementById("memoryBadge");if(mb)mb.style.display="none";}
   if(view==="schedules")loadScheduleView();
+  if(view==="history")renderHistory();
 }
+function updateTabBadges(){
+  // Schedule badge
+  const activeScheds=state.schedules.filter(s=>s.enabled).length;
+  const sb=document.getElementById("schedulesBadge");
+  if(sb){if(activeScheds>0){sb.textContent=activeScheds;sb.style.display="block";}else{sb.style.display="none";}}
+}
+// ── Onboarding ──
+function checkOnboarding(){
+  if(localStorage.getItem("onboarding_dismissed")==="true"){
+    const card=document.getElementById("onboardingCard");if(card)card.style.display="none";return;
+  }
+  const status={keys:false,soul:false,task:false,browser:false};
+  if(window.__PRELOAD__&&window.__PRELOAD__.config&&window.__PRELOAD__.config.keys){
+    const k=window.__PRELOAD__.config.keys;
+    status.keys=!!(k.anthropic_configured||k.openai_configured||k.openrouter_configured);
+  }
+  status.soul=localStorage.getItem("onboarding_soul_customized")==="true"||(_soulOriginal&&_soulOriginal.length>10);
+  status.task=state.tasks.length>0;
+  status.browser=state.tasks.some(t=>t.engine==="browser_use");
+  ["keys","soul","task","browser"].forEach(k=>{
+    const el=document.getElementById("onboard-"+k);
+    if(el){if(status[k])el.classList.add("done");else el.classList.remove("done");}
+  });
+  const done=Object.values(status).filter(v=>v).length;
+  const fill=document.getElementById("onboardFill");
+  const text=document.getElementById("onboardText");
+  if(fill)fill.style.width=(done/4*100)+"%";
+  if(text)text.textContent=done+" / 4";
+  if(done===4){
+    setTimeout(()=>{
+      const card=document.getElementById("onboardingCard");
+      if(card){card.style.opacity="0";card.style.transform="translateY(-10px)";
+        setTimeout(()=>{card.style.display="none";localStorage.setItem("onboarding_dismissed","true");},300);}
+    },2000);
+  }else{
+    const card=document.getElementById("onboardingCard");if(card)card.style.display="block";
+  }
+}
+function onboardAction(action){
+  const el=document.getElementById("onboard-"+action);
+  if(el&&el.classList.contains("done"))return;
+  if(action==="keys"){
+    const cc=document.getElementById("configContent");
+    if(cc&&cc.classList.contains("collapsed"))toggleSection("config");
+    toggleKeyForm();
+  }else if(action==="soul"){switchView("soul");}
+  else if(action==="task"){switchView("chat");document.getElementById("prompt").focus();}
+  else if(action==="browser"){switchView("chat");document.getElementById("engine").value="browser_use";document.getElementById("prompt").focus();}
+}
+function dismissOnboarding(){
+  const card=document.getElementById("onboardingCard");
+  if(card){card.style.opacity="0";card.style.transform="translateY(-10px)";
+    setTimeout(()=>{card.style.display="none";localStorage.setItem("onboarding_dismissed","true");},300);}
+}
+let _soulOriginal="";
 async function loadSoulFile(name){
   _currentSoulFile=name;
   document.querySelectorAll(".soul-tab").forEach(b=>b.classList.toggle("active",b.dataset.file===name));
@@ -2704,7 +3414,12 @@ async function loadSoulFile(name){
   editor.value="Loading...";
   try{
     const r=await api("GET","/api/personality/"+name);
-    editor.value=r.content;
+    editor.value=r.content;_soulOriginal=r.content;
+    const badge=document.getElementById("soulBadge");if(badge)badge.style.display="none";
+    editor.oninput=()=>{
+      const badge=document.getElementById("soulBadge");
+      if(badge)badge.style.display=editor.value!==_soulOriginal?"block":"none";
+    };
   }catch(e){editor.value="Error loading file: "+e.message;}
 }
 async function saveSoulFile(){
@@ -2714,7 +3429,10 @@ async function saveSoulFile(){
   st.textContent="Saving...";st.style.color="var(--muted)";
   try{
     await api("PUT","/api/personality/"+_currentSoulFile,{content});
+    _soulOriginal=content;
     st.textContent="Saved!";st.style.color="var(--ok)";
+    const badge=document.getElementById("soulBadge");if(badge)badge.style.display="none";
+    if(_currentSoulFile==="SOUL.md")localStorage.setItem("onboarding_soul_customized","true");
     setTimeout(()=>st.textContent="",2000);
   }catch(e){st.textContent="Error: "+e.message;st.style.color="var(--err)";}
 }
@@ -2756,10 +3474,12 @@ async function addQuickMemory(){
 async function searchMemory(){
   const q=document.getElementById("memorySearchInput").value.trim();
   if(!q)return;
-  const results=await api("GET","/api/memory/search?q="+encodeURIComponent(q));
   const el=document.getElementById("memorySearchResults");
-  if(!results.length){el.innerHTML='<p style="color:var(--muted);font-size:11px">No results</p>';return;}
-  el.innerHTML=results.map(r=>'<div style="font-size:11px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)"><span style="color:var(--accent)">'+esc(r.source)+':'+r.line+'</span> '+esc(r.text)+'</div>').join("");
+  try{
+    const results=await api("GET","/api/memory/search?q="+encodeURIComponent(q));
+    if(!results.length){el.innerHTML='<p style="color:var(--muted);font-size:11px">No results</p>';return;}
+    el.innerHTML=results.map(r=>'<div style="font-size:11px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)"><span style="color:var(--accent)">'+esc(r.source)+':'+r.line+'</span> '+esc(r.text)+'</div>').join("");
+  }catch(e){el.innerHTML='<p style="color:var(--err);font-size:11px">Search failed: '+esc(e.message)+'</p>';}
 }
 
 // ── Schedule View ──
@@ -2783,8 +3503,8 @@ function renderScheduleView(){
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
       +'<div><span style="font-size:14px;font-weight:600">'+typeIcon+' '+esc(s.name)+'</span></div>'
       +'<div style="display:flex;gap:6px;align-items:center">'
-      +'<button onclick="toggleSchedule(\''+s.id+'\','+!s.enabled+')" class="btn" style="font-size:11px;padding:4px 10px;'+(s.enabled?'background:var(--ok)':'background:var(--muted)')+'">'+(s.enabled?'Enabled':'Disabled')+'</button>'
-      +'<button onclick="deleteSchedule(\''+s.id+'\')" class="btn" style="font-size:11px;padding:4px 10px;background:rgba(239,68,68,0.15);color:var(--err)">Delete</button>'
+      +'<button onclick="toggleSchedule(\\''+s.id+'\\','+!s.enabled+')" class="btn" style="font-size:11px;padding:4px 10px;'+(s.enabled?'background:var(--ok)':'background:var(--muted)')+'">'+(s.enabled?'Enabled':'Disabled')+'</button>'
+      +'<button onclick="deleteSchedule(\\''+s.id+'\\')" class="btn" style="font-size:11px;padding:4px 10px;background:rgba(239,68,68,0.15);color:var(--err)">Delete</button>'
       +'</div></div>'
       +'<div style="font-size:12px;color:var(--text);margin-bottom:4px">'+esc(s.prompt)+'</div>'
       +'<div style="display:flex;gap:16px;font-size:11px;color:var(--muted)">'
@@ -2792,6 +3512,66 @@ function renderScheduleView(){
       +'</div>'
       +'</div>';
   }).join("");
+}
+
+// ── Task History ──
+let _expandedHistoryRow=null;
+function filterHistory(){renderHistory();}
+function renderHistory(){
+  const tbody=document.getElementById("historyTableBody");
+  if(!tbody)return;
+  const fStatus=(document.getElementById("historyFilterStatus")||{}).value||"";
+  const fEngine=(document.getElementById("historyFilterEngine")||{}).value||"";
+  const fSearch=((document.getElementById("historySearch")||{}).value||"").toLowerCase();
+  let tasks=[...state.tasks].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+  if(fStatus)tasks=tasks.filter(t=>t.status===fStatus);
+  if(fEngine)tasks=tasks.filter(t=>t.engine===fEngine);
+  if(fSearch)tasks=tasks.filter(t=>t.prompt.toLowerCase().includes(fSearch)||(t.result&&t.result.summary&&t.result.summary.toLowerCase().includes(fSearch)));
+  if(!tasks.length){tbody.innerHTML='<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)">No tasks match filters</td></tr>';return;}
+  _expandedHistoryRow=null;
+  tbody.innerHTML=tasks.map(t=>{
+    const time=new Date(t.created_at).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+    const prompt=esc(t.prompt.length>60?t.prompt.substring(0,60)+"...":t.prompt);
+    const cost=t.result&&t.result.estimated_cost_usd?"$"+t.result.estimated_cost_usd.toFixed(4):"\\u2014";
+    const dur=t.result&&t.result.total_duration_ms?(t.result.total_duration_ms>=60000?(t.result.total_duration_ms/60000).toFixed(1)+"m":(t.result.total_duration_ms/1000).toFixed(1)+"s"):"\\u2014";
+    return '<tr onclick="toggleHistoryRow(\\''+t.id+'\\')" id="hrow-'+t.id+'">'
+      +'<td>'+time+'</td>'
+      +'<td>'+prompt+'</td>'
+      +'<td>'+esc(t.engine)+'</td>'
+      +'<td><span class="history-badge '+t.status+'">'+t.status+'</span></td>'
+      +'<td style="text-align:right">'+cost+'</td>'
+      +'<td style="text-align:right">'+dur+'</td>'
+      +'</tr>';
+  }).join("");
+}
+function toggleHistoryRow(taskId){
+  const row=document.getElementById("hrow-"+taskId);if(!row)return;
+  // Collapse if already expanded
+  if(_expandedHistoryRow===taskId){
+    const next=row.nextElementSibling;
+    if(next&&next.classList.contains("history-expanded"))next.remove();
+    row.style.background="";_expandedHistoryRow=null;return;
+  }
+  // Collapse previous
+  if(_expandedHistoryRow){
+    const prev=document.getElementById("hrow-"+_expandedHistoryRow);
+    if(prev){const next=prev.nextElementSibling;if(next&&next.classList.contains("history-expanded"))next.remove();prev.style.background="";}
+  }
+  const t=state.tasks.find(x=>x.id===taskId);if(!t)return;
+  let html='<div class="history-detail">';
+  if(t.result&&t.result.summary)html+='<div class="history-result">'+renderMarkdown(t.result.summary)+'</div>';
+  if(t.error)html+='<div class="msg-error" style="margin-bottom:12px">'+esc(t.error)+'</div>';
+  html+='<div style="display:flex;gap:8px">';
+  if(t.status==="complete"&&t.result){
+    html+='<button class="btn" onclick="event.stopPropagation();copyResult(\\''+taskId+'\\',this)" style="font-size:11px;padding:6px 12px">Copy</button>';
+    if(t.result.total_steps>0)html+='<button class="btn" onclick="event.stopPropagation();showReplay(\\''+taskId+'\\')" style="font-size:11px;padding:6px 12px;background:#2d3748;border:1px solid var(--border)">Replay Steps</button>';
+  }
+  html+='</div></div>';
+  const tr=document.createElement("tr");tr.className="history-expanded";
+  tr.innerHTML='<td colspan="6" style="padding:0">'+html+'</td>';
+  row.insertAdjacentElement("afterend",tr);
+  row.style.background="rgba(99,102,241,0.08)";
+  _expandedHistoryRow=taskId;
 }
 
 document.addEventListener("DOMContentLoaded",()=>{
@@ -2806,11 +3586,58 @@ document.addEventListener("DOMContentLoaded",()=>{
     const card=document.getElementById('card-'+id);
     if(c&&card&&localStorage.getItem('section_'+id)==='1'){c.classList.add('collapsed');card.querySelector('.chevron')?.classList.add('collapsed');}
   });
+  // Use server-preloaded data for instant render (no fetch needed)
+  if(window.__PRELOAD__){
+    const p=window.__PRELOAD__;
+    if(p.engines&&p.engines.length){state.engines=p.engines;renderEngines();}
+    if(p.tasks&&p.tasks.length){state.tasks=p.tasks;settleAll(p.tasks);render();}
+    if(p.schedules){state.schedules=p.schedules;renderSchedules();updateTabBadges();}
+    if(p.templates){state.templates=p.templates;renderTemplates();}
+    if(p.config&&p.config.keys){
+      try{
+        const c=p.config;
+        renderConfigSummary(c);
+        if(c.remote&&c.remote.configured)state.bridgeActive=true;
+        updateSystemHealth();
+      }catch(e){console.warn("preload config render error:",e);}
+    }
+    console.log("[ClawBridge] Preloaded",p.engines?.length||0,"engines,",p.tasks?.length||0,"tasks");
+  }
   refreshConfig();
   connect();
-  // Poll browser status every 10s
-  setInterval(checkBrowserStatus,10000);
+  showLastSession();
+  checkOnboarding();
+  // HTTP fallback — load engine/task data if WebSocket is slow or blocked
+  loadInitialData();
+  // Poll browser status every 10s (pause when tab hidden)
+  let _browserPollId=setInterval(checkBrowserStatus,10000);
+  document.addEventListener("visibilitychange",()=>{
+    if(document.hidden){clearInterval(_browserPollId);_browserPollId=null;}
+    else if(!_browserPollId){checkBrowserStatus();_browserPollId=setInterval(checkBrowserStatus,10000);}
+  });
 });
+async function loadInitialData(){
+  // Wait 1s for WS to populate — if still loading, fetch via HTTP
+  await new Promise(r=>setTimeout(r,1200));
+  try{
+    if(!state.engines.length){
+      const engines=await api("GET","/api/engines");
+      if(engines&&engines.length){state.engines=engines;renderEngines();}
+    }
+    if(!state.tasks.length){
+      const tasks=await api("GET","/api/tasks");
+      if(tasks&&tasks.length){state.tasks=tasks;settleAll(tasks);render();}
+    }
+    if(!state.schedules.length){
+      const scheds=await api("GET","/api/schedules");
+      if(scheds){state.schedules=scheds;renderSchedules();}
+    }
+    if(!state.templates.length){
+      const tmpls=await api("GET","/api/templates");
+      if(tmpls){state.templates=tmpls;renderTemplates();}
+    }
+  }catch(e){console.warn("loadInitialData fallback error:",e);}
+}
 """
     html = """<!DOCTYPE html>
 <html lang="en">
@@ -2818,19 +3645,19 @@ document.addEventListener("DOMContentLoaded",()=>{
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ClawBridge Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>""" + css + """</style>
 </head>
 <body>
   <header class="header">
     <h1 class="logo">ClawBridge</h1>
-    <div style="display:flex;gap:16px;align-items:center;">
-      <div style="font-size:12px;display:flex;items-center:center;gap:6px">
-        <span id="remoteDot" class="status-dot"></span>
-        <span id="remoteText" class="status-text" style="color:var(--muted)">Bridge Offline</span>
-      </div>
-      <div style="font-size:12px;display:flex;items-center:center;gap:6px">
-        <span class="status-dot error"></span>
-        <span class="status-text ws-status">Connecting...</span>
+    <div class="system-health" tabindex="0" title="System Health">
+      <span id="healthDot" class="system-health-dot sh-err"></span>
+      <span id="healthText">Connecting...</span>
+      <div class="system-health-dropdown">
+        <div class="health-row"><span class="health-label">WebSocket</span><span id="healthWS" class="health-value h-err">Connecting...</span></div>
+        <div class="health-row"><span class="health-label">Remote Bridge</span><span id="healthBridge" class="health-value" style="color:var(--muted)">Offline</span></div>
+        <div class="health-row"><span class="health-label">Active Engines</span><span id="healthEngines" class="health-value" style="color:var(--muted)">0</span></div>
       </div>
     </div>
   </header>
@@ -2854,13 +3681,11 @@ document.addEventListener("DOMContentLoaded",()=>{
         <div onclick="toggleSidebar('left')" title="Browser View">
           <svg id="monitorIconCollapsed" class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
         </div>
-        <div onclick="toggleSidebar('left')" title="Schedules">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        </div>
         <div onclick="toggleSidebar('left')" title="Templates">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
         </div>
       </div>
+      <div class="sidebar-section-label">System</div>
       <div class="card expandable" id="card-engines">
         <h2 class="expandable-header" onclick="toggleSection('engines')">
           <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>Engines</span>
@@ -2887,6 +3712,24 @@ document.addEventListener("DOMContentLoaded",()=>{
           </div>
           <button class="btn" id="toggleKeyBtn" style="width:100%;font-size:12px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="toggleKeyForm()">Add / Update API Keys</button>
           <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Automation Mode</div>
+            <div id="automationModePanel" style="margin-bottom:12px">
+              <div style="display:flex;gap:6px;margin-bottom:8px">
+                <button id="modeSupervised" class="btn mode-btn" onclick="setAutomationMode('supervised')" style="flex:1;font-size:11px;padding:8px 6px">
+                  <div style="font-weight:600">Supervised</div>
+                  <div style="font-size:9px;color:var(--muted);margin-top:2px">Asks before risky actions</div>
+                </button>
+                <button id="modeAutonomous" class="btn mode-btn" onclick="setAutomationMode('autonomous')" style="flex:1;font-size:11px;padding:8px 6px">
+                  <div style="font-weight:600">Autonomous</div>
+                  <div style="font-size:9px;color:var(--muted);margin-top:2px">Runs without interruption</div>
+                </button>
+              </div>
+              <div id="automationModeHint" style="font-size:10px;color:var(--muted);line-height:1.4;padding:6px 8px;background:rgba(99,102,241,0.08);border-radius:4px">
+                <strong>Supervised:</strong> Pauses before high-risk actions (purchases, form submissions, sensitive sites). Recommended for learning the system.
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">
             <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Browser Session</div>
             <div id="browserSessionStatus" style="font-size:12px;margin-bottom:8px;padding:8px;background:rgba(255,255,255,0.03);border-radius:6px">
               <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
@@ -2897,11 +3740,12 @@ document.addEventListener("DOMContentLoaded",()=>{
             </div>
             <button class="btn" id="launchChromeBtn" style="width:100%;font-size:12px;margin-bottom:6px" onclick="launchChrome()">Launch Chrome Session</button>
             <button class="btn" id="stopChromeBtn" style="width:100%;font-size:12px;margin-bottom:6px;background:rgba(239,68,68,0.15);color:var(--err);display:none" onclick="stopChrome()">Stop Chrome Session</button>
-            <div style="font-size:10px;color:var(--muted);line-height:1.4">Opens a dedicated Chrome profile for ClawBridge. Sign into your accounts once — logins persist between sessions.</div>
+            <div style="font-size:10px;color:var(--muted);line-height:1.4" title="Opens a dedicated Chrome profile at %LOCALAPPDATA%\\ClawBridge\\ChromeProfile. Sign into your accounts once — logins persist between sessions.">Persistent Chrome profile with saved logins</div>
             <div id="chromeExeInfo" style="font-size:10px;color:var(--muted);margin-top:6px"></div>
           </div>
         </div>
       </div>
+      <div class="sidebar-section-label">Live</div>
       <div class="card expandable" id="card-activity">
         <h2 class="expandable-header" onclick="toggleSection('activity')">
           <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>Activity</span>
@@ -2922,20 +3766,15 @@ document.addEventListener("DOMContentLoaded",()=>{
         <div class="expandable-content collapsed" id="liveviewContent">
           <div class="live-view-img-wrap">
             <img id="liveImage" src="" alt="Live Browser Feed">
-            <div id="livePlaceholder">Streams here when a task runs</div>
+            <div id="livePlaceholder" style="display:flex;flex-direction:column;align-items:center;padding:24px 16px;gap:8px">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+              <div style="font-size:11px;color:var(--muted);text-align:center">No active session</div>
+              <div id="lastSessionTime" style="font-size:9px;color:rgba(160,174,192,0.4)"></div>
+            </div>
           </div>
         </div>
       </div>
-      <div class="card expandable" id="card-schedules">
-        <h2 class="expandable-header" onclick="toggleSection('schedules')">
-          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Schedules</span>
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-        </h2>
-        <div class="expandable-content collapsed" id="schedulesContent">
-          <div id="scheduleList"><p style="color:var(--muted);font-size:11px">No scheduled tasks</p></div>
-          <button class="btn" style="width:100%;font-size:11px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="switchView('schedules')">Manage Schedules</button>
-        </div>
-      </div>
+      <div class="sidebar-section-label">Content</div>
       <div class="card expandable" id="card-templates">
         <h2 class="expandable-header" onclick="toggleSection('templates')">
           <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>Templates</span>
@@ -2956,25 +3795,37 @@ document.addEventListener("DOMContentLoaded",()=>{
     <main>
       <div class="chat-header">
         <div style="display:flex;align-items:center;gap:12px;">
-          <button class="view-tab active" data-view="chat" onclick="switchView('chat')" title="Chat">
+          <button class="view-tab active" data-view="chat" onclick="switchView('chat')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
             Chat
+            <span class="tab-tooltip">Chat with your agent</span>
           </button>
-          <button class="view-tab" data-view="soul" onclick="switchView('soul')" title="Soul & Personality">
+          <button class="view-tab" data-view="soul" onclick="switchView('soul')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
             Soul
+            <span id="soulBadge" class="tab-badge dot unsaved" style="display:none"></span>
+            <span class="tab-tooltip">Agent Personality & Identity</span>
           </button>
-          <button class="view-tab" data-view="memory" onclick="switchView('memory')" title="Memory">
+          <button class="view-tab" data-view="memory" onclick="switchView('memory')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
             Memory
+            <span id="memoryBadge" class="tab-badge dot" style="display:none"></span>
+            <span class="tab-tooltip">Durable & daily logs</span>
           </button>
-          <button class="view-tab" data-view="schedules" onclick="switchView('schedules')" title="Schedules">
+          <button class="view-tab" data-view="schedules" onclick="switchView('schedules')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
             Schedules
+            <span id="schedulesBadge" class="tab-badge" style="display:none">0</span>
+            <span class="tab-tooltip">Recurring automated tasks</span>
+          </button>
+          <button class="view-tab" data-view="history" onclick="switchView('history')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+            History
+            <span class="tab-tooltip">Task history & search</span>
           </button>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
-          <span id="taskCount" style="font-size:12px;color:var(--muted)">0 tasks</span>
+          <span id="taskCount" style="font-size:12px;color:var(--muted);cursor:pointer;padding:4px 8px;border-radius:6px;transition:all 0.15s;" onclick="switchView('history')" onmouseenter="this.style.background='rgba(99,102,241,0.1)';this.style.color='var(--accent)'" onmouseleave="this.style.background='transparent';this.style.color='var(--muted)'" title="View task history">0 tasks</span>
           <button id="clearChatBtn" onclick="clearChat()" title="Clear chat" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;cursor:pointer;color:var(--muted);display:flex;align-items:center;gap:4px;font-size:11px;transition:all 0.15s;" onmouseenter="this.style.color='var(--err)';this.style.borderColor='var(--err)'" onmouseleave="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
             Clear
@@ -2983,23 +3834,44 @@ document.addEventListener("DOMContentLoaded",()=>{
       </div>
       <!-- Chat View (default) -->
       <div id="chatView" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+        <div id="onboardingCard" class="onboarding-card" style="display:none;flex-shrink:0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <div style="font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              Getting Started
+            </div>
+            <button onclick="dismissOnboarding()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px;" title="Dismiss">&times;</button>
+          </div>
+          <div id="onboard-keys" class="onboarding-item" onclick="onboardAction('keys')"><div class="onboarding-check">&#10003;</div><div style="font-size:13px">Configure an API key (Anthropic, OpenAI, or OpenRouter)</div></div>
+          <div id="onboard-soul" class="onboarding-item" onclick="onboardAction('soul')"><div class="onboarding-check">&#10003;</div><div style="font-size:13px">Set up your agent identity and personality</div></div>
+          <div id="onboard-task" class="onboarding-item" onclick="onboardAction('task')"><div class="onboarding-check">&#10003;</div><div style="font-size:13px">Run your first task</div></div>
+          <div id="onboard-browser" class="onboarding-item" onclick="onboardAction('browser')"><div class="onboarding-check">&#10003;</div><div style="font-size:13px">Try the browser engine with your logins</div></div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:12px;font-size:11px;color:var(--muted)">
+            <div class="onboarding-progress-bar"><div id="onboardFill" class="onboarding-progress-fill" style="width:0%"></div></div>
+            <span id="onboardText">0 / 4</span>
+          </div>
+        </div>
         <div id="taskList" class="task-list">
           <p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>
         </div>
         <div class="input-area">
           <form id="taskForm" class="input-container">
-            <select id="engine">
-              <option value="auto">Auto</option>
-              <option value="browser_use">browser-use</option>
-              <option value="computer_use">computer-use</option>
-              <option value="openclaw">OpenClaw</option>
-            </select>
-            <textarea id="prompt" placeholder="Send a message..." rows="1"></textarea>
-            <button type="submit" class="btn" id="submitBtn">
+            <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
+              <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;">Engine:</span>
+              <select id="engine">
+                <option value="auto">Auto</option>
+                <option value="browser_use">browser-use</option>
+                <option value="computer_use">computer-use</option>
+                <option value="openclaw">OpenClaw</option>
+              </select>
+            </div>
+            <textarea id="prompt" placeholder="Send a message..." rows="1" title="Enter to send, Shift+Enter for new line"></textarea>
+            <button type="submit" class="btn" id="submitBtn" title="Send message (Enter)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               Send
             </button>
           </form>
+          <div style="font-size:10px;color:rgba(160,174,192,0.5);text-align:center;margin-top:6px;letter-spacing:0.3px;">Enter to send &middot; Shift+Enter for new line</div>
         </div>
       </div>
       <!-- Soul Editor View -->
@@ -3085,6 +3957,50 @@ document.addEventListener("DOMContentLoaded",()=>{
           <div id="scheduleViewList"></div>
         </div>
       </div>
+      <!-- History View -->
+      <div id="historyView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
+        <div style="max-width:1200px;margin:0 auto;width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <div>
+              <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Task History</h3>
+              <p style="font-size:12px;color:var(--muted)">Browse, search, and replay all tasks</p>
+            </div>
+            <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#2d3748;border:1px solid var(--border)">Back to Chat</button>
+          </div>
+          <div class="history-filters">
+            <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Filter:</span>
+            <select id="historyFilterStatus" onchange="filterHistory()" style="font-size:12px;width:auto!important;">
+              <option value="">All statuses</option>
+              <option value="complete">Complete</option>
+              <option value="error">Error</option>
+              <option value="running">Running</option>
+              <option value="pending">Pending</option>
+            </select>
+            <select id="historyFilterEngine" onchange="filterHistory()" style="font-size:12px;width:auto!important;">
+              <option value="">All engines</option>
+              <option value="browser_use">browser-use</option>
+              <option value="computer_use">computer-use</option>
+              <option value="openclaw">OpenClaw</option>
+            </select>
+            <input id="historySearch" placeholder="Search prompts or results..." oninput="filterHistory()" style="flex:1;min-width:200px;max-width:300px;font-size:13px;padding:8px 12px;">
+          </div>
+          <div style="overflow-x:auto;">
+            <table class="history-table">
+              <thead><tr>
+                <th style="width:140px">Time</th>
+                <th>Prompt</th>
+                <th style="width:100px">Engine</th>
+                <th style="width:90px">Status</th>
+                <th style="width:80px;text-align:right">Cost</th>
+                <th style="width:90px;text-align:right">Duration</th>
+              </tr></thead>
+              <tbody id="historyTableBody">
+                <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)">No tasks yet</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
   <script>""" + js + """</script>
@@ -3098,6 +4014,48 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 def create_app() -> FastAPI:
     app = FastAPI(title="ClawBridge", version="0.1.0")
+
+    # ── Dashboard Authentication Middleware ──────────────────────────
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    class AuthMiddleware(BaseHTTPMiddleware):
+        """Simple token-based auth. Disabled when DASHBOARD_TOKEN is empty."""
+        async def dispatch(self, request: Request, call_next):
+            token = get_settings().dashboard_token
+            if not token:
+                return await call_next(request)  # No token set → open access
+            # Allow health check without auth
+            if request.url.path == "/health":
+                return await call_next(request)
+            # Check query param, header, or cookie
+            req_token = (
+                request.query_params.get("token", "")
+                or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+                or request.cookies.get("clawbridge_token", "")
+            )
+            if req_token == token:
+                return await call_next(request)
+            # For dashboard root, show login form instead of 401
+            if request.url.path == "/" and request.method == "GET":
+                return HTMLResponse(_login_page_html(request.url.path), status_code=200)
+            return JSONResponse({"error": "Unauthorized. Set token via ?token= query param or Authorization header."}, status_code=401)
+
+    app.add_middleware(AuthMiddleware)
+
+    def _login_page_html(redirect_to: str = "/") -> str:
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>ClawBridge Login</title>
+<style>body{{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0a0a0f;color:#e4e4e7;font-family:system-ui}}
+.card{{background:#18181b;padding:40px;border-radius:16px;border:1px solid rgba(255,255,255,0.06);max-width:360px;width:100%}}
+h2{{margin:0 0 8px;font-size:20px}}p{{color:#71717a;font-size:13px;margin:0 0 24px}}
+input{{width:100%;padding:10px 14px;background:#09090b;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#e4e4e7;font-size:14px;margin-bottom:16px;box-sizing:border-box}}
+button{{width:100%;padding:10px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer}}
+button:hover{{background:#4f46e5}}</style></head>
+<body><div class="card"><h2>ClawBridge</h2><p>Enter your dashboard token to continue</p>
+<form onsubmit="event.preventDefault();const t=document.getElementById('tok').value;document.cookie='clawbridge_token='+t+';path=/;max-age=86400;SameSite=Strict';window.location.href='/?token='+encodeURIComponent(t)">
+<input id="tok" type="password" placeholder="Dashboard token" autofocus>
+<button type="submit">Unlock Dashboard</button></form></div></body></html>"""
 
     @app.on_event("startup")
     async def startup():
@@ -3113,23 +4071,131 @@ def create_app() -> FastAPI:
     connections: list[WebSocket] = []
 
     async def _broadcast(msg: dict) -> None:
+        dead: list[WebSocket] = []
         for ws in connections[:]:
             try:
                 await ws.send_json(msg)
             except Exception:
+                dead.append(ws)
+        for ws in dead:
+            try:
                 connections.remove(ws)
+            except ValueError:
+                pass  # already removed by another broadcast
 
     @app.get("/health")
     def health():
         return {"status": "ok"}
 
     @app.get("/", response_class=HTMLResponse)
-    def index():
-        return _dashboard_html()
+    async def index():
+        import json as _json
+        from html import escape as _esc
+        # Pre-load data server-side so the dashboard renders immediately
+        # (avoids dependency on fetch/WebSocket working in browser)
+        try:
+            engines = await get_manager().engine_infos()
+        except Exception:
+            engines = []
+        try:
+            tasks = [t.model_dump(mode="json") for t in get_manager().list_tasks()]
+        except Exception:
+            tasks = []
+        try:
+            s = get_settings()
+            config = {
+                "keys": {"anthropic_configured": s.has_anthropic_key(), "openai_configured": s.has_openai_key(), "openrouter_configured": s.has_openrouter_key(), "default_model": s.default_model},
+                "policy": {"mode": s.policy_mode, "max_concurrent_tasks": s.max_concurrent_tasks},
+                "browser": {"mode": s.browser_mode, "cdp_url": s.browser_cdp_url, "user_data_dir": s.browser_user_data_dir, "chrome_exe": _find_chrome_exe() or "not found"},
+                "machine_id": get_machine_id(),
+                "remote": {"url": s.remote_bridge_url, "configured": bool(s.remote_bridge_url)}
+            }
+        except Exception:
+            config = {}
+        try:
+            schedules = [s.model_dump() for s in get_schedule_manager().list_all()]
+            templates = [t.model_dump() for t in get_template_manager().list_all()]
+        except Exception:
+            schedules, templates = [], []
+        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates}
+        preload = '<script>window.__PRELOAD__=' + _json.dumps(preload_data, default=str) + ';</script>'
+        html = _dashboard_html()
+        html = html.replace("</head>", preload + "\n</head>")
+
+        # --- Server-side render: replace "Loading..." placeholders with actual HTML ---
+        # Engines
+        if engines:
+            engine_html_parts = []
+            for e in engines:
+                name = e.get("display_name") or e.get("name", "?")
+                status = e.get("status", "unknown")
+                if status == "available":
+                    sc = "color:var(--ok)"
+                elif status == "no_api_key":
+                    sc = "color:#f59e0b"
+                elif status == "error":
+                    sc = "color:var(--err)"
+                else:
+                    sc = "color:var(--muted)"
+                hint = ""
+                if e.get("error_hint"):
+                    hint = f'<div style="font-size:10px;color:var(--muted);margin-top:2px">{_esc(e["error_hint"])}</div>'
+                engine_html_parts.append(
+                    f'<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)">'
+                    f'<div style="display:flex;justify-content:space-between">'
+                    f'<span>{_esc(name)}</span><span style="font-weight:600;{sc}">{_esc(status)}</span>'
+                    f'</div>{hint}</div>'
+                )
+            engine_html = "".join(engine_html_parts)
+            html = html.replace(
+                '<div id="engineList"><p class="muted">Loading...</p></div>',
+                f'<div id="engineList">{engine_html}</div>'
+            )
+
+        # Config
+        if config and config.get("keys"):
+            k = config["keys"]
+            mid = _esc(str(config.get("machine_id", "")))
+            chip = lambda v: '<span class="config-chip configured">Configured</span>' if v else '<span class="config-chip not-set">Not set</span>'
+            primary = "None"
+            if k.get("openrouter_configured"): primary = "OpenRouter"
+            elif k.get("anthropic_configured"): primary = "Anthropic"
+            elif k.get("openai_configured"): primary = "OpenAI"
+            config_html = (
+                f'<div class="config-provider-primary">Active: {_esc(primary)}</div>'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">'
+                f'<span style="color:var(--muted)">Anthropic</span>{chip(k.get("anthropic_configured"))}</div>'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">'
+                f'<span style="color:var(--muted)">OpenAI</span>{chip(k.get("openai_configured"))}</div>'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">'
+                f'<span style="color:var(--muted)">OpenRouter</span>{chip(k.get("openrouter_configured"))}</div>'
+                f'<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">'
+                f'<div class="config-advanced-toggle" onclick="var el=document.getElementById(\'configAdvanced\');el.classList.toggle(\'visible\');">&#9656; Advanced</div>'
+                f'<div id="configAdvanced" class="config-advanced-content">'
+                f'<div style="font-size:10px;color:var(--muted);margin-bottom:4px">MACHINE ID</div>'
+                f'<div style="word-break:break-all;color:var(--accent);font-size:10px;font-family:monospace">{mid}</div></div></div>'
+            )
+            html = html.replace(
+                '<div id="configSummary"><p class="muted">Loading...</p></div>',
+                f'<div id="configSummary">{config_html}</div>'
+            )
+
+        return html
 
     @app.post("/api/tasks")
     async def create_task(body: dict):
-        task = Task(prompt=body["prompt"], engine=EngineName(body.get("engine", "auto")))
+        prompt = body.get("prompt", "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Missing required field: prompt")
+        if len(prompt) > 50000:
+            raise HTTPException(status_code=400, detail="Prompt too long (max 50,000 chars)")
+        engine_str = body.get("engine", "auto")
+        try:
+            engine = EngineName(engine_str)
+        except ValueError:
+            valid = ", ".join(e.value for e in EngineName)
+            raise HTTPException(status_code=400, detail=f"Invalid engine '{engine_str}'. Valid: {valid}")
+        task = Task(prompt=prompt, engine=engine)
         return (await get_manager().submit(task)).model_dump(mode="json")
 
     @app.get("/api/tasks")
@@ -3161,6 +4227,21 @@ def create_app() -> FastAPI:
         if not t:
             raise HTTPException(404, "Task not found")
         return t.model_dump(mode="json")
+
+    @app.get("/api/tasks/{task_id}/steps")
+    async def get_task_steps(task_id: str):
+        """Retrieve step-level trace data for task replay."""
+        t = get_manager().get(task_id)
+        if not t:
+            raise HTTPException(404, "Task not found")
+        steps = get_steps_for_task(task_id)
+        return {"task_id": task_id, "steps": steps, "total_steps": len(steps)}
+
+    @app.get("/api/tasks/{task_id}/audit")
+    async def get_task_audit(task_id: str):
+        """Retrieve audit events for a specific task."""
+        events = get_audit().recent(limit=100, task_id=task_id)
+        return [e.model_dump(mode="json") for e in events]
 
     @app.get("/api/engines")
     async def list_engines():
@@ -3205,8 +4286,10 @@ def create_app() -> FastAPI:
     async def get_config():
         s = get_settings()
         return {
+            "version": __version__,
             "keys": {"anthropic_configured": s.has_anthropic_key(), "openai_configured": s.has_openai_key(), "openrouter_configured": s.has_openrouter_key(), "default_model": s.default_model},
             "policy": {"mode": s.policy_mode, "max_concurrent_tasks": s.max_concurrent_tasks},
+            "automation": {"mode": s.automation_mode},
             "browser": {"mode": s.browser_mode, "cdp_url": s.browser_cdp_url, "user_data_dir": s.browser_user_data_dir, "chrome_exe": _find_chrome_exe() or "not found"},
             "machine_id": get_machine_id(),
             "remote": {
@@ -3279,6 +4362,30 @@ def create_app() -> FastAPI:
         # Re-initialize engines
         await get_manager().init_engines()
         await _broadcast({"type": "engine_status", "payload": await get_manager().engine_infos()})
+        return {"status": "ok", "mode": mode}
+
+    @app.post("/api/config/automation")
+    async def save_automation_mode(body: dict):
+        """Set automation mode: supervised (asks approval) or autonomous (runs freely)."""
+        mode = body.get("mode", "supervised")
+        if mode not in ("supervised", "autonomous"):
+            raise HTTPException(400, f"Invalid automation mode: {mode}. Use 'supervised' or 'autonomous'.")
+        # Persist to .env
+        env_path = Path(".env")
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith("AUTOMATION_MODE=") or line.strip().startswith("AUTOMATION_MODE ="):
+                lines[i] = f"AUTOMATION_MODE={mode}"
+                found = True
+                break
+        if not found:
+            lines.append(f"AUTOMATION_MODE={mode}")
+        env_path.write_text("\n".join(lines) + "\n")
+        # Update in-memory
+        Settings.automation_mode = mode
+        os.environ["AUTOMATION_MODE"] = mode
+        await _broadcast({"type": "config_update", "payload": {"automation_mode": mode}})
         return {"status": "ok", "mode": mode}
 
     # ── Chrome Launcher ──────────────────────────────────────────────────
@@ -3540,21 +4647,77 @@ def create_app() -> FastAPI:
 # Main
 # ---------------------------------------------------------------------------
 
+def _create_tray_icon(url: str):
+    """Create a system tray icon with menu. Returns the icon object or None."""
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None
+
+    # Generate a simple icon (purple square with "CB" text)
+    icon_path = Path(__file__).parent / "clawbridge.ico"
+    if icon_path.exists():
+        try:
+            image = Image.open(str(icon_path))
+        except Exception:
+            image = None
+    else:
+        image = None
+
+    if image is None:
+        # Generate a simple colored icon programmatically
+        image = Image.new("RGBA", (64, 64), (99, 102, 241, 255))  # accent purple
+        draw = ImageDraw.Draw(image)
+        # Draw a simple "C" shape
+        draw.ellipse([8, 8, 56, 56], outline=(255, 255, 255, 255), width=6)
+        draw.rectangle([32, 8, 56, 56], fill=(99, 102, 241, 255))  # cut right side for "C"
+
+    def on_open(icon, item):
+        webbrowser.open(url)
+
+    def on_quit(icon, item):
+        icon.stop()
+        os._exit(0)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Open Dashboard", on_open, default=True),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(f"ClawBridge v{__version__}", None, enabled=False),
+        pystray.MenuItem(f"Running on {url}", None, enabled=False),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Quit", on_quit),
+    )
+
+    icon = pystray.Icon("ClawBridge", image, "ClawBridge", menu)
+    return icon
+
+
 def main() -> None:
     s = get_settings()
     print()
-    print("  ClawBridge (single file) v0.1.0")
+    print(f"  ClawBridge v{VERSION}")
     print("  Dashboard: http://%s:%s" % (s.host, s.port))
     print()
     if not s.has_any_key():
         print("  [!] Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY in .env")
     url = "http://%s:%s" % (s.host, s.port)
+
+    # Open browser after short delay
     def open_browser():
-        import time
-        time.sleep(1.2)
+        import time as _t
+        _t.sleep(1.5)
         webbrowser.open(url)
     import threading
     threading.Thread(target=open_browser, daemon=True).start()
+
+    # Start system tray icon in background thread
+    tray_icon = _create_tray_icon(url)
+    if tray_icon:
+        threading.Thread(target=tray_icon.run, daemon=True).start()
+        print("  System tray icon active")
+
+    print()
     uvicorn.run(create_app(), host=s.host, port=s.port, log_level=s.log_level.lower())
 
 if __name__ == "__main__":
