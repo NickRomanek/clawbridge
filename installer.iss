@@ -64,11 +64,7 @@ Name: "{autodesktop}\ClawBridge"; Filename: "{app}\{#MyAppExeName}"; WorkingDir:
 Name: "{userstartup}\ClawBridge"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: startuptask
 
 [Run]
-; Install Playwright Chromium to default location (ensures it works even if bundled path fails)
-Filename: "{app}\python\python.exe"; Parameters: "-m playwright install chromium"; WorkingDir: "{app}"; StatusMsg: "Installing Playwright Chromium browser (this may take a moment)..."; Flags: runhidden waituntilterminated
-; Install OpenClaw via bundled Node.js (optional task, runs before launch)
-Filename: "{app}\install_openclaw.bat"; WorkingDir: "{app}"; StatusMsg: "Installing OpenClaw engine (this may take a moment)..."; Tasks: installopenclaw; Flags: runhidden waituntilterminated
-; Offer to launch after install - uses ClawBridge.bat which opens loading page instantly then starts the app
+; Only the final "Launch" checkbox — all heavy work is done in [Code] with progress bar
 Filename: "{app}\ClawBridge.bat"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent runhidden
 
 [UninstallDelete]
@@ -123,7 +119,6 @@ begin
   begin
     InstalledVer := GetInstalledVersion();
 
-    // Show a task dialog with clear options
     Choice := MsgBox('ClawBridge ' + InstalledVer + ' is already installed.' + #13#10 + #13#10 +
               'What would you like to do?' + #13#10 + #13#10 +
               '  YES = Uninstall existing version, then reinstall' + #13#10 +
@@ -134,35 +129,106 @@ begin
 
     if Choice = IDCANCEL then
     begin
-      Result := False;  // Exit installer
+      Result := False;
       Exit;
     end
     else if Choice = IDYES then
     begin
-      // Run the uninstaller
       if not Exec(RemoveQuotes(UninstallStr), '/SILENT /NORESTART', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
       begin
         MsgBox('Failed to run uninstaller. Please uninstall manually from Add/Remove Programs.', mbError, MB_OK);
         Result := False;
         Exit;
       end;
-      // Small delay to let uninstaller release files
       Sleep(1500);
     end;
-    // If NO, continue with upgrade in place
   end;
 end;
 
-// ── Post-install: create .env from template ─────────────────────────────
+// ── Post-install with progress bar ──────────────────────────────────────
+procedure RunWithProgress(const Exe, Params, WorkDir, StepLabel: String;
+  ProgressPage: TOutputProgressWizardPage; StepPct, TotalSteps: Integer);
+var
+  ResultCode: Integer;
+begin
+  ProgressPage.SetText(StepLabel, 'This may take a few minutes...');
+  ProgressPage.SetProgress(StepPct, TotalSteps);
+  ProgressPage.Show;
+  Exec(Exe, Params, WorkDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ProgressPage: TOutputProgressWizardPage;
+  AppDir: String;
+  TotalSteps: Integer;
+  CurrentStep: Integer;
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
+    AppDir := ExpandConstant('{app}');
+
     // Create .env from .env.example if it doesn't exist
-    if not FileExists(ExpandConstant('{app}\.env')) then
+    if not FileExists(AppDir + '\.env') then
     begin
-      if FileExists(ExpandConstant('{app}\.env.example')) then
-        CopyFile(ExpandConstant('{app}\.env.example'), ExpandConstant('{app}\.env'), False);
+      if FileExists(AppDir + '\.env.example') then
+        CopyFile(AppDir + '\.env.example', AppDir + '\.env', False);
+    end;
+
+    // Determine total steps based on tasks
+    TotalSteps := 100;
+    CurrentStep := 0;
+
+    // Create progress page
+    ProgressPage := CreateOutputProgressPage(
+      'Configuring ClawBridge',
+      'Setting up engines and browser automation...');
+
+    try
+      ProgressPage.Show;
+
+      // Step 1: Verify Python works (5%)
+      ProgressPage.SetText('Verifying embedded Python...', '');
+      ProgressPage.SetProgress(5, TotalSteps);
+      Exec(AppDir + '\python\python.exe', '--version', AppDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+      // Step 2: Install Playwright Chromium (5% -> 70%)
+      ProgressPage.SetText('Installing Playwright Chromium browser...', 'Downloading browser engine — this may take 1-3 minutes.');
+      ProgressPage.SetProgress(10, TotalSteps);
+      Exec(AppDir + '\python\python.exe', '-m playwright install chromium', AppDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      ProgressPage.SetProgress(70, TotalSteps);
+
+      // Step 3 (optional): Install OpenClaw
+      if WizardIsTaskSelected('installopenclaw') then
+      begin
+        ProgressPage.SetText('Installing OpenClaw engine...', 'Installing via npm — this may take 1-2 minutes.');
+        ProgressPage.SetProgress(75, TotalSteps);
+        Exec(AppDir + '\install_openclaw.bat', '', AppDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        ProgressPage.SetProgress(95, TotalSteps);
+      end
+      else
+      begin
+        ProgressPage.SetProgress(95, TotalSteps);
+      end;
+
+      // Step 4: Create workspace directories
+      ProgressPage.SetText('Creating workspace...', 'Almost done!');
+      ProgressPage.SetProgress(98, TotalSteps);
+      ForceDirectories(AppDir + '\workspace');
+      ForceDirectories(AppDir + '\workspace\memory');
+      ForceDirectories(AppDir + '\workspace\templates');
+      ForceDirectories(AppDir + '\workspace\schedules');
+      ForceDirectories(AppDir + '\workspace\workflows');
+      ForceDirectories(AppDir + '\logs');
+
+      // Done
+      ProgressPage.SetText('Setup complete!', 'ClawBridge is ready to use.');
+      ProgressPage.SetProgress(100, TotalSteps);
+      Sleep(800);
+
+    finally
+      ProgressPage.Hide;
     end;
   end;
 end;
