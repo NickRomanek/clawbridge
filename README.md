@@ -483,8 +483,20 @@ See `.mcp.json` for project-level registration.
 - [ ] macOS build support
 - [ ] Multi-machine fleet management via Remote Bridge
 
+## Contributing
+
+We welcome contributions! Here's how:
+
+1. Fork the repo
+2. Create a feature branch (`git checkout -b feat/my-feature`)
+3. Make your changes and test them
+4. Commit (`git commit -m "Add my feature"`)
+5. Push and open a PR
+
+Please open an issue first for large changes so we can discuss the approach.
+
 ## License
 
-Proprietary — see LICENSE.txt. Third-party components are governed by their respective open-source licenses.
+MIT License — see [LICENSE.txt](LICENSE.txt).
 
 Copyright (c) 2026 RomaTek AI.
