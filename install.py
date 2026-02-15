@@ -546,7 +546,7 @@ def create_workspace():
 
             Name: ClawBridge
             Role: Local AI Automation Hub
-            Version: 0.1.0
+            Version: 0.2.0
 
             ## Capabilities
             - Browser automation (web research, form filling, data extraction)

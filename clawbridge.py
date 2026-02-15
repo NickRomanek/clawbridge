@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import os
 import shutil
@@ -49,6 +49,7 @@ def _ensure_dependencies() -> None:
         "mss",
         "pystray",
         "pywinauto",
+        "pynput",
     ]
     # Map pip package names to their actual import names where they differ
     import_names = {"python-dotenv": "dotenv", "Pillow": "PIL"}
@@ -658,6 +659,7 @@ def _ensure_workspace():
     (WORKSPACE_DIR / "memory").mkdir(exist_ok=True)
     (WORKSPACE_DIR / "templates").mkdir(exist_ok=True)
     (WORKSPACE_DIR / "schedules").mkdir(exist_ok=True)
+    (WORKSPACE_DIR / "workflows").mkdir(exist_ok=True)
     for filename, meta in PERSONALITY_FILES.items():
         fpath = WORKSPACE_DIR / filename
         if not fpath.exists():
@@ -1088,6 +1090,81 @@ def get_template_manager() -> TemplateManager:
         _template_mgr = TemplateManager()
     return _template_mgr
 
+
+class WorkflowManager:
+    """Manages recorded workflow templates — file-based persistence in workspace/workflows/."""
+
+    def __init__(self, workspace: Path = WORKSPACE_DIR):
+        self.workflows_dir = workspace / "workflows"
+        self.workflows_dir.mkdir(parents=True, exist_ok=True)
+        self._workflows: dict[str, WorkflowTemplate] = {}
+        self._load_workflows()
+
+    def _load_workflows(self):
+        for f in self.workflows_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                wf = WorkflowTemplate(**data)
+                self._workflows[wf.id] = wf
+            except Exception as e:
+                logging.warning("Failed to load workflow %s: %s", f.name, e)
+
+    def _save_workflow(self, wf: WorkflowTemplate):
+        fpath = self.workflows_dir / f"{wf.id}.json"
+        fpath.write_text(json.dumps(wf.model_dump(mode="json"), indent=2, default=str), encoding="utf-8")
+
+    def create(self, name: str, description: str, actions: list[dict],
+               target_app: str = "", tags: list[str] | None = None) -> WorkflowTemplate:
+        parsed_actions = [RecordedAction(**a) for a in actions]
+        wf = WorkflowTemplate(
+            name=name,
+            description=description,
+            actions=parsed_actions,
+            target_app=target_app,
+            tags=tags or [],
+        )
+        self._workflows[wf.id] = wf
+        self._save_workflow(wf)
+        return wf
+
+    def get(self, wf_id: str) -> WorkflowTemplate | None:
+        return self._workflows.get(wf_id)
+
+    def get_by_name(self, name: str) -> WorkflowTemplate | None:
+        for wf in self._workflows.values():
+            if wf.name == name:
+                return wf
+        return None
+
+    def delete(self, wf_id: str) -> bool:
+        if wf_id in self._workflows:
+            del self._workflows[wf_id]
+            fpath = self.workflows_dir / f"{wf_id}.json"
+            if fpath.exists():
+                fpath.unlink()
+            return True
+        return False
+
+    def list_all(self) -> list[WorkflowTemplate]:
+        return sorted(self._workflows.values(), key=lambda w: w.created_at, reverse=True)
+
+    def mark_replayed(self, wf_id: str):
+        wf = self._workflows.get(wf_id)
+        if wf:
+            wf.replay_count += 1
+            wf.last_replayed = datetime.utcnow()
+            self._save_workflow(wf)
+
+
+_workflow_mgr: WorkflowManager | None = None
+
+def get_workflow_manager() -> WorkflowManager:
+    global _workflow_mgr
+    if _workflow_mgr is None:
+        _workflow_mgr = WorkflowManager()
+    return _workflow_mgr
+
+
 def init_db():
     """Initialize SQLite database for task persistence."""
     conn = sqlite3.connect(Settings.db_path)
@@ -1117,6 +1194,18 @@ def init_db():
                   detail TEXT DEFAULT '',
                   timestamp TEXT NOT NULL)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_audit_task_id ON audit_log(task_id)')
+    # Workflow recordings
+    c.execute('''CREATE TABLE IF NOT EXISTS workflows
+                 (id TEXT PRIMARY KEY,
+                  name TEXT NOT NULL,
+                  description TEXT DEFAULT '',
+                  actions TEXT DEFAULT '[]',
+                  target_app TEXT DEFAULT '',
+                  tags TEXT DEFAULT '[]',
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  replay_count INTEGER DEFAULT 0,
+                  last_replayed TEXT DEFAULT '')''')
     conn.commit()
     conn.close()
 
@@ -1182,6 +1271,45 @@ class AuditEvent(BaseModel):
     task_id: str = ""
     event_type: str = ""
     detail: str = ""
+
+class RecordedAction(BaseModel):
+    """A single recorded user action (click, type, scroll, key)."""
+    timestamp: float = 0.0
+    action_type: str = ""  # click, type, scroll, key
+    x: int = 0
+    y: int = 0
+    button: str = ""  # left, right, middle
+    text: str = ""
+    key: str = ""
+    scroll_amount: int = 0
+    element_type: str = ""
+    element_name: str = ""
+    element_automation_id: str = ""
+    element_parent_name: str = ""
+    window_title: str = ""
+
+class WorkflowTemplate(BaseModel):
+    """A saved workflow recording that can be replayed."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    description: str = ""
+    actions: list[RecordedAction] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    replay_count: int = 0
+    last_replayed: datetime | None = None
+    target_app: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+class ReplayState(BaseModel):
+    """Tracks the state of a workflow replay in progress."""
+    workflow_id: str = ""
+    workflow_name: str = ""
+    current_step: int = 0
+    total_steps: int = 0
+    status: str = "pending"  # pending, running, complete, error
+    llm_fallback_steps: int = 0
+    error: str = ""
 
 # ---------------------------------------------------------------------------
 # Audit logger (in-memory + optional file)
@@ -1981,6 +2109,9 @@ class ComputerUseEngine(EngineBase):
         self._broadcast_fn = None  # For approval requests in supervised mode
         self._current_task_id = ""  # Current task ID for approval context
         self._current_context = ""  # Current context (window title, etc.)
+        self._recorder = None  # InputRecorder instance (lazy-loaded)
+        self._recording_active = False
+        self._replay_state: ReplayState | None = None
 
     @property
     def name(self) -> EngineName:
@@ -2414,7 +2545,340 @@ class ComputerUseEngine(EngineBase):
         """Set the broadcast function for approval requests."""
         self._broadcast_fn = fn
 
+    # ── Recording / Replay Methods ──────────────────────────────────────────
+
+    def start_recording(self) -> bool:
+        """Start recording desktop input. Returns True if started, False if already recording."""
+        if self._recording_active:
+            return False
+        from clawbridge.recorder.capture import InputRecorder
+        self._recorder = InputRecorder()
+        self._recorder.start()
+        self._recording_active = True
+        logging.info("ComputerUseEngine: recording started")
+        return True
+
+    async def stop_recording(self) -> list[dict]:
+        """Stop recording and return enriched actions."""
+        if not self._recording_active or not self._recorder:
+            return []
+        raw_events = self._recorder.stop()
+        self._recording_active = False
+        self._recorder = None
+        if not raw_events:
+            return []
+        from clawbridge.recorder.processor import process_recording
+        actions = await process_recording(raw_events)
+        logging.info("ComputerUseEngine: recording stopped, %d actions captured", len(actions))
+        return actions
+
+    def _detect_target_from_actions(self, wf: WorkflowTemplate) -> str:
+        """Auto-detect target app from recorded window titles.
+
+        Finds the most common non-browser window title in the recorded actions
+        and extracts the app name from it.
+        """
+        from collections import Counter
+        browser_keywords = ("brave", "chrome", "firefox", "edge", "safari", "opera", "clawbridge dashboard")
+        titles: list[str] = []
+        for a in wf.actions:
+            t = ""
+            if hasattr(a, 'window_title'):
+                t = a.window_title
+            elif isinstance(a, dict):
+                t = a.get("window_title", "")
+            if t and not any(bk in t.lower() for bk in browser_keywords):
+                titles.append(t)
+        if not titles:
+            return ""
+        most_common = Counter(titles).most_common(1)[0][0]
+        return most_common
+
+    async def _focus_window_by_title(self, title: str) -> bool:
+        """Focus a window by its (partial) title using pywinauto."""
+        loop = asyncio.get_running_loop()
+        def _focus():
+            try:
+                from pywinauto import Desktop
+                d = Desktop(backend='uia')
+                for w in d.windows():
+                    try:
+                        wt = w.window_text()
+                        if wt and title and (title in wt or wt in title or title.split(" - ")[0] in wt):
+                            w.set_focus()
+                            return True
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return False
+        try:
+            return await loop.run_in_executor(None, _focus)
+        except Exception:
+            return False
+
+    async def replay_workflow(self, wf: WorkflowTemplate, task: Task) -> Task:
+        """Replay a saved workflow, using element matching with LLM fallback."""
+        import pyautogui
+
+        self._status = EngineStatus.RUNNING
+        self._current_task_id = task.id
+        task.status = TaskStatus.RUNNING
+        start = time.monotonic()
+        replay = ReplayState(
+            workflow_id=wf.id,
+            workflow_name=wf.name,
+            total_steps=len(wf.actions),
+            status="running",
+        )
+        self._replay_state = replay
+        llm_fallbacks = 0
+        completed_steps = 0
+
+        # Auto-detect target app from recorded window titles
+        target_app = wf.target_app or self._detect_target_from_actions(wf)
+        logging.info("Replay starting: workflow='%s', %d actions, target='%s'",
+                     wf.name, len(wf.actions), target_app or "(none)")
+
+        try:
+            # Pre-action: bring target app to foreground — but skip if
+            # the workflow starts with a Win key press (user is launching the app)
+            first_action = wf.actions[0] if wf.actions else None
+            first_is_launch = False
+            if first_action:
+                fa = first_action.model_dump() if hasattr(first_action, 'model_dump') else first_action
+                first_is_launch = fa.get("action_type") == "key" and fa.get("key") in ("cmd", "cmd_r")
+            if target_app and not first_is_launch:
+                focused = await self._bring_app_to_foreground(target_app)
+                if not focused:
+                    focused = await self._focus_window_by_title(target_app)
+                if focused:
+                    logging.info("Replay: focused target app '%s'", target_app)
+                    await asyncio.sleep(1.0)
+                else:
+                    logging.warning("Replay: could not focus target app '%s'", target_app)
+            elif first_is_launch:
+                logging.info("Replay: skipping pre-focus (workflow starts with app launch)")
+
+            for i, action in enumerate(wf.actions):
+                replay.current_step = i + 1
+                action_dict = action.model_dump() if hasattr(action, 'model_dump') else action
+                atype = action_dict.get('action_type', '?')
+                adetail = action_dict.get('element_name') or action_dict.get('text') or action_dict.get('key') or ''
+                logging.info("Replay step %d/%d: %s %s", i + 1, len(wf.actions), atype, adetail[:40])
+
+                # Broadcast step progress
+                if self.on_step:
+                    try:
+                        self.on_step({
+                            "task_id": task.id,
+                            "step": i + 1,
+                            "max_steps": len(wf.actions),
+                            "action": f"replay:{atype}",
+                            "reasoning": f"Replaying step {i+1}/{len(wf.actions)}: {atype} {adetail}".strip(),
+                        })
+                    except Exception:
+                        pass
+
+                success = await self._replay_single_action(action_dict, task, target_app)
+                if not success:
+                    # LLM fallback
+                    logging.info("Replay step %d: element match failed, trying LLM fallback", i + 1)
+                    fallback_ok = await self._llm_fallback_for_step(action_dict, task)
+                    llm_fallbacks += 1
+                    if not fallback_ok:
+                        replay.status = "error"
+                        replay.error = f"Failed at step {i+1}: could not match or LLM-complete action"
+                        task.status = TaskStatus.ERROR
+                        task.error = replay.error
+                        break
+
+                completed_steps += 1
+                # Delay between actions to let UI settle
+                delay = 0.5 if atype in ("click", "key") else 0.15
+                await asyncio.sleep(delay)
+
+            if task.status != TaskStatus.ERROR:
+                replay.status = "complete"
+                replay.llm_fallback_steps = llm_fallbacks
+                task.status = TaskStatus.COMPLETE
+                elapsed = int((time.monotonic() - start) * 1000)
+                task.result = TaskResult(
+                    summary=f"Replayed workflow '{wf.name}': {completed_steps}/{len(wf.actions)} steps completed"
+                            + (f" ({llm_fallbacks} LLM fallbacks)" if llm_fallbacks else ""),
+                    total_steps=completed_steps,
+                    total_duration_ms=elapsed,
+                    engine_used="computer_use",
+                )
+                get_workflow_manager().mark_replayed(wf.id)
+                logging.info("Replay complete: %d/%d steps, %d fallbacks, %dms",
+                             completed_steps, len(wf.actions), llm_fallbacks, elapsed)
+
+        except Exception as exc:
+            logging.error("Workflow replay error: %s", exc, exc_info=True)
+            replay.status = "error"
+            replay.error = str(exc)
+            task.status = TaskStatus.ERROR
+            task.error = f"Replay error: {exc}"
+        finally:
+            self._status = EngineStatus.AVAILABLE
+            self._replay_state = None
+
+        return task
+
+    async def _replay_single_action(self, action: dict, task: Task, target_app: str = "") -> bool:
+        """Replay one action. Re-focuses target app before click/type actions."""
+        import pyautogui
+        from clawbridge.perception.accessibility import (
+            get_accessibility_tree, find_matching_element, ElementSnapshot,
+        )
+
+        action_type = action.get("action_type", "")
+        loop = asyncio.get_running_loop()
+
+        # Key mapping: pynput names → pyautogui names
+        KEY_MAP = {
+            "cmd": "win", "cmd_r": "winright",
+            "ctrl_l": "ctrlleft", "ctrl_r": "ctrlright",
+            "alt_l": "altleft", "alt_r": "altright",
+            "shift_r": "shiftright",
+            "return": "enter",
+            "caps_lock": "capslock",
+        }
+
+        if action_type == "type":
+            text = action.get("text", "")
+            if text:
+                logging.info("Replay type: '%s'", text[:60])
+                await loop.run_in_executor(None, lambda: pyautogui.typewrite(text, interval=0.03) if text.isascii() else pyautogui.write(text))
+            return True
+
+        if action_type == "key":
+            key = action.get("key", "")
+            if key:
+                mapped = KEY_MAP.get(key, key)
+                logging.info("Replay key: '%s' -> '%s'", key, mapped)
+                await loop.run_in_executor(None, lambda: pyautogui.press(mapped))
+                # After pressing Win or Enter, wait for UI to react
+                if mapped in ("win", "enter"):
+                    await asyncio.sleep(1.0)
+            return True
+
+        if action_type == "scroll":
+            amount = action.get("scroll_amount", 0)
+            x, y = action.get("x", 0), action.get("y", 0)
+            if amount:
+                await loop.run_in_executor(None, lambda: pyautogui.scroll(amount, x=x, y=y))
+            return True
+
+        if action_type == "click":
+            # Re-focus target app before clicking (Windows steals focus)
+            if target_app:
+                await self._focus_window_by_title(target_app)
+                await asyncio.sleep(0.2)
+
+            el_name = action.get("element_name", "")
+            el_type = action.get("element_type", "")
+            el_auto_id = action.get("element_automation_id", "")
+            el_parent = action.get("element_parent_name", "")
+
+            if el_name or el_auto_id:
+                target = ElementSnapshot(
+                    control_type=el_type,
+                    name=el_name,
+                    automation_id=el_auto_id,
+                    parent_name=el_parent,
+                    center_x=action.get("x", 0),
+                    center_y=action.get("y", 0),
+                )
+                tree = await get_accessibility_tree(max_depth=8, max_elements=60)
+                match, confidence = find_matching_element(target, tree, threshold=0.7)
+                if match:
+                    logging.info("Replay click: matched '%s' (confidence %.2f) at (%d, %d)",
+                                 match.name, confidence, match.center_x, match.center_y)
+                    btn = action.get("button", "left")
+                    await loop.run_in_executor(None, lambda: pyautogui.click(
+                        match.center_x, match.center_y,
+                        button=btn if btn in ("left", "right", "middle") else "left"
+                    ))
+                    return True
+                else:
+                    logging.info("Replay click: no a11y match for '%s' (type=%s), using raw coords", el_name, el_type)
+                    # Fall through to raw coordinates
+            # Use raw coordinates
+            x, y = action.get("x", 0), action.get("y", 0)
+            if x > 0 and y > 0:
+                logging.info("Replay click: raw coords (%d, %d)", x, y)
+                btn = action.get("button", "left")
+                await loop.run_in_executor(None, lambda: pyautogui.click(
+                    x, y, button=btn if btn in ("left", "right", "middle") else "left"
+                ))
+                return True
+            return False
+
+        # Unknown action type — skip
+        logging.info("Replay: skipping unknown action type '%s'", action_type)
+        return True
+
+    async def _llm_fallback_for_step(self, action: dict, task: Task) -> bool:
+        """Ask the LLM to complete an action that element matching couldn't resolve."""
+        action_type = action.get("action_type", "click")
+        el_name = action.get("element_name", "")
+        el_type = action.get("element_type", "")
+        window_title = action.get("window_title", "")
+
+        desc = f"Click on the {el_type} element named '{el_name}'" if el_name else f"Perform a {action_type} action"
+        if window_title:
+            desc += f" in the '{window_title}' window"
+
+        # Create a mini-task for a single LLM step
+        mini_prompt = (
+            f"IMPORTANT: Complete this single UI action and then STOP.\n"
+            f"Action: {desc}\n"
+            f"After completing this one action, respond with 'DONE'."
+        )
+        mini_task = Task(prompt=mini_prompt, engine=EngineName.COMPUTER_USE)
+        mini_task._personality_context = getattr(task, '_personality_context', '')
+
+        try:
+            # Run with very limited steps
+            settings = get_settings()
+            original_max = settings.max_actions_per_task
+            settings.max_actions_per_task = 3  # Only allow 3 steps for fallback
+            result = await self.run_task(mini_task)
+            settings.max_actions_per_task = original_max
+            return result.status == TaskStatus.COMPLETE
+        except Exception as exc:
+            logging.error("LLM fallback failed: %s", exc)
+            return False
+
+    def _find_matching_workflow(self, prompt: str) -> WorkflowTemplate | None:
+        """Safe workflow matching — no substring matching to avoid false positives.
+
+        Matches:
+        - Explicit prefix: "replay: Workflow Name" → exact name match
+        - Short prompt (<=80 chars) exact name match only
+        """
+        stripped = prompt.strip()
+
+        # Explicit prefix match: "replay: <name>"
+        if stripped.lower().startswith("replay:"):
+            name = stripped[7:].strip()
+            if name:
+                return get_workflow_manager().get_by_name(name)
+
+        # Short prompt exact name match only
+        if len(stripped) <= 80:
+            return get_workflow_manager().get_by_name(stripped)
+
+        return None
+
     async def run_task(self, task: Task) -> Task:
+        # ── Check for workflow replay before normal task execution ──
+        wf = self._find_matching_workflow(task.prompt)
+        if wf and wf.actions:
+            return await self.replay_workflow(wf, task)
+
         if self._status != EngineStatus.AVAILABLE:
             task.status = TaskStatus.ERROR; task.error = "computer-use engine not available"; return task
         self._status = EngineStatus.RUNNING
@@ -3210,7 +3674,7 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 """
     # Inline JS
     js = """
-const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised'};
+const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null};
 function updateSystemHealth(){
   const dot=document.getElementById("healthDot"),txt=document.getElementById("healthText");
   const wsEl=document.getElementById("healthWS"),engEl=document.getElementById("healthEngines"),brEl=document.getElementById("healthBridge");
@@ -3279,6 +3743,11 @@ function connect(){
       else if(m.type==="template_update"){state.templates=m.payload;renderTemplates();}
       else if(m.type==="approval_request"){showApprovalModal(m.payload);}
       else if(m.type==="config_update"){if(m.payload.automation_mode){state.automationMode=m.payload.automation_mode;updateAutomationModeUI();}}
+      else if(m.type==="workflow_update"){state.workflows=m.payload;renderWorkflows();updateTabBadges();}
+      else if(m.type==="recording_status"){handleRecordingStatus(m.payload);}
+      else if(m.type==="recording_result"){handleRecordingResult(m.payload);}
+      else if(m.type==="workflow_saved"){addActivity({timestamp:new Date().toISOString(),event_type:"workflow",detail:"Saved workflow: "+(m.payload.name||"")});}
+      else if(m.type==="replay_started"){addActivity({timestamp:new Date().toISOString(),event_type:"replay",detail:"Replaying workflow: "+(m.payload.workflow||"")});}
     }catch(err){console.error("[ClawBridge] WS message parse error:",err);}
   };
 }
@@ -3931,6 +4400,7 @@ async function switchView(view){
   document.getElementById("memoryView").style.display=view==="memory"?"flex":"none";
   document.getElementById("scheduleView").style.display=view==="schedules"?"flex":"none";
   const hv=document.getElementById("historyView");if(hv)hv.style.display=view==="history"?"flex":"none";
+  const wv=document.getElementById("workflowsView");if(wv)wv.style.display=view==="workflows"?"flex":"none";
   // Update sidebar nav items
   document.querySelectorAll(".sidebar-nav-item").forEach(el=>{
     el.classList.toggle("active",el.id==="nav-"+view);
@@ -3939,13 +4409,132 @@ async function switchView(view){
   if(view==="memory"){loadMemory();const mb=document.getElementById("memoryBadge");if(mb)mb.style.display="none";}
   if(view==="schedules")loadScheduleView();
   if(view==="history")renderHistory();
+  if(view==="workflows")renderWorkflows();
 }
 function updateTabBadges(){
   // Schedule badge
   const activeScheds=state.schedules.filter(s=>s.enabled).length;
   const sb=document.getElementById("schedulesBadge");
   if(sb){if(activeScheds>0){sb.textContent=activeScheds;sb.style.display="block";}else{sb.style.display="none";}}
+  // Workflows badge
+  const wfCount=state.workflows?state.workflows.length:0;
+  const wb=document.getElementById("workflowsBadge");
+  if(wb){if(wfCount>0){wb.textContent=wfCount;wb.style.display="block";}else{wb.style.display="none";}}
 }
+// ── Workflow Recording & Replay ──
+let _recordingInterval=null;
+function toggleRecording(){
+  if(state.recording){
+    // Stop recording
+    if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify({type:"recording_stop"}));
+  }else{
+    // Start recording
+    if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify({type:"recording_start"}));
+  }
+}
+function handleRecordingStatus(p){
+  state.recording=!!p.active;
+  const btn=document.getElementById("recordBtn");
+  const btnText=document.getElementById("recordBtnText");
+  const btnIcon=document.getElementById("recordBtnIcon");
+  const timer=document.getElementById("recordingTimer");
+  if(state.recording){
+    if(btn)btn.style.background="#7f1d1d";
+    if(btnText)btnText.textContent="Stop";
+    if(btnIcon)btnIcon.style.background="#ef4444";
+    state.recordingStartTime=Date.now();
+    if(timer){timer.style.display="inline";timer.textContent="00:00";}
+    _recordingInterval=setInterval(()=>{
+      if(!state.recordingStartTime)return;
+      const s=Math.floor((Date.now()-state.recordingStartTime)/1000);
+      const mm=String(Math.floor(s/60)).padStart(2,"0");
+      const ss=String(s%60).padStart(2,"0");
+      if(timer)timer.textContent=mm+":"+ss;
+    },1000);
+  }else{
+    if(btn)btn.style.background="#2d3748";
+    if(btnText)btnText.textContent="Record";
+    if(btnIcon)btnIcon.style.background="#ef4444";
+    if(timer)timer.style.display="none";
+    state.recordingStartTime=null;
+    if(_recordingInterval){clearInterval(_recordingInterval);_recordingInterval=null;}
+  }
+}
+function handleRecordingResult(p){
+  state.recordingActions=p.actions||[];
+  const form=document.getElementById("saveWorkflowForm");
+  const info=document.getElementById("recordingInfo");
+  if(form)form.style.display="block";
+  if(info)info.textContent="Captured "+state.recordingActions.length+" actions. Give this workflow a name to save it.";
+}
+function saveWorkflow(){
+  const name=(document.getElementById("wfName")||{}).value||"";
+  const desc=(document.getElementById("wfDescription")||{}).value||"";
+  const tagsStr=(document.getElementById("wfTags")||{}).value||"";
+  if(!name.trim()){alert("Please enter a workflow name.");return;}
+  if(!state.recordingActions||state.recordingActions.length===0){alert("No recorded actions to save.");return;}
+  const tags=tagsStr.split(",").map(t=>t.trim()).filter(Boolean);
+  if(state.ws&&state.ws.readyState===1){
+    state.ws.send(JSON.stringify({type:"save_workflow",payload:{name:name.trim(),description:desc,actions:state.recordingActions,tags:tags}}));
+  }
+  discardRecording();
+}
+function discardRecording(){
+  state.recordingActions=null;
+  const form=document.getElementById("saveWorkflowForm");
+  if(form)form.style.display="none";
+  if(document.getElementById("wfName"))document.getElementById("wfName").value="";
+  if(document.getElementById("wfDescription"))document.getElementById("wfDescription").value="";
+  if(document.getElementById("wfTags"))document.getElementById("wfTags").value="";
+}
+function renderWorkflows(){
+  const container=document.getElementById("workflowList");
+  if(!container)return;
+  const wfs=state.workflows||[];
+  if(wfs.length===0){
+    container.innerHTML='<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">No workflows saved yet. Click Record to create one.</div>';
+    return;
+  }
+  let html="";
+  for(const wf of wfs){
+    const stepCount=(wf.actions||[]).length;
+    const tags=(wf.tags||[]).map(t=>'<span style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:10px;color:var(--muted);">'+t+'</span>').join(" ");
+    const replayed=wf.replay_count>0?' <span style="font-size:11px;color:var(--muted);">Replayed '+wf.replay_count+'x</span>':"";
+    const created=wf.created_at?new Date(wf.created_at).toLocaleString():"";
+    html+='<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">';
+    html+='<div><span style="font-weight:600;font-size:14px;">'+_esc(wf.name)+'</span>'+replayed+'</div>';
+    html+='<div style="display:flex;gap:6px;">';
+    html+='<button class="btn" onclick="replayWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 10px;">Replay</button>';
+    html+='<button class="btn" onclick="deleteWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 10px;background:#2d3748;border:1px solid var(--border);">Delete</button>';
+    html+='</div></div>';
+    if(wf.description)html+='<p style="font-size:12px;color:var(--muted);margin-bottom:6px;">'+_esc(wf.description)+'</p>';
+    html+='<div style="display:flex;gap:12px;align-items:center;font-size:11px;color:var(--muted);">';
+    html+='<span>'+stepCount+' steps</span>';
+    if(wf.target_app)html+='<span>App: '+_esc(wf.target_app)+'</span>';
+    html+='<span>'+created+'</span>';
+    if(tags)html+='<span>'+tags+'</span>';
+    html+='</div></div>';
+  }
+  container.innerHTML=html;
+}
+function replayWorkflow(id){
+  if(state.ws&&state.ws.readyState===1){
+    state.ws.send(JSON.stringify({type:"replay_workflow",payload:{id:id}}));
+    switchView("chat");
+  }
+}
+async function deleteWorkflow(id){
+  if(!confirm("Delete this workflow?"))return;
+  try{
+    const r=await fetch("/api/workflows/"+id,{method:"DELETE"});
+    if(r.ok){
+      state.workflows=state.workflows.filter(w=>w.id!==id);
+      renderWorkflows();updateTabBadges();
+    }
+  }catch(e){console.error("Delete workflow error:",e);}
+}
+function _esc(s){if(!s)return"";return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 // ── Onboarding ──
 function checkOnboarding(){
   if(localStorage.getItem("onboarding_dismissed")==="true"){
@@ -4196,6 +4785,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     if(p.tasks&&p.tasks.length){state.tasks=p.tasks;settleAll(p.tasks);render();}
     if(p.schedules){state.schedules=p.schedules;renderSchedules();updateTabBadges();}
     if(p.templates){state.templates=p.templates;renderTemplates();}
+    if(p.workflows){state.workflows=p.workflows;renderWorkflows();updateTabBadges();}
     if(p.config&&p.config.keys){
       try{
         const c=p.config;
@@ -4553,6 +5143,11 @@ document.addEventListener('DOMContentLoaded', () => {
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
         <span>History</span>
       </div>
+      <div class="sidebar-nav-item" onclick="switchView('workflows')" id="nav-workflows">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        <span>Workflows</span>
+        <span id="workflowsBadge" class="nav-badge" style="display:none">0</span>
+      </div>
     </aside>
     <main>
       <div class="chat-header">
@@ -4738,6 +5333,41 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
       </div>
+      <!-- Workflows View -->
+      <div id="workflowsView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
+        <div style="max-width:1200px;margin:0 auto;width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <div>
+              <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Workflows</h3>
+              <p style="font-size:12px;color:var(--muted)">Record, save, and replay desktop workflows</p>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <span id="recordingTimer" style="display:none;font-size:12px;color:#ef4444;font-weight:600;font-variant-numeric:tabular-nums;">00:00</span>
+              <button id="recordBtn" class="btn" onclick="toggleRecording()" style="font-size:13px;background:#2d3748;border:1px solid var(--border)">
+                <span id="recordBtnIcon" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:6px;vertical-align:middle;"></span>
+                <span id="recordBtnText">Record</span>
+              </button>
+              <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#2d3748;border:1px solid var(--border)">Back to Chat</button>
+            </div>
+          </div>
+          <!-- Save workflow form (hidden until recording stops) -->
+          <div id="saveWorkflowForm" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;">
+            <h4 style="font-size:13px;font-weight:600;margin-bottom:8px;">Save Recorded Workflow</h4>
+            <p id="recordingInfo" style="font-size:12px;color:var(--muted);margin-bottom:10px;"></p>
+            <input id="wfName" placeholder="Workflow name" style="margin-bottom:6px;font-size:12px;width:100%;box-sizing:border-box;">
+            <input id="wfDescription" placeholder="Description (optional)" style="margin-bottom:6px;font-size:12px;width:100%;box-sizing:border-box;">
+            <input id="wfTags" placeholder="Tags (comma-separated, optional)" style="margin-bottom:8px;font-size:12px;width:100%;box-sizing:border-box;">
+            <div style="display:flex;gap:8px;">
+              <button class="btn" onclick="saveWorkflow()" style="font-size:12px;flex:1;">Save Workflow</button>
+              <button class="btn" onclick="discardRecording()" style="font-size:12px;background:#2d3748;border:1px solid var(--border);">Discard</button>
+            </div>
+          </div>
+          <!-- Workflow list -->
+          <div id="workflowList">
+            <div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">No workflows saved yet. Click Record to create one.</div>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
   <!-- Activation Modal -->
@@ -4885,7 +5515,11 @@ button:hover{{background:#4f46e5}}</style></head>
             templates = [t.model_dump() for t in get_template_manager().list_all()]
         except Exception:
             schedules, templates = [], []
-        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates}
+        try:
+            workflows = [w.model_dump(mode="json") for w in get_workflow_manager().list_all()]
+        except Exception:
+            workflows = []
+        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates, "workflows": workflows}
         preload = '<script>window.__PRELOAD__=' + _json.dumps(preload_data, default=str) + ';</script>'
         html = _dashboard_html()
         html = html.replace("</head>", preload + "\n</head>")
@@ -5419,6 +6053,78 @@ button:hover{{background:#4f46e5}}</style></head>
         result = await get_manager().submit(task)
         return {"template": tmpl.model_dump(), "task": result.model_dump(mode="json")}
 
+    # ── Workflow Endpoints ─────────────────────────────────────────────────
+    @app.get("/api/workflows")
+    async def list_workflows():
+        return [w.model_dump(mode="json") for w in get_workflow_manager().list_all()]
+
+    @app.get("/api/workflows/{wf_id}")
+    async def get_workflow(wf_id: str):
+        wf = get_workflow_manager().get(wf_id)
+        if not wf:
+            raise HTTPException(404, "Workflow not found")
+        return wf.model_dump(mode="json")
+
+    @app.post("/api/workflows")
+    async def create_workflow(body: dict):
+        name = body.get("name", "").strip()
+        actions = body.get("actions", [])
+        if not name or not actions:
+            raise HTTPException(400, "name and actions are required")
+        description = body.get("description", "")
+        target_app = body.get("target_app", "")
+        # Auto-detect target app from window titles if not specified
+        if not target_app:
+            from collections import Counter as _Ctr
+            browser_kw = ("brave", "chrome", "firefox", "edge", "safari", "opera", "clawbridge dashboard")
+            titles = [a.get("window_title", "") for a in actions if a.get("window_title")]
+            titles = [t for t in titles if not any(bk in t.lower() for bk in browser_kw)]
+            if titles:
+                target_app = _Ctr(titles).most_common(1)[0][0]
+        tags = body.get("tags", [])
+        wf = get_workflow_manager().create(name, description, actions, target_app, tags)
+        await _broadcast({"type": "workflow_update", "payload": [w.model_dump(mode="json") for w in get_workflow_manager().list_all()]})
+        return wf.model_dump(mode="json")
+
+    @app.delete("/api/workflows/{wf_id}")
+    async def delete_workflow(wf_id: str):
+        if not get_workflow_manager().delete(wf_id):
+            raise HTTPException(404, "Workflow not found")
+        await _broadcast({"type": "workflow_update", "payload": [w.model_dump(mode="json") for w in get_workflow_manager().list_all()]})
+        return {"status": "ok"}
+
+    @app.post("/api/workflows/{wf_id}/replay")
+    async def replay_workflow(wf_id: str):
+        wf = get_workflow_manager().get(wf_id)
+        if not wf:
+            raise HTTPException(404, "Workflow not found")
+        task = Task(prompt=f"replay: {wf.name}", engine=EngineName.COMPUTER_USE)
+        result = await get_manager().submit(task)
+        return {"workflow": wf.model_dump(mode="json"), "task": result.model_dump(mode="json")}
+
+    @app.post("/api/recording/start")
+    async def start_recording():
+        mgr = get_manager()
+        engine = mgr._engines.get(EngineName.COMPUTER_USE)
+        if not engine:
+            raise HTTPException(400, "computer-use engine not available")
+        started = engine.start_recording()
+        if not started:
+            raise HTTPException(409, "Already recording")
+        await _broadcast({"type": "recording_status", "payload": {"active": True}})
+        return {"status": "recording"}
+
+    @app.post("/api/recording/stop")
+    async def stop_recording():
+        mgr = get_manager()
+        engine = mgr._engines.get(EngineName.COMPUTER_USE)
+        if not engine:
+            raise HTTPException(400, "computer-use engine not available")
+        actions = await engine.stop_recording()
+        await _broadcast({"type": "recording_status", "payload": {"active": False}})
+        await _broadcast({"type": "recording_result", "payload": {"actions": actions, "count": len(actions)}})
+        return {"status": "stopped", "actions": actions, "count": len(actions)}
+
     # ── Webhook Endpoint ────────────────────────────────────────────────────
     @app.post("/api/webhook/{webhook_id}")
     async def webhook_trigger(webhook_id: str, body: dict = {}):
@@ -5452,6 +6158,7 @@ button:hover{{background:#4f46e5}}</style></head>
             await websocket.send_json({"type": "task_list", "payload": [t.model_dump(mode="json") for t in get_manager().list_tasks()]})
             await websocket.send_json({"type": "schedule_update", "payload": [s.model_dump() for s in get_schedule_manager().list_all()]})
             await websocket.send_json({"type": "template_update", "payload": [t.model_dump() for t in get_template_manager().list_all()]})
+            await websocket.send_json({"type": "workflow_update", "payload": [w.model_dump(mode="json") for w in get_workflow_manager().list_all()]})
             while True:
                 data = await websocket.receive_json()
                 if data.get("type") == "ping":
@@ -5467,6 +6174,47 @@ button:hover{{background:#4f46e5}}</style></head>
                             "type": "approval_ack",
                             "payload": {"request_id": request_id, "handled": handled}
                         })
+                elif data.get("type") == "recording_start":
+                    engine = get_manager()._engines.get(EngineName.COMPUTER_USE)
+                    if engine:
+                        started = engine.start_recording()
+                        await _broadcast({"type": "recording_status", "payload": {"active": started}})
+                elif data.get("type") == "recording_stop":
+                    engine = get_manager()._engines.get(EngineName.COMPUTER_USE)
+                    if engine:
+                        actions = await engine.stop_recording()
+                        await _broadcast({"type": "recording_status", "payload": {"active": False}})
+                        await websocket.send_json({"type": "recording_result", "payload": {"actions": actions, "count": len(actions)}})
+                elif data.get("type") == "save_workflow":
+                    payload = data.get("payload", {})
+                    name = payload.get("name", "").strip()
+                    actions = payload.get("actions", [])
+                    if name and actions:
+                        # Auto-detect target app from window titles if not specified
+                        target_app = payload.get("target_app", "")
+                        if not target_app:
+                            from collections import Counter
+                            browser_kw = ("brave", "chrome", "firefox", "edge", "safari", "opera", "clawbridge dashboard")
+                            titles = [a.get("window_title", "") for a in actions if a.get("window_title")]
+                            titles = [t for t in titles if not any(bk in t.lower() for bk in browser_kw)]
+                            if titles:
+                                target_app = Counter(titles).most_common(1)[0][0]
+                        wf = get_workflow_manager().create(
+                            name=name,
+                            description=payload.get("description", ""),
+                            actions=actions,
+                            target_app=target_app,
+                            tags=payload.get("tags", []),
+                        )
+                        await _broadcast({"type": "workflow_update", "payload": [w.model_dump(mode="json") for w in get_workflow_manager().list_all()]})
+                        await websocket.send_json({"type": "workflow_saved", "payload": wf.model_dump(mode="json")})
+                elif data.get("type") == "replay_workflow":
+                    wf_id = data.get("payload", {}).get("id", "")
+                    wf = get_workflow_manager().get(wf_id)
+                    if wf:
+                        task = Task(prompt=f"replay: {wf.name}", engine=EngineName.COMPUTER_USE)
+                        result = await get_manager().submit(task)
+                        await websocket.send_json({"type": "replay_started", "payload": {"task_id": result.id, "workflow": wf.name}})
         except WebSocketDisconnect:
             pass
         finally:

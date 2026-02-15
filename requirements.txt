@@ -28,6 +28,9 @@ Pillow>=10.0.0
 mss>=9.0.0
 pywinauto>=0.6.8
 
+# Input recording for workflow capture
+pynput>=1.7.6
+
 # System tray icon
 pystray>=0.19.0
 

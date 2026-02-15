@@ -29,7 +29,7 @@ from pathlib import Path
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 ROOT = Path(__file__).parent.resolve()
 DIST_DIR = ROOT / "dist"
