@@ -6,7 +6,7 @@ ClawBridge is a local-first AI agent platform that unifies multiple automation e
 
 Submit a task, pick an engine (or let Auto choose), and watch it run. Everything stays on your machine — or bridge to the cloud.
 
-**Version:** 0.1.0 | [Changelog](CHANGELOG.md)
+**Version:** 0.2.0 | [Changelog](CHANGELOG.md)
 
 ---
 
@@ -18,13 +18,14 @@ Submit a task, pick an engine (or let Auto choose), and watch it run. Everything
 
 ### Windows Installer (Recommended)
 
-Download `ClawBridge-Setup-0.1.0.exe` and run it. The installer:
+Download `ClawBridge-Setup-0.2.0.exe` and run it. The installer:
 
 1. Installs ClawBridge to `C:\Program Files\ClawBridge` (or user folder)
 2. Bundles Python 3.12, Playwright, and all dependencies
 3. Creates Start Menu shortcuts
 4. Optionally installs OpenClaw engine (can also install later from dashboard)
 5. Creates `.env` from template on first run
+6. Shows a progress bar during post-install setup (Playwright download, engine config)
 
 **Optional installer tasks**:
 - **Desktop shortcut**: Quick access from your desktop
@@ -38,7 +39,7 @@ After installation, launch ClawBridge from the Start Menu and open **http://127.
 The monolith `clawbridge.py` is the primary entry point — one file, no package structure needed:
 
 ```bash
-pip install fastapi uvicorn pydantic python-dotenv httpx websockets anthropic pyautogui mss pillow pywinauto
+pip install fastapi uvicorn pydantic python-dotenv httpx websockets anthropic pyautogui mss pillow pywinauto pynput
 # Copy .env.example to .env and add at least one API key
 cp .env.example .env
 python clawbridge.py
@@ -110,7 +111,7 @@ ClawBridge has two deployment forms that share the same logic:
 
 | Form | File | Use Case |
 |------|------|----------|
-| **Monolith** | `clawbridge.py` (~2400 lines) | Primary. Single file, easy to share/deploy |
+| **Monolith** | `clawbridge.py` (~6200 lines) | Primary. Single file, easy to share/deploy |
 | **Package** | `clawbridge/` directory | Modular. For development, testing, extensibility |
 
 ### How It Works
@@ -126,6 +127,12 @@ User → Dashboard (http://127.0.0.1:8765)
   ↓      ↓          ↓
 browser-use  computer-use  OpenClaw
 (Playwright)  (pyautogui)   (Node.js CDP)
+                 ↑
+           Perception Layer
+           (screenshot + UIA accessibility)
+                 ↑
+           Recorder / Replay
+           (pynput capture → adaptive replay)
   ↓      ↓          ↓
   └──────┼──────────┘
          ↓
@@ -169,6 +176,7 @@ The computer-use engine controls the full Windows desktop via screenshots + mous
 - **Forced reasoning**: Model must follow `[OBSERVE]/[GOAL]/[PLAN]/[ACTION]` protocol before every action
 - **Stale detection**: Perceptual hash comparison warns when screenshots don't change after an action
 - **OpenRouter compatible**: Uses function-tool schema when routing through OpenRouter, native `computer_20241022` for direct Anthropic
+- **Workflow recording & replay**: Record desktop actions via pynput, save as workflows, replay adaptively with element matching and LLM fallback (see [Workflow Recording](#workflow-recording--replay))
 
 ### Browser-Use Engine Details
 
@@ -176,6 +184,39 @@ The computer-use engine controls the full Windows desktop via screenshots + mous
 - **CDP mode**: Connects to an existing Chrome via `--remote-debugging-port=9222`
 - **User Data Dir mode**: Persistent Chrome profile with stored logins
 - **Launch Chrome Session**: Dashboard button launches Chrome with persistent profile at `%LOCALAPPDATA%\ClawBridge\ChromeProfile`
+
+---
+
+## Workflow Recording & Replay
+
+ClawBridge can record your desktop actions and replay them adaptively — even when UI elements move or change.
+
+### Recording
+
+1. Navigate to the **Workflows** tab in the dashboard
+2. Click **Start Recording** — a red indicator and timer appear
+3. Perform your desktop actions (clicks, typing, keyboard shortcuts)
+4. Click **Stop Recording** — actions are captured with per-event window titles
+5. Save with a name and optional description
+
+### Replay
+
+- Click **Replay** on any saved workflow, or type `replay: Workflow Name` in chat
+- ClawBridge replays each action using **element matching** (accessibility tree comparison):
+  1. **automation_id exact match** (confidence 1.0)
+  2. **name + type + parent** (0.95)
+  3. **name + type** (0.85)
+  4. **type + proximity** (0.6)
+- If match confidence is below 0.7, an **LLM fallback** describes the intended step to the AI model with a screenshot
+- Auto-detects target app from recorded window titles
+- Handles app launch patterns (Win key → search → Enter)
+
+### Perception Layer
+
+The recording system is backed by a standalone perception module (`clawbridge/perception/`):
+
+- **Screenshot utilities**: Async full-screen and window-crop capture, perceptual similarity comparison
+- **Accessibility tree**: Enhanced pywinauto UIA wrapper with `ElementSnapshot` dataclass, multi-strategy element matching
 
 ---
 
@@ -189,6 +230,8 @@ The web dashboard at `http://127.0.0.1:8765` provides:
 - **Engine status**: See which engines are available/running/errored
 - **Config panel**: API key management, browser session controls, machine ID
 - **Activity feed**: Audit trail of every action taken
+- **Workflows tab**: Record, save, and replay desktop workflows
+- **Soul/Memory tabs**: Edit agent personality and view memory logs
 
 ## Configuration
 
@@ -315,7 +358,14 @@ AUTOMATION_MODE=supervised   # or: autonomous
 | `DELETE` | `/api/schedules/{id}` | Delete schedule |
 | `GET` | `/api/templates` | List task templates |
 | `POST` | `/api/templates` | Create task template |
-| `WS` | `/ws` | WebSocket (tasks, frames, audit, approvals) |
+| `GET` | `/api/workflows` | List saved workflows |
+| `GET` | `/api/workflows/{id}` | Get workflow details |
+| `POST` | `/api/workflows` | Create workflow from recorded actions |
+| `DELETE` | `/api/workflows/{id}` | Delete workflow |
+| `POST` | `/api/workflows/{id}/replay` | Trigger workflow replay |
+| `POST` | `/api/recording/start` | Start desktop recording |
+| `POST` | `/api/recording/stop` | Stop recording, return actions |
+| `WS` | `/ws` | WebSocket (tasks, frames, audit, approvals, workflows) |
 
 ### WebSocket Events
 
@@ -327,6 +377,11 @@ AUTOMATION_MODE=supervised   # or: autonomous
 | `approval_request` | Server → Client | High-risk action needs approval |
 | `approval_response` | Client → Server | User approves/denies action |
 | `approval_ack` | Server → Client | Confirmation of approval processing |
+| `recording_status` | Server → Client | Recording started/stopped status |
+| `recording_result` | Server → Client | Recorded actions after stop |
+| `workflow_update` | Server → Client | Workflow list changed |
+| `workflow_saved` | Server → Client | Workflow saved confirmation |
+| `replay_started` | Server → Client | Workflow replay task created |
 
 ## Remote Bridge (Beta)
 
@@ -343,7 +398,8 @@ This enables the **bridge architecture**: local machines provide the "hands" (de
 ## Project Structure
 
 ```
-clawbridge.py                 # Monolith — primary entry point
+clawbridge.py                 # Monolith — primary entry point (~6200 lines)
+clawbridge_mcp.py             # MCP server (stdio/HTTP proxy to REST API)
 clawbridge/
   config.py                   # Settings & BYOK key management
   engines/
@@ -351,6 +407,12 @@ clawbridge/
     browser_use_engine.py     # Playwright-based web automation
     computer_use_engine.py    # Desktop control via Anthropic API
     openclaw_engine.py        # Node.js CDP agent
+  perception/                 # Perception layer (v0.2.0)
+    screenshot.py             # Async screenshot utilities
+    accessibility.py          # Enhanced UIA wrapper + element matching
+  recorder/                   # Workflow recording (v0.2.0)
+    capture.py                # pynput mouse/keyboard capture
+    processor.py              # Raw event → enriched action processing
   orchestrator/
     manager.py                # Task lifecycle, engine routing
   server/
@@ -366,8 +428,29 @@ clawbridge/
     logger.py                 # Audit logging to SQLite
   shared/
     schemas.py                # Pydantic models
+build.py                      # Portable Windows build system
+installer.iss                 # Inno Setup installer script
 .env.example                  # Configuration template
+.mcp.json                     # MCP server registration for Claude Code
 ```
+
+## MCP Server
+
+ClawBridge exposes its full API as an MCP (Model Context Protocol) server, enabling integration with Claude Code, Cursor, and other MCP-compatible tools.
+
+```bash
+# Register with Claude Code
+claude mcp add clawbridge -- python clawbridge_mcp.py
+
+# Or run standalone with HTTP transport
+python clawbridge_mcp.py --http
+```
+
+**13 tools** available: `run_task`, `get_task_status`, `list_tasks`, `cancel_task`, `list_engines`, `get_task_steps`, `get_task_audit`, `search_memory`, `get_agent_context`, `append_memory`, `list_schedules`, `create_schedule`, `get_config`
+
+See `.mcp.json` for project-level registration.
+
+---
 
 ## Roadmap
 
@@ -375,14 +458,21 @@ clawbridge/
 - [x] Dashboard UI overhaul (chat interface, activity feed, live view)
 - [x] Smart engine selection (auto-detects desktop vs web tasks)
 - [x] OpenClaw one-click install from dashboard
-- [x] Windows installer via Inno Setup
+- [x] Windows installer via Inno Setup with progress bar
 - [x] Onboarding checklist for first-time users
 - [x] Task scheduling and templates
 - [x] Personality/memory system
+- [x] Step-level streaming and task replay
+- [x] Dashboard authentication (token-based)
+- [x] Real-time cost tracking
+- [x] Error recovery with exponential backoff
+- [x] MCP server mode (13 tools, stdio + HTTP)
+- [x] Supervised/Autonomous automation modes
+- [x] Workflow recording & replay with perception layer (v0.2.0)
 
 ### In Progress
-- [ ] Fix browser-use engine import compatibility
-- [ ] Test & stabilize "Launch Chrome Session" persistent profile flow
+- [ ] Test & stabilize browser-use engine runtime
+- [ ] Refine workflow replay element matching accuracy
 
 ### Planned
 - [ ] Code signing certificate for Windows installer

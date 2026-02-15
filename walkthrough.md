@@ -1,7 +1,7 @@
 # ClawBridge - Implementation Walkthrough & Status Tracker
 
 **Last updated:** February 2026
-**Version:** 0.1.0 (MVP)
+**Version:** 0.2.0
 **Repository:** [NickRomanek/clawbridge](https://github.com/NickRomanek/clawbridge)
 **Branch:** main
 
@@ -86,7 +86,7 @@
   - Modern dark theme with gradients and premium aesthetics
 - **Docker support** -- Dockerfile + docker-compose.yml with optional OpenClaw service
 - **Cross-platform setup** -- `setup.sh` (Unix) + `setup.ps1` (Windows)
-- **Single-file mode** -- `clawbridge.py` (~5,000 lines) as standalone distributable with embedded HTML/CSS/JS dashboard
+- **Single-file mode** -- `clawbridge.py` (~6,200 lines) as standalone distributable with embedded HTML/CSS/JS dashboard
 
 ### Phase 5: Automation Modes & Approval Workflow
 **Status: COMPLETE**
@@ -122,7 +122,28 @@
   - Install OpenClaw (optional, can install later from dashboard)
   - Preserves .env and workspace on upgrade
   - Creates .env from template on first run
-- **Output**: `dist/ClawBridge-Setup-0.1.0.exe` (~246 MB)
+- **Output**: `dist/ClawBridge-Setup-0.2.0.exe` (~295 MB)
+- **Post-install progress bar**: Visual progress through Playwright download, optional OpenClaw install, and workspace setup
+
+### Phase 7: Workflow Recording & Perception Layer
+**Status: COMPLETE**
+
+- **Perception modules** (`clawbridge/perception/`):
+  - `screenshot.py` -- async screenshot utilities (full screen, window crop, perceptual similarity)
+  - `accessibility.py` -- enhanced pywinauto UIA wrapper with `ElementSnapshot` dataclass, 4-strategy element matching (automation_id → name+type+parent → name+type → proximity)
+- **Recorder modules** (`clawbridge/recorder/`):
+  - `capture.py` -- `InputRecorder` class using pynput mouse/keyboard listeners with per-event window title capture and keystroke coalescing
+  - `processor.py` -- converts raw pynput events into enriched `RecordedAction` objects
+- **Engine integration** (in `ComputerUseEngine`):
+  - `start_recording()` / `stop_recording()` -- lazy-imports InputRecorder, captures and processes events
+  - `replay_workflow()` -- adaptive replay loop with element matching, LLM fallback, auto target-app detection, and step broadcasting
+  - `_find_matching_workflow()` -- safe matching via `replay: Name` prefix or exact name match (no substring false positives)
+- **WorkflowManager** -- file-based JSON persistence in `workspace/workflows/`, follows TemplateManager pattern
+- **Schemas**: `RecordedAction`, `WorkflowTemplate`, `ReplayState` Pydantic models; `workflows` SQLite table
+- **REST routes**: 7 endpoints for workflow CRUD, replay, and recording start/stop
+- **WebSocket handlers**: `recording_start`, `recording_stop`, `save_workflow`, `replay_workflow` with corresponding server→client events
+- **Dashboard UI**: Workflows tab with record/stop toggle, timer, save form, workflow cards with replay/delete
+- **Dependency**: `pynput>=1.7.6` added to requirements.txt and auto-install
 
 ### Infrastructure
 **Status: COMPLETE**
@@ -138,13 +159,15 @@
 ## Current Gaps (To Address Next)
 
 ### Testing
-- **Limited tests exist.** Basic integration tests only.
+- **Limited tests exist.** Basic integration tests only (workflow CRUD + recording endpoints tested, 13 pass).
 - Highest-ROI targets: `schemas.py` (pure models), `safety.py` (pure functions), `config.py` (settings properties)
 - Secondary: `manager.py` (async orchestration with mocked engines), API routes (FastAPI TestClient)
 - Need approval workflow integration tests
+- Need workflow replay integration tests with mock accessibility tree
 
 ### Polish
-- browser-use engine import compatibility with latest library version
+- browser-use engine runtime testing and stabilization
+- Refine workflow replay element matching accuracy across different apps
 - Test "Launch Chrome Session" persistent profile flow on various Windows versions
 - Code signing certificate for Windows installer (eliminates SmartScreen warnings)
 
@@ -183,6 +206,7 @@ FastAPI Server
     +-- Config Routes (/api/config, /api/config/automation)
     +-- Schedule Routes (/api/schedules)
     +-- Template Routes (/api/templates)
+    +-- Workflow Routes (/api/workflows, /api/recording)
     +-- WebSocket (/ws)
     |
 TaskManager (orchestrator)
@@ -190,8 +214,12 @@ TaskManager (orchestrator)
     |
     +-- BrowserUseEngine (Playwright + browser-use)
     +-- ComputerUseEngine (pyautogui + mss + pywinauto)
+    |       +-- Workflow Recording (pynput capture)
+    |       +-- Adaptive Replay (element matching + LLM fallback)
+    |       +-- Perception Layer (screenshot + accessibility)
     +-- OpenClawEngine (Node.js + CDP gateway)
     |
+    +-- WorkflowManager (file-based JSON persistence)
     +-- ApprovalManager (Supervised mode)
     |       |
     |       +-- High-risk action detection
@@ -220,6 +248,7 @@ Audit Logger (telemetry)
 | Validation | Pydantic 2.x |
 | Browser automation | browser-use + Playwright |
 | Desktop automation | pyautogui + mss + pywinauto (Windows UIA) |
+| Workflow recording | pynput (mouse + keyboard capture) |
 | Alt engine | OpenClaw (Node.js + CDP) |
 | LLM providers | Anthropic, OpenAI, OpenRouter (BYOK) |
 | Persistence | SQLite |

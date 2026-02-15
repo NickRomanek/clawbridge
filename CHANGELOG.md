@@ -5,6 +5,56 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-15
+
+### Added
+
+#### Workflow Recording & Replay
+- **Desktop recording**: Record mouse clicks, keyboard input, and scroll events via pynput with per-event window title capture
+- **Keystroke coalescing**: Rapid keystrokes within 0.3s are merged into single "type" events
+- **Adaptive replay**: Replays workflows using accessibility tree element matching with 4-strategy confidence scoring (automation_id, name+type+parent, name+type, proximity)
+- **LLM fallback**: When element match confidence < 0.7, describes intended step to AI model with screenshot for intelligent recovery
+- **Auto target-app detection**: Detects target application from recorded window titles, handles app launch patterns (Win key → search → Enter)
+- **WorkflowManager**: File-based JSON persistence in `workspace/workflows/` with create, get, delete, list, and replay tracking
+- **Dashboard Workflows tab**: Record/stop toggle with timer, save form, workflow list with replay/delete buttons, step count and replay history
+
+#### Perception Layer (`clawbridge/perception/`)
+- **Screenshot utilities**: Async full-screen and window-crop capture, perceptual similarity comparison using PIL
+- **Accessibility module**: Enhanced pywinauto UIA wrapper with `ElementSnapshot` dataclass, `get_accessibility_tree()`, `get_element_at_point()`, and multi-strategy `find_matching_element()`
+
+#### New API Endpoints
+- `GET /api/workflows` — list all saved workflows
+- `GET /api/workflows/{id}` — get workflow details
+- `POST /api/workflows` — create workflow from recorded actions
+- `DELETE /api/workflows/{id}` — delete workflow
+- `POST /api/workflows/{id}/replay` — trigger adaptive replay
+- `POST /api/recording/start` — start desktop recording
+- `POST /api/recording/stop` — stop recording, return enriched actions
+
+#### New WebSocket Events
+- `recording_start` / `recording_stop` — control recording via WebSocket
+- `recording_status` / `recording_result` — recording state updates
+- `save_workflow` / `workflow_saved` — save and confirm workflow
+- `replay_workflow` / `replay_started` — trigger and confirm replay
+- `workflow_update` — workflow list changed notification
+
+#### Installer Improvements
+- Progress bar during post-install setup (Playwright download, OpenClaw install, workspace creation)
+- Visual step labels and percentage tracking
+
+### Changed
+- Monolith grew from ~5600 to ~6200 lines with workflow recording, replay, and perception integration
+- `pynput>=1.7.6` added to dependencies
+- Updated `_ensure_dependencies()` to auto-install pynput on first run
+- SQLite schema now includes `workflows` table
+
+### Fixed
+- Window title now captured per-event during recording (was previously captured once at stop time)
+- Key name translation from pynput to pyautogui (cmd→win, ctrl_l→ctrlleft, etc.)
+- Pre-focus correctly skipped when workflow starts with Win key press (app launch pattern)
+
+---
+
 ## [0.1.0] - 2026-02-14
 
 ### Added
