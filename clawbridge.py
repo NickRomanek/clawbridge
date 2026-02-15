@@ -28,10 +28,180 @@ if not sys.stdout or sys.executable.endswith('pythonw.exe'):
     sys.stderr = sys.stdout
 
 # ---------------------------------------------------------------------------
+# Early loading server — starts BEFORE dependency install using only stdlib.
+# Provides real-time startup progress via /startup-status JSON endpoint.
+# ---------------------------------------------------------------------------
+import threading
+import json as _json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+_startup_status: dict = {"stage": "Starting...", "detail": "", "progress": 0}
+_loading_server = None  # type: HTTPServer | None
+
+_LOADING_PAGE_HTML = b'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ClawBridge</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e4e4e7;display:flex;justify-content:center;
+     align-items:center;height:100vh;font-family:-apple-system,BlinkMacSystemFont,
+     "Segoe UI",Roboto,sans-serif}
+.container{text-align:center;max-width:420px;padding:40px}
+.logo{font-size:32px;font-weight:700;color:#fff;margin-bottom:8px;letter-spacing:-0.5px}
+.logo span{color:#6366f1}
+.sub{color:#71717a;font-size:14px;margin-bottom:32px}
+.progress-wrap{background:#18181b;border-radius:8px;height:8px;overflow:hidden;
+               margin-bottom:20px;border:1px solid #27272a}
+.progress-bar{height:100%;background:linear-gradient(90deg,#6366f1,#818cf8);
+              border-radius:8px;width:0%;transition:width 0.5s ease}
+.stage{color:#a1a1aa;font-size:15px;font-weight:500;min-height:22px}
+.detail{color:#52525b;font-size:13px;min-height:18px;margin-top:4px}
+.ready{display:none;margin-top:24px}
+.ready .check{font-size:36px;color:#22c55e;margin-bottom:8px}
+.ready .msg{color:#22c55e;font-size:16px;font-weight:600}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="logo">Claw<span>Bridge</span></div>
+  <div class="sub">Desktop &amp; Browser Automation</div>
+  <div class="progress-wrap"><div class="progress-bar" id="bar"></div></div>
+  <div class="stage" id="stage">Starting...</div>
+  <div class="detail" id="detail"></div>
+  <div class="ready" id="ready">
+    <div class="check">&#10003;</div>
+    <div class="msg">Ready!</div>
+  </div>
+</div>
+<script>
+(function(){
+  var bar=document.getElementById("bar"),
+      stage=document.getElementById("stage"),
+      detail=document.getElementById("detail"),
+      ready=document.getElementById("ready"),
+      done=false;
+
+  function pollStatus(){
+    if(done) return;
+    fetch("/startup-status").then(function(r){return r.json()}).then(function(d){
+      bar.style.width=d.progress+"%";
+      stage.textContent=d.stage;
+      detail.textContent=d.detail||"";
+      if(d.progress>=100){
+        done=true;
+        stage.textContent="Starting dashboard...";
+        detail.textContent="";
+        setTimeout(pollHealth,400);
+      } else {
+        setTimeout(pollStatus,600);
+      }
+    }).catch(function(){setTimeout(pollStatus,600)});
+  }
+
+  function pollHealth(){
+    fetch("/health").then(function(r){return r.json()}).then(function(d){
+      if(d.status==="ok"){
+        stage.style.display="none";
+        detail.style.display="none";
+        bar.style.width="100%";
+        ready.style.display="block";
+        setTimeout(function(){window.location.replace("/")},400);
+      } else {
+        setTimeout(pollHealth,300);
+      }
+    }).catch(function(){setTimeout(pollHealth,300)});
+  }
+
+  pollStatus();
+})();
+</script>
+</body>
+</html>'''
+
+
+class _LoadingHandler(BaseHTTPRequestHandler):
+    """Minimal handler for early loading server. Only serves loading page + status."""
+
+    def do_GET(self):
+        if self.path == "/startup-status":
+            body = _json.dumps(_startup_status).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/health":
+            body = b'{"status":"loading"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(_LOADING_PAGE_HTML)))
+            self.end_headers()
+            self.wfile.write(_LOADING_PAGE_HTML)
+
+    def log_message(self, *args):
+        pass  # silent
+
+
+def _read_port_from_env() -> int:
+    """Read port from env var or .env file, using only stdlib."""
+    port = os.environ.get("CLAWBRIDGE_PORT", "").strip()
+    if port:
+        try:
+            return int(port)
+        except ValueError:
+            pass
+    # Try reading from .env file directly (no dotenv yet)
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.isfile(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("CLAWBRIDGE_PORT="):
+                        val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        return int(val)
+        except (OSError, ValueError):
+            pass
+    return 8765
+
+
+# Start the loading server immediately
+_loading_port = _read_port_from_env()
+try:
+    # Probe whether port is genuinely free (SO_REUSEADDR masks conflicts on Windows)
+    import socket as _socket
+    _probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    _probe.settimeout(0.2)
+    if _probe.connect_ex(("127.0.0.1", _loading_port)) == 0:
+        _probe.close()
+        raise OSError("port already in use")
+    _probe.close()
+    _loading_server = HTTPServer(("127.0.0.1", _loading_port), _LoadingHandler)
+    threading.Thread(target=_loading_server.serve_forever, daemon=True).start()
+    print(f"  Loading page active on http://127.0.0.1:{_loading_port}")
+except OSError:
+    _loading_server = None  # Port in use — skip (uvicorn will report the error later)
+
+# Auto-open browser if requested (set by ClawBridge.bat windowless launcher)
+if os.environ.get("CLAWBRIDGE_OPEN_BROWSER") == "1" and _loading_server is not None:
+    import webbrowser as _wb
+    _wb.open(f"http://127.0.0.1:{_loading_port}")
+
+# ---------------------------------------------------------------------------
 # Auto-install dependencies if missing (run once, then exit; user runs again)
 # ---------------------------------------------------------------------------
 
 def _ensure_dependencies() -> None:
+    _startup_status.update({"stage": "Checking dependencies...", "progress": 5})
     required = [
         "fastapi",
         "uvicorn",
@@ -61,10 +231,16 @@ def _ensure_dependencies() -> None:
         except ImportError:
             missing.append(pkg)
     if not missing:
+        _startup_status.update({"stage": "Dependencies OK", "progress": 60})
         return
     print("Installing missing dependencies (one-time setup)...")
     print(f"  Missing: {', '.join(missing)}")
     print()
+    _startup_status.update({
+        "stage": "Installing packages...",
+        "detail": ", ".join(missing[:5]) + ("..." if len(missing) > 5 else ""),
+        "progress": 15,
+    })
     # Use --user if system Python site-packages is not writable
     pip_cmd = [sys.executable, "-m", "pip", "install", "-q"]
     import site as _site
@@ -73,6 +249,11 @@ def _ensure_dependencies() -> None:
         pip_cmd.append("--user")
         print("  (using --user install -- system Python detected)")
     subprocess.run(pip_cmd + required, check=True)
+    _startup_status.update({
+        "stage": "Installing browser engine...",
+        "detail": "Downloading Chromium",
+        "progress": 50,
+    })
     print("Installing Chromium for browser automation...")
     subprocess.run(
         [sys.executable, "-m", "playwright", "install", "chromium"],
@@ -81,6 +262,7 @@ def _ensure_dependencies() -> None:
     print()
     print("Dependencies installed! Continuing startup...")
     print()
+    _startup_status.update({"stage": "Loading modules...", "detail": "", "progress": 60})
     # Refresh importlib so freshly installed packages are importable
     import importlib
     importlib.invalidate_caches()
@@ -93,6 +275,8 @@ def _ensure_dependencies() -> None:
         sys.path.insert(0, user_site)
 
 _ensure_dependencies()
+
+_startup_status.update({"stage": "Loading modules...", "detail": "", "progress": 65})
 
 # Load .env
 try:
@@ -123,6 +307,8 @@ from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisco
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field, PrivateAttr
 import uvicorn
+
+_startup_status.update({"stage": "Modules loaded", "detail": "", "progress": 70})
 
 # ---------------------------------------------------------------------------
 # Config
@@ -6274,9 +6460,8 @@ def _create_tray_icon(url: str):
 
 
 def main() -> None:
-    import threading
+    global _loading_server
     import time as _time
-    from http.server import HTTPServer, BaseHTTPRequestHandler
 
     s = get_settings()
     print()
@@ -6287,52 +6472,35 @@ def main() -> None:
         print("  [!] Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY in .env")
     url = "http://%s:%s" % (s.host, s.port)
 
-    # 1. Start a minimal loading page server immediately (before heavy imports)
-    class _LoadingHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html')
-            self.end_headers()
-            self.wfile.write(b'''<!DOCTYPE html><html><head>
-            <meta http-equiv="refresh" content="3">
-            <style>
-                body { background: #0a0a0f; color: #e4e4e7; display: flex;
-                       justify-content: center; align-items: center; height: 100vh;
-                       font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; }
-                .container { text-align: center; }
-                h2 { color: #fff; margin-bottom: 12px; font-weight: 600; }
-                p { color: #71717a; font-size: 14px; }
-                .spinner { width: 48px; height: 48px; border: 3px solid #27272a;
-                           border-top: 3px solid #6366f1; border-radius: 50%;
-                           animation: spin 1s linear infinite; margin: 24px auto; }
-                @keyframes spin { to { transform: rotate(360deg); } }
-            </style></head><body><div class="container">
-            <div class="spinner"></div>
-            <h2>ClawBridge is starting...</h2>
-            <p>This page will refresh automatically.</p>
-            </div></body></html>''')
-        def log_message(self, *args): pass
+    _startup_status.update({"stage": "Initializing application...", "progress": 80})
 
-    loading_server = HTTPServer(('127.0.0.1', s.port), _LoadingHandler)
-    threading.Thread(target=loading_server.serve_forever, daemon=True).start()
-    print("  Loading page active...")
-
-    # 2. System tray icon in background thread (browser opened by .bat launcher)
+    # 1. System tray icon in background thread
     tray_icon = _create_tray_icon(url)
     if tray_icon:
         threading.Thread(target=tray_icon.run, daemon=True).start()
         print("  System tray icon active")
 
-    # 3. Create the app (this takes time due to heavy imports)
+    # 2. Create the app
+    _startup_status.update({
+        "stage": "Initializing application...",
+        "detail": "Setting up engines",
+        "progress": 85,
+    })
     print("  Initializing app...")
     app = create_app()
 
-    # 4. Shut down loading server right before uvicorn takes the port
-    loading_server.shutdown()
-    loading_server.server_close()
-    _time.sleep(1)  # pause to fully release the port
+    # 3. Signal ready — loading page JS will see 100% and start polling /health
+    _startup_status.update({"stage": "Starting dashboard...", "detail": "", "progress": 100})
+    _time.sleep(0.5)  # Let loading page detect 100% and prepare for transition
 
-    # 5. Start the real server
+    # 4. Shut down early loading server so uvicorn can bind the port
+    if _loading_server is not None:
+        _loading_server.shutdown()
+        _loading_server.server_close()
+        _loading_server = None
+        _time.sleep(0.5)  # Port release
+
+    # 5. Start the real server — loading page's /health poll will detect this
     print()
     uvicorn.run(app, host=s.host, port=s.port, log_level=s.log_level.lower())
 

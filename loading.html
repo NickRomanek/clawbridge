@@ -1,34 +1,49 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+<meta charset="utf-8">
 <title>ClawBridge</title>
 <style>
-  body { background: #0a0a0f; color: #e4e4e7; display: flex;
-         justify-content: center; align-items: center; height: 100vh;
-         font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; }
-  .container { text-align: center; }
-  h2 { color: #fff; margin-bottom: 12px; font-weight: 600; }
-  p { color: #71717a; font-size: 14px; }
-  .spinner { width: 48px; height: 48px; border: 3px solid #27272a;
-             border-top: 3px solid #6366f1; border-radius: 50%;
-             animation: spin 1s linear infinite; margin: 24px auto; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e4e4e7;display:flex;justify-content:center;
+     align-items:center;height:100vh;font-family:-apple-system,BlinkMacSystemFont,
+     "Segoe UI",Roboto,sans-serif}
+.container{text-align:center;max-width:420px;padding:40px}
+.logo{font-size:32px;font-weight:700;color:#fff;margin-bottom:8px;letter-spacing:-0.5px}
+.logo span{color:#6366f1}
+.sub{color:#71717a;font-size:14px;margin-bottom:32px}
+.spinner{width:48px;height:48px;border:3px solid #27272a;
+         border-top:3px solid #6366f1;border-radius:50%;
+         animation:spin 1s linear infinite;margin:0 auto 24px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.stage{color:#a1a1aa;font-size:15px;font-weight:500;min-height:22px}
+.detail{color:#52525b;font-size:13px;min-height:18px;margin-top:4px}
 </style>
+<!--
+  Fallback loading page. The primary flow uses the embedded loading server
+  in clawbridge.py which provides real-time progress. This file is only used
+  if opened directly (e.g. file:// URL) and polls with no-cors to detect
+  when the server is up, then redirects.
+-->
 <script>
+(function(){
   var url = "http://127.0.0.1:8765";
-  function check() {
-    fetch(url, { mode: "no-cors" })
-      .then(function() { window.location.href = url; })
-      .catch(function() { setTimeout(check, 2000); });
+  function check(){
+    fetch(url + "/health", {mode:"no-cors"})
+      .then(function(){ window.location.href = url; })
+      .catch(function(){ setTimeout(check, 2000); });
   }
   check();
+})();
 </script>
 </head>
 <body>
-  <div class="container">
-    <div class="spinner"></div>
-    <h2>ClawBridge is starting...</h2>
-    <p>You'll be redirected automatically.</p>
-  </div>
+<div class="container">
+  <div class="logo">Claw<span>Bridge</span></div>
+  <div class="sub">Desktop &amp; Browser Automation</div>
+  <div class="spinner"></div>
+  <div class="stage">Waiting for ClawBridge to start...</div>
+  <div class="detail">You'll be redirected automatically.</div>
+</div>
 </body>
 </html>
