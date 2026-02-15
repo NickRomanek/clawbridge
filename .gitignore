@@ -11,8 +11,10 @@ build/
 *.log
 .build_cache/
 .mcp.json
+.claude/
 *.stackdump
 workspace/memory/
+SECURITY_AUDIT.md
 logs/
 nul
 *.docx

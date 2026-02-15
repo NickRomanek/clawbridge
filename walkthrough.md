@@ -150,7 +150,7 @@
 
 - GitHub repository: `NickRomanek/clawbridge` (main branch)
 - `.gitignore` configured (excludes .env, .db, .id, __pycache__, node_modules, logs)
-- `LICENSE.txt` -- Proprietary RomaTek AI license with AI automation disclaimer
+- `LICENSE.txt` -- MIT License with AI automation disclaimer
 - `build.py` -- build automation for packaging
 - `CHANGELOG.md` -- Keep a Changelog format with semantic versioning
 
