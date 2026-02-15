@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>ClawBridge</title>
+<style>
+  body { background: #0a0a0f; color: #e4e4e7; display: flex;
+         justify-content: center; align-items: center; height: 100vh;
+         font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; }
+  .container { text-align: center; }
+  h2 { color: #fff; margin-bottom: 12px; font-weight: 600; }
+  p { color: #71717a; font-size: 14px; }
+  .spinner { width: 48px; height: 48px; border: 3px solid #27272a;
+             border-top: 3px solid #6366f1; border-radius: 50%;
+             animation: spin 1s linear infinite; margin: 24px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+<script>
+  var url = "http://127.0.0.1:8765";
+  function check() {
+    fetch(url, { mode: "no-cors" })
+      .then(function() { window.location.href = url; })
+      .catch(function() { setTimeout(check, 2000); });
+  }
+  check();
+</script>
+</head>
+<body>
+  <div class="container">
+    <div class="spinner"></div>
+    <h2>ClawBridge is starting...</h2>
+    <p>You'll be redirected automatically.</p>
+  </div>
+</body>
+</html>

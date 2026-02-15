@@ -49,6 +49,7 @@ PROJECT_FILES = [
     "LICENSE.txt",
     "clawbridge.ico",
     "requirements.txt",
+    "loading.html",
 ]
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -275,18 +276,18 @@ def step_launcher_scripts():
     )
     print("    run.bat (console mode)")
 
-    # ClawBridge.bat — windowless mode (uses pythonw.exe, system tray only)
-    # pythonw.exe is already windowless, no start command needed
+    # ClawBridge.bat — windowless mode (opens loading page instantly, then starts app)
     cb_bat = BUNDLE_DIR / "ClawBridge.bat"
     cb_bat.write_text(
         '@echo off\r\n'
         'cd /d "%~dp0"\r\n'
         'set PLAYWRIGHT_BROWSERS_PATH=%~dp0playwright_browsers\r\n'
         'set PATH=%~dp0nodejs;%~dp0python\\Scripts;%PATH%\r\n'
+        'start "" "%~dp0loading.html"\r\n'
         '"%~dp0python\\pythonw.exe" "%~dp0clawbridge.py"\r\n',
         encoding="utf-8"
     )
-    print("    ClawBridge.bat (windowless/tray mode)")
+    print("    ClawBridge.bat (windowless/tray mode + loading page)")
 
     # update.bat — re-install deps (for manual updates)
     update_bat = BUNDLE_DIR / "update.bat"

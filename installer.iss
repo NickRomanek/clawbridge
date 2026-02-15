@@ -68,8 +68,8 @@ Name: "{userstartup}\ClawBridge"; Filename: "{app}\{#MyAppExeName}"; WorkingDir:
 Filename: "{app}\python\python.exe"; Parameters: "-m playwright install chromium"; WorkingDir: "{app}"; StatusMsg: "Installing Playwright Chromium browser (this may take a moment)..."; Flags: runhidden waituntilterminated
 ; Install OpenClaw via bundled Node.js (optional task, runs before launch)
 Filename: "{app}\install_openclaw.bat"; WorkingDir: "{app}"; StatusMsg: "Installing OpenClaw engine (this may take a moment)..."; Tasks: installopenclaw; Flags: runhidden waituntilterminated
-; Offer to launch after install - launch pythonw.exe directly with nowait+shellexec to detach from installer
-Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\clawbridge.py"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait shellexec postinstall skipifsilent
+; Offer to launch after install - uses ClawBridge.bat which opens loading page instantly then starts the app
+Filename: "{app}\ClawBridge.bat"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent runhidden
 
 [UninstallDelete]
 ; Clean up generated files on uninstall

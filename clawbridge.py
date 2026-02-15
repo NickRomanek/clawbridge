@@ -5569,24 +5569,22 @@ def main() -> None:
     threading.Thread(target=loading_server.serve_forever, daemon=True).start()
     print("  Loading page active...")
 
-    # 2. Open browser immediately — user sees the loading page
-    webbrowser.open(url)
-
-    # 3. Start system tray icon in background thread
+    # 2. System tray icon in background thread (browser opened by .bat launcher)
     tray_icon = _create_tray_icon(url)
     if tray_icon:
         threading.Thread(target=tray_icon.run, daemon=True).start()
         print("  System tray icon active")
 
-    # 4. Create the app (this takes time due to heavy imports)
+    # 3. Create the app (this takes time due to heavy imports)
     print("  Initializing app...")
     app = create_app()
 
-    # 5. Shut down loading server right before uvicorn takes the port
+    # 4. Shut down loading server right before uvicorn takes the port
     loading_server.shutdown()
-    _time.sleep(0.5)  # brief pause to release the port
+    loading_server.server_close()
+    _time.sleep(1)  # pause to fully release the port
 
-    # 6. Start the real server
+    # 5. Start the real server
     print()
     uvicorn.run(app, host=s.host, port=s.port, log_level=s.log_level.lower())
 
