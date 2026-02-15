@@ -1,16 +1,14 @@
-# ClawBridge MVP - Python Dependencies
-# =====================================
+# ClawBridge - Python Dependencies
+# ==================================
 
 # Core framework
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 pydantic>=2.10.0
-pydantic-settings>=2.7.0
 
 # Async support
 httpx>=0.28.0
 websockets>=14.0
-aiofiles>=24.1.0
 
 # Browser automation engine
 browser-use>=0.11.0
@@ -19,22 +17,19 @@ playwright>=1.49.0
 # LLM providers (BYOK)
 langchain-anthropic>=0.3.0
 langchain-openai>=0.3.0
-langchain-core>=0.3.0
 
 # Configuration and environment
 python-dotenv>=1.0.0
 
-# Security
-cryptography>=44.0.0
-
-# Logging and telemetry
-structlog>=24.4.0
-
-# Computer-use engine (desktop automation)
+# Computer-use engine (desktop automation - Windows)
 anthropic>=0.39.0
 pyautogui>=0.9.54
 Pillow>=10.0.0
 mss>=9.0.0
+pywinauto>=0.6.8
 
-# Build/packaging (optional, for binary distribution)
-pyinstaller>=6.11.0
+# System tray icon
+pystray>=0.19.0
+
+# MCP server (optional, for Claude Code integration)
+mcp>=1.26.0

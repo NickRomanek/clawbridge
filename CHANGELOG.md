@@ -72,9 +72,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Licensing & Activation System
+- **Activation Backend** (`website/backend/`): Cloudflare Worker with D1 database for license management
+  - Stripe webhook integration for payment processing
+  - OpenRouter Management API integration for provisioned API keys
+  - Activation code generation (CB-XXXX-XXXX-XXXX format)
+  - AES-256-GCM encryption for stored API keys
+  - License status and credit balance endpoints
+  - Top-up flow with Stripe Checkout
+  - Transactional emails via Resend
+- **Dashboard Activation Modal**: First-launch flow for activation code entry or BYOK setup
+- **License Badge**: Header badge showing PRO/BYOK/FREE status
+- **Credit Balance Widget**: Real-time credit tracking with visual progress bar and top-up button
+- **Install Wizard**: New "Activate ClawBridge" step with three options (activation code, BYOK, purchase)
+- **MCP Tool**: `get_license_info()` for querying license status from Claude Code
+- **Settings**: New `activation_code`, `activation_backend_url`, `license_tier` configuration options
+- **API Endpoints**: `/api/license/activate` and `/api/license/status` for license management
+
+#### Website (`website/frontend/`)
+- Astro-based static site for clawbridge.ai
+- Landing page with features and value proposition
+- Pricing page with Starter ($9.99) and BYOK (free) tiers
+- Download page with quick start guide
+- Account dashboard for credit management and top-ups
+- Documentation pages including BYOK setup guide
+
+### Changed
+- Updated installer.iss AppURL to https://clawbridge.ai
+- Install wizard now has 8 steps (added activation step)
+
 ### Planned
+- Stripe Checkout integration on pricing page
 - Code signing certificate for Windows installer
 - Auto-update mechanism
 - macOS build support
-- Cloud bridge service
 - Discord community for user support

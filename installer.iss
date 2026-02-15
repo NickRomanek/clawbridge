@@ -9,7 +9,7 @@
 #define MyAppName "ClawBridge"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "ClawBridge"
-#define MyAppURL "https://github.com/clawbridge/clawbridge"
+#define MyAppURL "https://clawbridge.ai"
 #define MyAppExeName "ClawBridge.bat"
 
 [Setup]
@@ -64,10 +64,12 @@ Name: "{autodesktop}\ClawBridge"; Filename: "{app}\{#MyAppExeName}"; WorkingDir:
 Name: "{userstartup}\ClawBridge"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: startuptask
 
 [Run]
+; Install Playwright Chromium to default location (ensures it works even if bundled path fails)
+Filename: "{app}\python\python.exe"; Parameters: "-m playwright install chromium"; WorkingDir: "{app}"; StatusMsg: "Installing Playwright Chromium browser (this may take a moment)..."; Flags: runhidden waituntilterminated
 ; Install OpenClaw via bundled Node.js (optional task, runs before launch)
 Filename: "{app}\install_openclaw.bat"; WorkingDir: "{app}"; StatusMsg: "Installing OpenClaw engine (this may take a moment)..."; Tasks: installopenclaw; Flags: runhidden waituntilterminated
-; Offer to launch after install
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+; Offer to launch after install - launch pythonw.exe directly with nowait+shellexec to detach from installer
+Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\clawbridge.py"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait shellexec postinstall skipifsilent
 
 [UninstallDelete]
 ; Clean up generated files on uninstall
@@ -112,6 +114,7 @@ var
   UninstallStr: String;
   InstalledVer: String;
   ResultCode: Integer;
+  Choice: Integer;
 begin
   Result := True;
   UninstallStr := GetUninstallString();
@@ -119,17 +122,34 @@ begin
   if UninstallStr <> '' then
   begin
     InstalledVer := GetInstalledVersion();
-    if MsgBox('ClawBridge ' + InstalledVer + ' is already installed.' + #13#10 + #13#10 +
-              'Would you like to uninstall the previous version first?' + #13#10 +
-              '(Your .env settings and workspace data will be preserved)',
-              mbConfirmation, MB_YESNO) = IDYES then
+
+    // Show a task dialog with clear options
+    Choice := MsgBox('ClawBridge ' + InstalledVer + ' is already installed.' + #13#10 + #13#10 +
+              'What would you like to do?' + #13#10 + #13#10 +
+              '  YES = Uninstall existing version, then reinstall' + #13#10 +
+              '  NO = Upgrade in place (keep existing installation)' + #13#10 +
+              '  CANCEL = Exit installer' + #13#10 + #13#10 +
+              'Note: Your .env settings and workspace data will be preserved.',
+              mbConfirmation, MB_YESNOCANCEL);
+
+    if Choice = IDCANCEL then
     begin
-      // Run the uninstaller silently
-      Exec(RemoveQuotes(UninstallStr), '/SILENT /NORESTART', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+      Result := False;  // Exit installer
+      Exit;
+    end
+    else if Choice = IDYES then
+    begin
+      // Run the uninstaller
+      if not Exec(RemoveQuotes(UninstallStr), '/SILENT /NORESTART', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+      begin
+        MsgBox('Failed to run uninstaller. Please uninstall manually from Add/Remove Programs.', mbError, MB_OK);
+        Result := False;
+        Exit;
+      end;
       // Small delay to let uninstaller release files
-      Sleep(1000);
+      Sleep(1500);
     end;
-    // Continue with install regardless of user choice (upgrade in place)
+    // If NO, continue with upgrade in place
   end;
 end;
 

@@ -19,6 +19,15 @@ import subprocess
 import sys
 
 # ---------------------------------------------------------------------------
+# Redirect stdout/stderr for pythonw.exe (no console, writes would crash)
+# ---------------------------------------------------------------------------
+if not sys.stdout or sys.executable.endswith('pythonw.exe'):
+    _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+    os.makedirs(_log_dir, exist_ok=True)
+    sys.stdout = open(os.path.join(_log_dir, 'clawbridge.log'), 'w', encoding='utf-8')
+    sys.stderr = sys.stdout
+
+# ---------------------------------------------------------------------------
 # Auto-install dependencies if missing (run once, then exit; user runs again)
 # ---------------------------------------------------------------------------
 
@@ -31,6 +40,7 @@ def _ensure_dependencies() -> None:
         "httpx",
         "websockets",
         "browser-use",
+        "playwright",
         "langchain-anthropic",
         "langchain-openai",
         "anthropic",
@@ -93,6 +103,7 @@ except ImportError:
 # Rest of imports (now guaranteed present)
 import asyncio
 import base64
+import dataclasses
 import io
 import json
 import logging
@@ -151,6 +162,10 @@ class Settings:
     db_path = _env("CLAWBRIDGE_DB", "clawbridge.db")
     remote_bridge_url = _env("REMOTE_BRIDGE_URL", "")
     remote_auth_token = _env("REMOTE_AUTH_TOKEN", "")
+    # Licensing / Activation
+    activation_code = _env("CLAWBRIDGE_ACTIVATION_CODE", "")
+    activation_backend_url = _env("ACTIVATION_BACKEND_URL", "https://api.clawbridge.ai")
+    license_tier = _env("LICENSE_TIER", "")  # "starter" | "byok" | ""
 
     @classmethod
     def has_anthropic_key(cls) -> bool:
@@ -237,6 +252,197 @@ def safety_redact(text: str) -> str:
     for p in _PII_PATTERNS:
         result = p.sub("[REDACTED_PII]", result)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Licensing / Activation System
+# ---------------------------------------------------------------------------
+
+class LicenseStatus(Enum):
+    NOT_ACTIVATED = "not_activated"
+    ACTIVATED = "activated"
+    BYOK = "byok"
+    REVOKED = "revoked"
+    ERROR = "error"
+
+
+@dataclasses.dataclass
+class LicenseInfo:
+    status: LicenseStatus
+    tier: str = ""
+    credit_limit_usd: float = 0.0
+    credit_used_usd: float = 0.0
+    credit_remaining_usd: float = 0.0
+    topup_url: str = ""
+    error: str = ""
+
+
+# Cache for license status (5-minute TTL)
+_license_cache: dict[str, Any] = {"info": None, "expires": 0}
+_LICENSE_CACHE_TTL = 300  # 5 minutes
+
+
+def _update_env(updates: dict[str, str]) -> None:
+    """Update .env file with new key-value pairs."""
+    env_path = Path(".env")
+    lines: list[str] = []
+    existing_keys: set[str] = set()
+
+    if env_path.exists():
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if "=" in stripped and not stripped.startswith("#"):
+                    key = stripped.split("=", 1)[0]
+                    if key in updates:
+                        lines.append(f"{key}={updates[key]}\n")
+                        existing_keys.add(key)
+                        continue
+                lines.append(line)
+
+    # Append any new keys not already in file
+    for key, value in updates.items():
+        if key not in existing_keys:
+            lines.append(f"{key}={value}\n")
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+    # Also update environment variables in current process
+    for key, value in updates.items():
+        os.environ[key] = value
+
+
+def get_license_status() -> LicenseInfo:
+    """Get current license status, either from cache or backend."""
+    settings = get_settings()
+
+    # BYOK mode: user has their own API key, no activation needed
+    if not settings.activation_code and settings.has_any_key():
+        return LicenseInfo(status=LicenseStatus.BYOK, tier="byok")
+
+    # Not activated and no keys
+    if not settings.activation_code:
+        return LicenseInfo(status=LicenseStatus.NOT_ACTIVATED)
+
+    # Check cache
+    now = time.time()
+    if _license_cache["info"] and _license_cache["expires"] > now:
+        return _license_cache["info"]
+
+    # Fetch from backend
+    try:
+        info = _fetch_license_status()
+        _license_cache["info"] = info
+        _license_cache["expires"] = now + _LICENSE_CACHE_TTL
+        return info
+    except Exception as e:
+        # Offline fallback: if we have an activation code, assume activated
+        logging.warning(f"Failed to fetch license status: {e}")
+        if settings.activation_code:
+            return LicenseInfo(
+                status=LicenseStatus.ACTIVATED,
+                tier=settings.license_tier or "starter",
+                error="Offline - using cached status"
+            )
+        return LicenseInfo(status=LicenseStatus.ERROR, error=str(e))
+
+
+def _fetch_license_status() -> LicenseInfo:
+    """Fetch license status from activation backend."""
+    settings = get_settings()
+    machine_id = get_machine_id()
+
+    import urllib.request
+    import urllib.error
+
+    url = f"{settings.activation_backend_url}/api/license/status"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("X-Activation-Code", settings.activation_code)
+    req.add_header("X-Machine-ID", machine_id)
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return LicenseInfo(status=LicenseStatus.NOT_ACTIVATED, error="Code not found")
+        elif e.code == 403:
+            body = e.read().decode("utf-8")
+            if "revoked" in body.lower():
+                return LicenseInfo(status=LicenseStatus.REVOKED, error="License revoked")
+            return LicenseInfo(status=LicenseStatus.ERROR, error="Access denied")
+        raise
+
+    status_map = {
+        "active": LicenseStatus.ACTIVATED,
+        "revoked": LicenseStatus.REVOKED,
+        "expired": LicenseStatus.REVOKED,
+    }
+
+    return LicenseInfo(
+        status=status_map.get(data.get("status", ""), LicenseStatus.ERROR),
+        tier=data.get("tier", ""),
+        credit_limit_usd=data.get("credit_limit_usd", 0),
+        credit_used_usd=data.get("credit_used_usd", 0),
+        credit_remaining_usd=data.get("credit_remaining_usd", 0),
+        topup_url=data.get("topup_url", ""),
+    )
+
+
+def activate_license(activation_code: str) -> tuple[bool, str]:
+    """Activate a license with the given code. Returns (success, message)."""
+    settings = get_settings()
+    machine_id = get_machine_id()
+
+    import urllib.request
+    import urllib.error
+
+    url = f"{settings.activation_backend_url}/api/activate"
+    payload = json.dumps({
+        "activation_code": activation_code.strip().upper(),
+        "machine_id": machine_id,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(url, data=payload, method="POST")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        try:
+            err_data = json.loads(body)
+            return False, err_data.get("error", f"Activation failed: {e.code}")
+        except Exception:
+            return False, f"Activation failed: {e.code}"
+    except Exception as e:
+        return False, f"Network error: {e}"
+
+    if not data.get("success"):
+        return False, data.get("error", "Activation failed")
+
+    # Store the API key and update settings
+    api_key = data.get("api_key", "")
+    tier = data.get("tier", "starter")
+
+    _update_env({
+        "CLAWBRIDGE_ACTIVATION_CODE": activation_code.strip().upper(),
+        "OPENROUTER_API_KEY": api_key,
+        "LICENSE_TIER": tier,
+    })
+
+    # Update Settings class
+    Settings.activation_code = activation_code.strip().upper()
+    Settings.openrouter_api_key = api_key
+    Settings.license_tier = tier
+
+    # Clear license cache
+    _license_cache["info"] = None
+    _license_cache["expires"] = 0
+
+    return True, f"Activated! Tier: {tier}, Credits: ${data.get('credit_limit_usd', 5):.2f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1530,6 +1736,29 @@ DESKTOP_KEYWORDS = [
     "screenshot", "snipping tool", "paint",
 ]
 
+# Keywords indicating the user wants to search the web (multi-word phrases to avoid false positives)
+WEB_SEARCH_KEYWORDS = [
+    "search google", "google for", "web search", "search the web",
+    "look up online", "search online", "browse to", "go to website",
+    "open website", "visit website", "find online", "check online",
+    "search bing", "bing for", "search duckduckgo",
+]
+
+# Patterns in task results/errors that indicate a web search capability failure (case-insensitive)
+WEB_SEARCH_FAILURE_PATTERNS = [
+    "brave search api",
+    "brave_api_key",
+    "brave api key",
+    "search api key",
+    "subscription_token_invalid",
+    "configure the api key",
+    "set the brave",
+    "need a brave",
+    "search provider",
+    "web search is not configured",
+    "search tool is not available",
+]
+
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a desktop automation agent controlling a Windows PC.
 The screen is {scaled_width}x{scaled_height} pixels.
@@ -1802,8 +2031,9 @@ class ComputerUseEngine(EngineBase):
             if "/" not in self._model:
                 self._model = f"anthropic/{self._model}"
         else:
-            self._status = EngineStatus.ERROR
-            logging.warning("computer-use requires ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+            self._status = EngineStatus.NO_API_KEY
+            self._error_hint = "Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY in .env"
+            logging.info("computer-use: no API key configured")
             return
         self._status = EngineStatus.AVAILABLE
         logging.info(f"computer-use engine initialized (model={self._model}, scaled={self._scaled_width}x{self._scaled_height})")
@@ -2437,25 +2667,35 @@ class TaskManager:
                 await e.initialize()
                 self._engines[EngineName.COMPUTER_USE] = e
 
-    def _engine_for(self, preferred: EngineName, prompt: str = "") -> EngineBase | None:
+    def _engine_for(self, preferred: EngineName, prompt: str = "", exclude: list[EngineName] | None = None) -> EngineBase | None:
         """Select the best available engine for a task.
 
         Smart default priority:
+        - Web search tasks: browser-use → openclaw → computer-use
         - Desktop tasks: computer-use → browser-use → openclaw
         - Non-desktop tasks: openclaw (when available) → browser-use → computer-use
 
         OpenClaw is preferred for non-desktop tasks because it has memory/skills support.
+        browser-use is preferred for web search because it can navigate real browsers.
         """
-        # Explicit engine selection (not AUTO)
-        if preferred != EngineName.AUTO and preferred in self._engines:
+        exclude = exclude or []
+
+        # Explicit engine selection (not AUTO) — still respect exclude list
+        if preferred != EngineName.AUTO and preferred in self._engines and preferred not in exclude:
             engine = self._engines[preferred]
             logging.info("Engine selected: %s (explicit)", engine.display_name)
             return engine
 
         # Determine priority order based on task type
-        is_desktop = prompt and any(kw in prompt.lower() for kw in DESKTOP_KEYWORDS)
+        prompt_lower = prompt.lower() if prompt else ""
+        is_desktop = prompt_lower and any(kw in prompt_lower for kw in DESKTOP_KEYWORDS)
+        is_web_search = prompt_lower and any(kw in prompt_lower for kw in WEB_SEARCH_KEYWORDS)
 
-        if is_desktop:
+        if is_web_search and not is_desktop:
+            # Web search tasks: prefer browser-use (can open a real browser and search)
+            priority = [EngineName.BROWSER_USE, EngineName.OPENCLAW, EngineName.COMPUTER_USE]
+            reason = "web search task detected"
+        elif is_desktop:
             # Desktop tasks: prefer computer-use for native app control
             priority = [EngineName.COMPUTER_USE, EngineName.BROWSER_USE, EngineName.OPENCLAW]
             reason = "desktop task detected"
@@ -2463,6 +2703,9 @@ class TaskManager:
             # Non-desktop tasks: prefer OpenClaw (has memory/skills), then browser-use
             priority = [EngineName.OPENCLAW, EngineName.BROWSER_USE, EngineName.COMPUTER_USE]
             reason = "smart default (OpenClaw preferred when available)"
+
+        # Remove excluded engines (already tried and failed)
+        priority = [n for n in priority if n not in exclude]
 
         # Find first available engine in priority order
         for name in priority:
@@ -2548,10 +2791,14 @@ class TaskManager:
         else:
             task.engine = engine.name
             get_audit().log(AuditEvent(task_id=task.id, event_type="task_started", detail=engine.display_name))
-            # ── Execute with retry logic ──────────────────────────────
+            # ── Reset live view for visual engines ────────────────────
+            if self._broadcast and engine.name in (EngineName.BROWSER_USE, EngineName.COMPUTER_USE):
+                await self._broadcast({"type": "live_view_clear", "payload": {"task_id": task.id, "engine": engine.display_name}})
+            # ── Execute with retry + engine fallback logic ────────────
             max_retries = get_settings().max_task_retries
             base_delay = get_settings().retry_base_delay
             attempt = 0
+            tried_engines: list[EngineName] = []  # track engines we've already tried
             while True:
                 try:
                     task = await engine.run_task(task)
@@ -2565,7 +2812,41 @@ class TaskManager:
                     task.error = safety_redact(str(run_err))[:500]
                     logging.error("Task %s engine error: %s", task.id[:8], run_err)
 
-                # Check if retry is needed and allowed
+                # ── Detect web-search soft failures ───────────────────
+                # OpenClaw may return 200 OK with "I need a Brave Search API key" in the content.
+                # Detect this and treat as a failure eligible for engine fallback.
+                web_search_soft_fail = False
+                if task.status == TaskStatus.COMPLETE and task.result and task.result.summary:
+                    summary_lower = task.result.summary.lower()
+                    if any(pat in summary_lower for pat in WEB_SEARCH_FAILURE_PATTERNS):
+                        web_search_soft_fail = True
+                        logging.info("Task %s: web search soft failure detected in result from %s",
+                                     task.id[:8], engine.display_name)
+
+                # ── Engine fallback: try a different engine ───────────
+                if web_search_soft_fail or task.status == TaskStatus.ERROR:
+                    tried_engines.append(engine.name)
+                    fallback_engine = self._engine_for(task.engine, prompt=task.prompt, exclude=tried_engines)
+                    if fallback_engine and fallback_engine.name not in tried_engines:
+                        old_name = engine.display_name
+                        engine = fallback_engine
+                        task.engine = engine.name
+                        task.status = TaskStatus.RUNNING
+                        task.error = None
+                        task.result = None
+                        logging.info("Task %s: engine fallback %s → %s", task.id[:8], old_name, engine.display_name)
+                        get_audit().log(AuditEvent(task_id=task.id, event_type="engine_fallback",
+                                                   detail=f"{old_name} → {engine.display_name}"))
+                        if self._broadcast:
+                            await self._broadcast({"type": "engine_fallback", "payload": {
+                                "task_id": task.id, "from": old_name, "to": engine.display_name,
+                            }})
+                            if engine.name in (EngineName.BROWSER_USE, EngineName.COMPUTER_USE):
+                                await self._broadcast({"type": "live_view_clear", "payload": {"task_id": task.id, "engine": engine.display_name}})
+                            await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
+                        continue
+
+                # ── Standard retry (same engine) ──────────────────────
                 if task.status == TaskStatus.ERROR and attempt < max_retries:
                     attempt += 1
                     delay = base_delay * (2 ** (attempt - 1))  # exponential backoff: 2s, 4s, 8s...
@@ -2592,12 +2873,13 @@ class TaskManager:
             try:
                 status_str = task.status.value if hasattr(task.status, 'value') else str(task.status)
                 retry_note = f" (after {attempt + 1} attempts)" if attempt > 0 else ""
+                fallback_note = f" (fallback from {tried_engines[0].value})" if tried_engines and engine.name != tried_engines[0] else ""
                 summary = safety_redact(original_prompt[:120].replace('\n', ' '))
                 result_preview = ""
                 if task.result and task.result.summary:
                     result_preview = f" → {safety_redact(task.result.summary[:80].replace(chr(10), ' '))}"
                 get_personality().append_memory(
-                    f"Task [{status_str}] via {engine.display_name}{retry_note}: {summary}{result_preview}",
+                    f"Task [{status_str}] via {engine.display_name}{fallback_note}{retry_note}: {summary}{result_preview}",
                     daily=True
                 )
             except Exception as e:
@@ -2733,9 +3015,14 @@ aside{border-right:1px solid var(--border);padding:16px;overflow-y:auto;display:
 
 .collapsed-icons{display:none;flex-direction:column;align-items:center;gap:12px;padding-top:16px;}
 aside.collapsed .collapsed-icons{display:flex;}
-aside.collapsed .card, aside.collapsed .btn, aside.collapsed h2, aside.collapsed .sidebar-section-label{display:none;}
+aside.collapsed .card, aside.collapsed .btn, aside.collapsed h2, aside.collapsed .sidebar-section-label, aside.collapsed .sidebar-nav-item{display:none;}
 .sidebar-section-label{font-size:9px;text-transform:uppercase;color:rgba(160,174,192,0.5);letter-spacing:1.2px;font-weight:700;margin:14px 0 6px 4px;}
 .sidebar-section-label:first-of-type{margin-top:0;}
+.sidebar-nav-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);transition:all 0.15s;position:relative;}
+.sidebar-nav-item:hover{background:rgba(255,255,255,0.05);color:var(--text);}
+.sidebar-nav-item.active{background:rgba(99,102,241,0.12);color:var(--accent);}
+.sidebar-nav-item .icon-svg{width:14px;height:14px;flex-shrink:0;}
+.nav-badge{background:var(--accent);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:10px;min-width:16px;text-align:center;line-height:1;margin-left:auto;}
 aside.collapsed{padding:10px;overflow:hidden;min-width:52px;}
 
 .toggle-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:8px;z-index:10;transition:color 0.2s;display:flex;align-items:center;justify-content:center;border-radius:8px;}
@@ -2865,10 +3152,10 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .config-chip.configured{background:rgba(34,197,94,0.15);color:var(--ok);border:1px solid rgba(34,197,94,0.2);}
 .config-chip.not-set{background:rgba(160,174,192,0.08);color:var(--muted);border:1px solid rgba(160,174,192,0.15);}
 .config-provider-primary{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:12px;padding:8px 12px;background:rgba(99,102,241,0.08);border-radius:8px;border:1px solid rgba(99,102,241,0.15);}
-.config-advanced-toggle{font-size:10px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;padding:4px 0;user-select:none;}
-.config-advanced-toggle:hover{color:var(--accent);}
-.config-advanced-content{margin-top:8px;display:none;}
-.config-advanced-content.visible{display:block;}
+.config-chip.clickable-chip{cursor:pointer;transition:all 0.15s;}
+.config-chip.clickable-chip:hover{background:rgba(99,102,241,0.15);color:var(--accent);border-color:rgba(99,102,241,0.3);}
+.config-provider-row{border-bottom:1px solid rgba(255,255,255,0.03);}
+.config-provider-row:last-child{border-bottom:none;}
 .history-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
 .history-table{width:100%;border-collapse:collapse;font-size:12px;}
 .history-table thead{background:rgba(99,102,241,0.08);border-bottom:2px solid var(--border);}
@@ -2904,18 +3191,22 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .monitor-active{animation:monitor-pulse 2s ease-in-out infinite;}
 
 /* View Tabs */
-.view-tab{display:inline-flex;align-items:center;gap:5px;background:none;border:none;color:var(--muted);cursor:pointer;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;transition:all 0.15s;letter-spacing:0.3px;position:relative;}
-.view-tab:hover{color:var(--text);background:rgba(255,255,255,0.05);}
-.view-tab.active{color:var(--accent);background:rgba(99,102,241,0.12);}
-.tab-badge{position:absolute;top:2px;right:4px;background:var(--accent);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:10px;min-width:16px;text-align:center;line-height:1;}
-.tab-badge.dot{width:6px;height:6px;padding:0;min-width:0;border-radius:50%;top:4px;right:6px;}
-.tab-badge.unsaved{background:var(--warn);}
-.tab-tooltip{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:10px;white-space:nowrap;margin-bottom:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3);display:none;z-index:100;pointer-events:none;}
-.view-tab:hover .tab-tooltip{display:block;}
+/* view-tab styles removed — views now in sidebar nav */
+/* tab-badge/tab-tooltip styles removed — views now use sidebar nav-badge */
 
 /* Soul Tabs */
 .soul-tab.active{background:rgba(99,102,241,0.15)!important;color:var(--accent)!important;}
 .soul-tab:hover{background:rgba(255,255,255,0.08)!important;color:var(--text)!important;}
+/* License Badge */
+.license-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;vertical-align:middle;margin-left:8px;text-transform:uppercase;letter-spacing:0.5px;}
+.license-badge.pro{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;}
+.license-badge.byok{background:#374151;color:#9ca3af;}
+.license-badge.free{background:#f59e0b;color:#000;cursor:pointer;}
+/* Activation Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:1000;backdrop-filter:blur(4px);}
+.modal-content{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px;max-width:500px;width:90%;max-height:90vh;overflow-y:auto;animation:modalIn 0.2s ease;}
+@keyframes modalIn{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+.activation-option{box-sizing:border-box;overflow:hidden;}.activation-option:hover{border-color:var(--accent)!important;background:#374151!important;}
 """
     # Inline JS
     js = """
@@ -2978,6 +3269,8 @@ function connect(){
       else if(m.type==="engine_status"){state.engines=m.payload;renderEngines();}
       else if(m.type==="audit_event")addActivity(m.payload);
       else if(m.type==="live_view")updateLiveView(m.payload);
+      else if(m.type==="live_view_clear")clearLiveView(m.payload);
+      else if(m.type==="engine_fallback")addActivity({timestamp:new Date().toISOString(),event_type:"engine_fallback",detail:m.payload.from+" → "+m.payload.to});
       else if(m.type==="step_update")handleStepUpdate(m.payload);
       else if(m.type==="safety_warning")handleSafetyWarning(m.payload);
       else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});
@@ -2990,6 +3283,17 @@ function connect(){
   };
 }
 let _liveTimer=null;
+function clearLiveView(p){
+  const i=document.getElementById("liveImage");
+  const ph=document.getElementById("livePlaceholder");
+  const st=document.getElementById("liveStatus");
+  const icon=document.getElementById("monitorIcon");
+  if(i){i.src="";i.style.display="none";}
+  if(ph)ph.style.display="flex";
+  if(st){st.textContent="Starting "+(p&&p.engine||"task")+"...";st.style.color="var(--accent)";}
+  if(icon)icon.classList.remove("monitor-active");
+  clearTimeout(_liveTimer);
+}
 function updateLiveView(p){
   if(!p||!p.image)return;
   const i=document.getElementById("liveImage");
@@ -3283,22 +3587,28 @@ async function installEngine(name,ev){
   try{await api("POST","/api/engines/"+name+"/install");}
   catch(e){if(btn){btn.textContent="Retry";btn.disabled=false;}addActivity({timestamp:new Date().toISOString(),event_type:"install_error",detail:name+": "+e.message});}
 }
-function toggleKeyForm(){
-  const f=document.getElementById("keyForm");f.style.display=f.style.display==="none"?"block":"none";
+function toggleInlineKey(provider){
+  const el=document.getElementById("inline-key-"+provider);
+  if(!el)return;
+  ["anthropic","openai","openrouter"].forEach(p=>{
+    if(p!==provider){const other=document.getElementById("inline-key-"+p);if(other)other.style.display="none";}
+  });
+  el.style.display=el.style.display==="none"?"block":"none";
+  if(el.style.display==="block"){const inp=document.getElementById("key-input-"+provider);if(inp)inp.focus();}
 }
-async function saveKey(){
-  const key=document.getElementById("keyInput").value.trim();
-  const provider=document.getElementById("keyProvider").value;
-  const st=document.getElementById("keySaveStatus");
-  if(!key){st.textContent="Enter a key first";st.style.color="var(--err)";return;}
-  st.textContent="Saving...";st.style.color="var(--muted)";
+async function saveInlineKey(provider){
+  const input=document.getElementById("key-input-"+provider);
+  const status=document.getElementById("key-status-"+provider);
+  const key=input.value.trim();
+  if(!key){status.textContent="Enter a key first";status.style.color="var(--err)";return;}
+  status.textContent="Saving...";status.style.color="var(--muted)";
   try{
-    const r=await api("POST","/api/config/keys",{provider,key});
-    st.textContent="Saved!";st.style.color="var(--ok)";
-    document.getElementById("keyInput").value="";
-    refreshConfig();
-    setTimeout(()=>st.textContent="",2000);
-  }catch(e){st.textContent=e.message;st.style.color="var(--err)";}
+    await api("POST","/api/config/keys",{provider,key});
+    status.textContent="Saved!";status.style.color="var(--ok)";
+    input.value="";
+    refreshConfig();checkOnboarding();
+    setTimeout(()=>{status.textContent="";},2000);
+  }catch(e){status.textContent=e.message;status.style.color="var(--err)";}
 }
 async function ensureBrowser(){
   try{
@@ -3356,22 +3666,32 @@ async function checkBrowserStatus(){
 function renderConfigSummary(c){
   if(!c||!c.keys)return;
   const k=c.keys;
-  const chip=v=>v?'<span class="config-chip configured">Configured</span>':'<span class="config-chip not-set">Not set</span>';
   let primary="None";
   if(k.openrouter_configured)primary="OpenRouter";
   else if(k.anthropic_configured)primary="Anthropic";
   else if(k.openai_configured)primary="OpenAI";
-  const mid=esc(c.machine_id||"");
+  function providerRow(name,pkey,isConfigured){
+    const chipCls=isConfigured?"config-chip configured":"config-chip not-set clickable-chip";
+    const chipText=isConfigured?"Configured":"Click to set";
+    return '<div class="config-provider-row">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;cursor:pointer" onclick="toggleInlineKey(\\''+pkey+'\\')">'
+      +'<span style="color:var(--muted)">'+esc(name)+'</span>'
+      +'<span class="'+chipCls+'">'+chipText+'</span></div>'
+      +'<div id="inline-key-'+pkey+'" style="display:none;padding:4px 0 8px">'
+      +'<div style="display:flex;gap:6px">'
+      +'<input type="password" id="key-input-'+pkey+'" placeholder="Paste '+esc(name)+' API key..." style="flex:1;font-size:12px;padding:6px 10px" onkeydown="if(event.key===\\'Enter\\')saveInlineKey(\\''+pkey+'\\')">'
+      +'<button class="btn" style="font-size:11px;padding:6px 12px;white-space:nowrap" onclick="saveInlineKey(\\''+pkey+'\\')">Save</button>'
+      +'</div>'
+      +'<div id="key-status-'+pkey+'" style="font-size:10px;margin-top:4px"></div></div></div>';
+  }
   document.getElementById("configSummary").innerHTML=
     '<div class="config-provider-primary">Active: '+esc(primary)+'</div>'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0"><span style="color:var(--muted)">Anthropic</span>'+chip(k.anthropic_configured)+'</div>'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0"><span style="color:var(--muted)">OpenAI</span>'+chip(k.openai_configured)+'</div>'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0"><span style="color:var(--muted)">OpenRouter</span>'+chip(k.openrouter_configured)+'</div>'
-    +'<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">'
-    +'<div class="config-advanced-toggle" onclick="var el=document.getElementById(\\'configAdvanced\\');el.classList.toggle(\\'visible\\');">&#9656; Advanced</div>'
-    +'<div id="configAdvanced" class="config-advanced-content">'
-    +'<div style="font-size:10px;color:var(--muted);margin-bottom:4px">MACHINE ID</div>'
-    +'<div style="word-break:break-all;color:var(--accent);font-size:10px;font-family:monospace">'+mid+'</div></div></div>';
+    +providerRow("Anthropic","anthropic",k.anthropic_configured)
+    +providerRow("OpenAI","openai",k.openai_configured)
+    +providerRow("OpenRouter","openrouter",k.openrouter_configured);
+  // Update Machine ID in health dropdown
+  const midEl=document.getElementById("healthMachineId");
+  if(midEl&&c.machine_id)midEl.textContent=c.machine_id;
 }
 function refreshConfig(){
   api("GET","/api/config").then(c=>{
@@ -3611,9 +3931,9 @@ async function switchView(view){
   document.getElementById("memoryView").style.display=view==="memory"?"flex":"none";
   document.getElementById("scheduleView").style.display=view==="schedules"?"flex":"none";
   const hv=document.getElementById("historyView");if(hv)hv.style.display=view==="history"?"flex":"none";
-  // Update nav buttons
-  document.querySelectorAll(".view-tab").forEach(b=>{
-    b.classList.toggle("active",b.dataset.view===view);
+  // Update sidebar nav items
+  document.querySelectorAll(".sidebar-nav-item").forEach(el=>{
+    el.classList.toggle("active",el.id==="nav-"+view);
   });
   if(view==="soul"){if(!_currentSoulFile)loadSoulFile("SOUL.md");localStorage.setItem("onboarding_soul_customized","true");checkOnboarding();}
   if(view==="memory"){loadMemory();const mb=document.getElementById("memoryBadge");if(mb)mb.style.display="none";}
@@ -3636,9 +3956,20 @@ function checkOnboarding(){
     const k=window.__PRELOAD__.config.keys;
     status.keys=!!(k.anthropic_configured||k.openai_configured||k.openrouter_configured);
   }
+  // Starter tier activation also counts as keys configured
+  if(!status.keys&&_licenseStatus&&_licenseStatus.status==="activated"){status.keys=true;}
   status.soul=localStorage.getItem("onboarding_soul_customized")==="true"||(_soulOriginal&&_soulOriginal.length>10);
   status.task=state.tasks.length>0;
   status.browser=state.tasks.some(t=>t.engine==="browser_use");
+  // Update item 1 text based on license tier
+  const keysTextEl=document.getElementById("onboard-keys-text");
+  if(keysTextEl){
+    if(_licenseStatus&&(_licenseStatus.status==="activated"||_licenseStatus.tier==="starter")){
+      keysTextEl.textContent=status.keys?"API access configured via activation":"Activate your license to get API credits";
+    }else{
+      keysTextEl.textContent="Configure an API key (Anthropic, OpenAI, or OpenRouter)";
+    }
+  }
   ["keys","soul","task","browser"].forEach(k=>{
     const el=document.getElementById("onboard-"+k);
     if(el){if(status[k])el.classList.add("done");else el.classList.remove("done");}
@@ -3662,9 +3993,13 @@ function onboardAction(action){
   const el=document.getElementById("onboard-"+action);
   if(el&&el.classList.contains("done"))return;
   if(action==="keys"){
-    const cc=document.getElementById("configContent");
-    if(cc&&cc.classList.contains("collapsed"))toggleSection("config");
-    toggleKeyForm();
+    if(_licenseStatus&&_licenseStatus.status==="not_activated"&&_licenseStatus.tier==="starter"){
+      showActivationModal();
+    }else{
+      const cc=document.getElementById("configContent");
+      if(cc&&cc.classList.contains("collapsed"))toggleSection("config");
+      toggleInlineKey("openrouter");
+    }
   }else if(action==="soul"){switchView("soul");}
   else if(action==="task"){switchView("chat");document.getElementById("prompt").focus();}
   else if(action==="browser"){switchView("chat");document.getElementById("engine").value="browser_use";document.getElementById("prompt").focus();}
@@ -3906,6 +4241,123 @@ async function loadInitialData(){
     }
   }catch(e){console.warn("loadInitialData fallback error:",e);}
 }
+
+// License / Activation System
+let _licenseStatus = null;
+let _topupUrl = '';
+
+async function checkLicenseStatus() {
+  try {
+    const data = await api("GET", "/api/license/status");
+    _licenseStatus = data;
+    _topupUrl = data.topup_url || 'https://clawbridge.ai/account';
+    window._topupUrl = _topupUrl;
+    updateLicenseBadge(data);
+    updateCreditWidget(data);
+    // Show activation modal if not activated and no keys
+    if (data.status === 'not_activated') {
+      showActivationModal();
+    }
+  } catch (e) {
+    console.warn("Failed to check license status:", e);
+  }
+}
+
+function updateLicenseBadge(data) {
+  const badge = document.getElementById('licenseBadge');
+  if (!badge) return;
+  badge.style.display = 'inline';
+  if (data.status === 'activated' || data.tier === 'starter') {
+    badge.textContent = 'PRO';
+    badge.className = 'license-badge pro';
+  } else if (data.status === 'byok' || data.tier === 'byok') {
+    badge.textContent = 'BYOK';
+    badge.className = 'license-badge byok';
+  } else if (data.status === 'not_activated') {
+    badge.textContent = 'FREE';
+    badge.className = 'license-badge free';
+    badge.onclick = showActivationModal;
+    badge.title = 'Click to activate';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function updateCreditWidget(data) {
+  const widget = document.getElementById('creditBalanceWidget');
+  if (!widget) return;
+  // Only show for activated starter tier
+  if (data.status !== 'activated' || data.tier === 'byok') {
+    widget.style.display = 'none';
+    return;
+  }
+  widget.style.display = 'block';
+  const remaining = data.credit_remaining_usd || 0;
+  const limit = data.credit_limit_usd || 5;
+  const pct = limit > 0 ? Math.min(100, (remaining / limit) * 100) : 0;
+  document.getElementById('creditAmount').textContent = '$' + remaining.toFixed(2);
+  document.getElementById('creditLimit').textContent = '$' + limit.toFixed(2);
+  document.getElementById('creditBar').style.width = pct + '%';
+  // Change bar color based on remaining
+  const bar = document.getElementById('creditBar');
+  if (pct < 20) bar.style.background = '#ef4444';
+  else if (pct < 50) bar.style.background = '#f59e0b';
+  else bar.style.background = '#6366f1';
+}
+
+function showActivationModal() {
+  document.getElementById('activationModal').style.display = 'flex';
+  document.getElementById('activationOptions').style.display = 'block';
+  document.getElementById('activationCodeForm').style.display = 'none';
+}
+
+function closeActivationModal() {
+  document.getElementById('activationModal').style.display = 'none';
+}
+
+function showActivationCodeInput() {
+  document.getElementById('activationOptions').style.display = 'none';
+  document.getElementById('activationCodeForm').style.display = 'block';
+  document.getElementById('activationCodeInput').focus();
+}
+
+function hideActivationCodeInput() {
+  document.getElementById('activationOptions').style.display = 'block';
+  document.getElementById('activationCodeForm').style.display = 'none';
+  document.getElementById('activationStatus').textContent = '';
+}
+
+async function activateCode() {
+  const code = document.getElementById('activationCodeInput').value.trim();
+  if (!code) {
+    document.getElementById('activationStatus').innerHTML = '<span style="color:var(--err)">Please enter an activation code</span>';
+    return;
+  }
+  const btn = document.getElementById('activateBtn');
+  const status = document.getElementById('activationStatus');
+  btn.disabled = true;
+  btn.textContent = 'Activating...';
+  status.innerHTML = '<span style="color:var(--muted)">Connecting to activation server...</span>';
+  try {
+    const result = await api("POST", "/api/license/activate", { activation_code: code });
+    status.innerHTML = '<span style="color:var(--ok)">' + (result.message || 'Activated successfully!') + '</span>';
+    setTimeout(() => {
+      closeActivationModal();
+      checkLicenseStatus();
+    }, 1500);
+  } catch (e) {
+    status.innerHTML = '<span style="color:var(--err)">' + (e.message || 'Activation failed') + '</span>';
+    btn.disabled = false;
+    btn.textContent = 'Activate';
+  }
+}
+
+// Check license status on page load
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(checkLicenseStatus, 1000);
+  // Refresh every 5 minutes
+  setInterval(checkLicenseStatus, 300000);
+});
 """
     html = """<!DOCTYPE html>
 <html lang="en">
@@ -3918,7 +4370,7 @@ async function loadInitialData(){
 </head>
 <body>
   <header class="header">
-    <h1 class="logo">ClawBridge</h1>
+    <h1 class="logo">ClawBridge <span id="licenseBadge" class="license-badge" style="display:none"></span></h1>
     <div class="system-health" tabindex="0" title="System Health">
       <span id="healthDot" class="system-health-dot sh-err"></span>
       <span id="healthText">Connecting...</span>
@@ -3926,6 +4378,7 @@ async function loadInitialData(){
         <div class="health-row"><span class="health-label">WebSocket</span><span id="healthWS" class="health-value h-err">Connecting...</span></div>
         <div class="health-row"><span class="health-label">Remote Bridge</span><span id="healthBridge" class="health-value" style="color:var(--muted)">Offline</span></div>
         <div class="health-row"><span class="health-label">Active Engines</span><span id="healthEngines" class="health-value" style="color:var(--muted)">0</span></div>
+        <div class="health-row"><span class="health-label">Machine ID</span><span id="healthMachineId" class="health-value" style="color:var(--accent);font-size:9px;font-family:monospace;word-break:break-all;max-width:120px;text-align:right"></span></div>
       </div>
     </div>
   </header>
@@ -3952,6 +4405,22 @@ async function loadInitialData(){
         <div onclick="toggleSidebar('left')" title="Templates">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
         </div>
+        <div style="border-top:1px solid rgba(255,255,255,0.06);margin:4px 0"></div>
+        <div onclick="switchView('chat')" title="Chat">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        </div>
+        <div onclick="switchView('soul')" title="Soul">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+        </div>
+        <div onclick="switchView('memory')" title="Memory">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        </div>
+        <div onclick="switchView('schedules')" title="Schedules">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        </div>
+        <div onclick="switchView('history')" title="History">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+        </div>
       </div>
       <div class="sidebar-section-label">System</div>
       <div class="card expandable" id="card-engines">
@@ -3968,28 +4437,29 @@ async function loadInitialData(){
         </h2>
         <div class="expandable-content" id="configContent">
           <div id="configSummary"><p class="muted">Loading...</p></div>
-          <div id="keyForm" style="margin-top:12px;display:none">
-            <input type="password" id="keyInput" placeholder="Paste API key..." style="margin-bottom:8px">
-            <select id="keyProvider" style="margin-bottom:8px">
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="openrouter">OpenRouter</option>
-            </select>
-            <button class="btn" style="width:100%;font-size:13px" onclick="saveKey()">Save Key</button>
-            <div id="keySaveStatus" style="font-size:11px;margin-top:4px"></div>
+          <div id="creditBalanceWidget" style="display:none;margin-top:16px;padding:12px;background:rgba(99,102,241,0.08);border-radius:8px;border:1px solid rgba(99,102,241,0.2)">
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Credit Balance</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <span id="creditAmount" style="font-size:18px;font-weight:600;color:#6366f1">$0.00</span>
+              <span style="color:var(--muted);font-size:12px">/</span>
+              <span id="creditLimit" style="font-size:14px;color:var(--muted)">$0.00</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.1);border-radius:4px;height:6px;overflow:hidden;margin-bottom:8px">
+              <div id="creditBar" style="height:100%;background:#6366f1;transition:width 0.3s;width:0%"></div>
+            </div>
+            <button class="btn" onclick="window.open(window._topupUrl||'https://clawbridge.ai/account','_blank')" style="width:100%;font-size:11px;background:#6366f1">Buy More Credits</button>
           </div>
-          <button class="btn" id="toggleKeyBtn" style="width:100%;font-size:12px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="toggleKeyForm()">Add / Update API Keys</button>
           <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">
             <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Automation Mode</div>
             <div id="automationModePanel" style="margin-bottom:12px">
-              <div style="display:flex;gap:6px;margin-bottom:8px">
-                <button id="modeSupervised" class="btn mode-btn" onclick="setAutomationMode('supervised')" style="flex:1;font-size:11px;padding:8px 6px">
-                  <div style="font-weight:600">Supervised</div>
-                  <div style="font-size:9px;color:var(--muted);margin-top:2px">Asks before risky actions</div>
+              <div style="display:flex;gap:4px;margin-bottom:8px">
+                <button id="modeSupervised" class="btn mode-btn" onclick="setAutomationMode('supervised')" style="flex:1;min-width:0;font-size:10px;padding:8px 4px;overflow:hidden;box-sizing:border-box">
+                  <div style="font-weight:600;white-space:nowrap">Supervised</div>
+                  <div style="font-size:8px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Asks first</div>
                 </button>
-                <button id="modeAutonomous" class="btn mode-btn" onclick="setAutomationMode('autonomous')" style="flex:1;font-size:11px;padding:8px 6px">
-                  <div style="font-weight:600">Autonomous</div>
-                  <div style="font-size:9px;color:var(--muted);margin-top:2px">Runs without interruption</div>
+                <button id="modeAutonomous" class="btn mode-btn" onclick="setAutomationMode('autonomous')" style="flex:1;min-width:0;font-size:10px;padding:8px 4px;overflow:hidden;box-sizing:border-box">
+                  <div style="font-weight:600;white-space:nowrap">Autonomous</div>
+                  <div style="font-size:8px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">No pauses</div>
                 </button>
               </div>
               <div id="automationModeHint" style="font-size:10px;color:var(--muted);line-height:1.4;padding:6px 8px;background:rgba(99,102,241,0.08);border-radius:4px">
@@ -4059,38 +4529,38 @@ async function loadInitialData(){
           </div>
         </div>
       </div>
+      <div class="sidebar-section-label">Views</div>
+      <div class="sidebar-nav-item active" onclick="switchView('chat')" id="nav-chat">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        <span>Chat</span>
+      </div>
+      <div class="sidebar-nav-item" onclick="switchView('soul')" id="nav-soul">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+        <span>Soul</span>
+        <span id="soulBadge" class="nav-badge" style="display:none"></span>
+      </div>
+      <div class="sidebar-nav-item" onclick="switchView('memory')" id="nav-memory">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        <span>Memory</span>
+        <span id="memoryBadge" class="nav-badge" style="display:none"></span>
+      </div>
+      <div class="sidebar-nav-item" onclick="switchView('schedules')" id="nav-schedules">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span>Schedules</span>
+        <span id="schedulesBadge" class="nav-badge" style="display:none">0</span>
+      </div>
+      <div class="sidebar-nav-item" onclick="switchView('history')" id="nav-history">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+        <span>History</span>
+      </div>
     </aside>
     <main>
       <div class="chat-header">
         <div style="display:flex;align-items:center;gap:12px;">
-          <button class="view-tab active" data-view="chat" onclick="switchView('chat')">
+          <span style="font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
             Chat
-            <span class="tab-tooltip">Chat with your agent</span>
-          </button>
-          <button class="view-tab" data-view="soul" onclick="switchView('soul')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
-            Soul
-            <span id="soulBadge" class="tab-badge dot unsaved" style="display:none"></span>
-            <span class="tab-tooltip">Agent Personality & Identity</span>
-          </button>
-          <button class="view-tab" data-view="memory" onclick="switchView('memory')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
-            Memory
-            <span id="memoryBadge" class="tab-badge dot" style="display:none"></span>
-            <span class="tab-tooltip">Durable & daily logs</span>
-          </button>
-          <button class="view-tab" data-view="schedules" onclick="switchView('schedules')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            Schedules
-            <span id="schedulesBadge" class="tab-badge" style="display:none">0</span>
-            <span class="tab-tooltip">Recurring automated tasks</span>
-          </button>
-          <button class="view-tab" data-view="history" onclick="switchView('history')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
-            History
-            <span class="tab-tooltip">Task history & search</span>
-          </button>
+          </span>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
           <span id="taskCount" style="font-size:12px;color:var(--muted);cursor:pointer;padding:4px 8px;border-radius:6px;transition:all 0.15s;" onclick="switchView('history')" onmouseenter="this.style.background='rgba(99,102,241,0.1)';this.style.color='var(--accent)'" onmouseleave="this.style.background='transparent';this.style.color='var(--muted)'" title="View task history">0 tasks</span>
@@ -4110,7 +4580,7 @@ async function loadInitialData(){
             </div>
             <button onclick="dismissOnboarding()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px;" title="Dismiss">&times;</button>
           </div>
-          <div id="onboard-keys" class="onboarding-item" onclick="onboardAction('keys')"><div class="onboarding-check">&#10003;</div><div style="font-size:13px">Configure an API key (Anthropic, OpenAI, or OpenRouter)</div></div>
+          <div id="onboard-keys" class="onboarding-item" onclick="onboardAction('keys')"><div class="onboarding-check">&#10003;</div><div id="onboard-keys-text" style="font-size:13px">Set up API access</div></div>
           <div id="onboard-soul" class="onboarding-item" onclick="onboardAction('soul')"><div class="onboarding-check">&#10003;</div><div style="font-size:13px">Set up your agent identity and personality</div></div>
           <div id="onboard-task" class="onboarding-item" onclick="onboardAction('task')"><div class="onboarding-check">&#10003;</div><div style="font-size:13px">Run your first task</div></div>
           <div id="onboard-browser" class="onboarding-item" onclick="onboardAction('browser')"><div class="onboarding-check">&#10003;</div><div style="font-size:13px">Try the browser engine with your logins</div></div>
@@ -4270,6 +4740,37 @@ async function loadInitialData(){
       </div>
     </main>
   </div>
+  <!-- Activation Modal -->
+  <div id="activationModal" class="modal-overlay" style="display:none">
+    <div class="modal-content" style="max-width:460px;text-align:center">
+      <h2 style="font-size:20px;margin-bottom:8px">Welcome to ClawBridge</h2>
+      <p style="color:var(--muted);margin-bottom:24px;font-size:13px">Choose how to get started</p>
+      <div id="activationOptions">
+        <button class="btn activation-option" onclick="showActivationCodeInput()" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#2d3748;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
+          <div style="font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">I have an activation code</div>
+          <div style="font-size:11px;color:var(--muted)">Enter your code from purchase</div>
+        </button>
+        <button class="btn activation-option" onclick="closeActivationModal();var cc=document.getElementById('configContent');if(cc&&cc.classList.contains('collapsed'))toggleSection('config');setTimeout(function(){toggleInlineKey('openrouter');},200);" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#2d3748;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
+          <div style="font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">My own API keys (BYOK)</div>
+          <div style="font-size:11px;color:var(--muted)">Use Anthropic, OpenAI, or OpenRouter keys</div>
+        </button>
+        <button class="btn activation-option" onclick="window.open('https://clawbridge.ai/pricing','_blank')" style="width:100%;padding:14px;text-align:left;background:linear-gradient(135deg,#6366f1,#8b5cf6);border:none;box-sizing:border-box;overflow:hidden">
+          <div style="font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Buy ClawBridge</div>
+          <div style="font-size:11px;opacity:0.9">$9.99 includes $5 in API credits</div>
+        </button>
+      </div>
+      <div id="activationCodeForm" style="display:none">
+        <div style="margin-bottom:16px">
+          <input type="text" id="activationCodeInput" placeholder="CB-XXXX-XXXX-XXXX" style="text-align:center;font-size:18px;letter-spacing:2px;text-transform:uppercase;padding:14px" maxlength="19">
+        </div>
+        <div id="activationStatus" style="font-size:12px;margin-bottom:12px"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn" onclick="hideActivationCodeInput()" style="flex:1;background:#2d3748;border:1px solid var(--border)">Back</button>
+          <button class="btn" onclick="activateCode()" style="flex:2;background:#6366f1" id="activateBtn">Activate</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <script>""" + js + """</script>
 </body>
 </html>"""
@@ -4423,29 +4924,41 @@ button:hover{{background:#4f46e5}}</style></head>
         if config and config.get("keys"):
             k = config["keys"]
             mid = _esc(str(config.get("machine_id", "")))
-            chip = lambda v: '<span class="config-chip configured">Configured</span>' if v else '<span class="config-chip not-set">Not set</span>'
+            def _ssr_provider_row(name, pkey, is_configured):
+                chip_cls = "config-chip configured" if is_configured else "config-chip not-set clickable-chip"
+                chip_text = "Configured" if is_configured else "Click to set"
+                return (
+                    f'<div class="config-provider-row">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;cursor:pointer" onclick="toggleInlineKey(\'{pkey}\')">'
+                    f'<span style="color:var(--muted)">{_esc(name)}</span>'
+                    f'<span class="{chip_cls}">{chip_text}</span></div>'
+                    f'<div id="inline-key-{pkey}" style="display:none;padding:4px 0 8px">'
+                    f'<div style="display:flex;gap:6px">'
+                    f'<input type="password" id="key-input-{pkey}" placeholder="Paste {_esc(name)} API key..." style="flex:1;font-size:12px;padding:6px 10px" onkeydown="if(event.key===\'Enter\')saveInlineKey(\'{pkey}\')">'
+                    f'<button class="btn" style="font-size:11px;padding:6px 12px;white-space:nowrap" onclick="saveInlineKey(\'{pkey}\')">Save</button>'
+                    f'</div>'
+                    f'<div id="key-status-{pkey}" style="font-size:10px;margin-top:4px"></div></div></div>'
+                )
             primary = "None"
             if k.get("openrouter_configured"): primary = "OpenRouter"
             elif k.get("anthropic_configured"): primary = "Anthropic"
             elif k.get("openai_configured"): primary = "OpenAI"
             config_html = (
                 f'<div class="config-provider-primary">Active: {_esc(primary)}</div>'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">'
-                f'<span style="color:var(--muted)">Anthropic</span>{chip(k.get("anthropic_configured"))}</div>'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">'
-                f'<span style="color:var(--muted)">OpenAI</span>{chip(k.get("openai_configured"))}</div>'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">'
-                f'<span style="color:var(--muted)">OpenRouter</span>{chip(k.get("openrouter_configured"))}</div>'
-                f'<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">'
-                f'<div class="config-advanced-toggle" onclick="var el=document.getElementById(\'configAdvanced\');el.classList.toggle(\'visible\');">&#9656; Advanced</div>'
-                f'<div id="configAdvanced" class="config-advanced-content">'
-                f'<div style="font-size:10px;color:var(--muted);margin-bottom:4px">MACHINE ID</div>'
-                f'<div style="word-break:break-all;color:var(--accent);font-size:10px;font-family:monospace">{mid}</div></div></div>'
+                + _ssr_provider_row("Anthropic", "anthropic", k.get("anthropic_configured"))
+                + _ssr_provider_row("OpenAI", "openai", k.get("openai_configured"))
+                + _ssr_provider_row("OpenRouter", "openrouter", k.get("openrouter_configured"))
             )
             html = html.replace(
                 '<div id="configSummary"><p class="muted">Loading...</p></div>',
                 f'<div id="configSummary">{config_html}</div>'
             )
+            # Inject machine ID into health dropdown
+            if mid:
+                html = html.replace(
+                    '<span id="healthMachineId"',
+                    f'<span id="healthMachineId" title="{mid}"'
+                )
 
         return html
 
@@ -4654,6 +5167,47 @@ button:hover{{background:#4f46e5}}</style></head>
         os.environ["AUTOMATION_MODE"] = mode
         await _broadcast({"type": "config_update", "payload": {"automation_mode": mode}})
         return {"status": "ok", "mode": mode}
+
+    # ── License / Activation Endpoints ───────────────────────────────────
+
+    @app.post("/api/license/activate")
+    async def api_activate_license(body: dict):
+        """Activate ClawBridge with an activation code."""
+        code = body.get("activation_code", "").strip()
+        if not code:
+            raise HTTPException(400, "Missing activation_code")
+        success, message = activate_license(code)
+        if not success:
+            raise HTTPException(400, message)
+        # Re-initialize engines with new API key
+        await get_manager().init_engines()
+        await _broadcast({"type": "engine_status", "payload": await get_manager().engine_infos()})
+        # Broadcast license update
+        info = get_license_status()
+        await _broadcast({
+            "type": "license_update",
+            "payload": {
+                "status": info.status.value,
+                "tier": info.tier,
+                "credit_limit_usd": info.credit_limit_usd,
+                "credit_remaining_usd": info.credit_remaining_usd,
+            }
+        })
+        return {"status": "ok", "message": message}
+
+    @app.get("/api/license/status")
+    async def api_license_status():
+        """Get current license status and credit balance."""
+        info = get_license_status()
+        return {
+            "status": info.status.value,
+            "tier": info.tier,
+            "credit_limit_usd": info.credit_limit_usd,
+            "credit_used_usd": info.credit_used_usd,
+            "credit_remaining_usd": info.credit_remaining_usd,
+            "topup_url": info.topup_url,
+            "error": info.error,
+        }
 
     # ── Chrome Launcher ──────────────────────────────────────────────────
     _chrome_proc: subprocess.Popen | None = None
@@ -4972,31 +5526,69 @@ def _create_tray_icon(url: str):
 
 
 def main() -> None:
+    import threading
+    import time as _time
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
     s = get_settings()
     print()
-    print(f"  ClawBridge v{VERSION}")
+    print(f"  ClawBridge v{__version__}")
     print("  Dashboard: http://%s:%s" % (s.host, s.port))
     print()
     if not s.has_any_key():
         print("  [!] Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY in .env")
     url = "http://%s:%s" % (s.host, s.port)
 
-    # Open browser after short delay
-    def open_browser():
-        import time as _t
-        _t.sleep(1.5)
-        webbrowser.open(url)
-    import threading
-    threading.Thread(target=open_browser, daemon=True).start()
+    # 1. Start a minimal loading page server immediately (before heavy imports)
+    class _LoadingHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b'''<!DOCTYPE html><html><head>
+            <meta http-equiv="refresh" content="3">
+            <style>
+                body { background: #0a0a0f; color: #e4e4e7; display: flex;
+                       justify-content: center; align-items: center; height: 100vh;
+                       font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; }
+                .container { text-align: center; }
+                h2 { color: #fff; margin-bottom: 12px; font-weight: 600; }
+                p { color: #71717a; font-size: 14px; }
+                .spinner { width: 48px; height: 48px; border: 3px solid #27272a;
+                           border-top: 3px solid #6366f1; border-radius: 50%;
+                           animation: spin 1s linear infinite; margin: 24px auto; }
+                @keyframes spin { to { transform: rotate(360deg); } }
+            </style></head><body><div class="container">
+            <div class="spinner"></div>
+            <h2>ClawBridge is starting...</h2>
+            <p>This page will refresh automatically.</p>
+            </div></body></html>''')
+        def log_message(self, *args): pass
 
-    # Start system tray icon in background thread
+    loading_server = HTTPServer(('127.0.0.1', s.port), _LoadingHandler)
+    threading.Thread(target=loading_server.serve_forever, daemon=True).start()
+    print("  Loading page active...")
+
+    # 2. Open browser immediately — user sees the loading page
+    webbrowser.open(url)
+
+    # 3. Start system tray icon in background thread
     tray_icon = _create_tray_icon(url)
     if tray_icon:
         threading.Thread(target=tray_icon.run, daemon=True).start()
         print("  System tray icon active")
 
+    # 4. Create the app (this takes time due to heavy imports)
+    print("  Initializing app...")
+    app = create_app()
+
+    # 5. Shut down loading server right before uvicorn takes the port
+    loading_server.shutdown()
+    _time.sleep(0.5)  # brief pause to release the port
+
+    # 6. Start the real server
     print()
-    uvicorn.run(create_app(), host=s.host, port=s.port, log_level=s.log_level.lower())
+    uvicorn.run(app, host=s.host, port=s.port, log_level=s.log_level.lower())
 
 if __name__ == "__main__":
     main()

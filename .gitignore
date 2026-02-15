@@ -9,3 +9,13 @@ node_modules/
 dist/
 build/
 *.log
+.build_cache/
+.mcp.json
+*.stackdump
+workspace/memory/
+logs/
+nul
+*.docx
+.wrangler/
+.astro/
+.dev.vars

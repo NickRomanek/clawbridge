@@ -278,7 +278,76 @@ def wizard():
     """Interactive configuration wizard. Returns dict of env values."""
     config = {}
 
-    step(3, "Configure Your API Keys")
+    step(3, "Activate ClawBridge")
+    print()
+    info("Choose how you want to use ClawBridge:")
+    print()
+
+    activation_choices = [
+        ("I purchased ClawBridge and have an activation code", "activation"),
+        ("I'm using my own API keys (BYOK)", "byok"),
+        ("I want to purchase ClawBridge ($9.99 with $5 credit)", "purchase"),
+    ]
+    activation_mode = ask_choice("Select an option:", activation_choices, default=1)
+
+    if activation_mode == "purchase":
+        import webbrowser
+        info("Opening ClawBridge pricing page...")
+        webbrowser.open("https://clawbridge.ai/pricing")
+        print()
+        info("After purchasing, run this installer again with your activation code.")
+        print()
+        if not ask_yn("Continue with BYOK setup instead?", default=False):
+            sys.exit(0)
+        activation_mode = "byok"
+
+    if activation_mode == "activation":
+        print()
+        code = ask("Enter your activation code (CB-XXXX-XXXX-XXXX)", default="")
+        if code:
+            code = code.strip().upper()
+            if not code.startswith("CB-") or len(code) != 19:
+                warn("Invalid code format. Expected: CB-XXXX-XXXX-XXXX")
+                warn("You can enter your code later in the dashboard.")
+            else:
+                config["CLAWBRIDGE_ACTIVATION_CODE"] = code
+                config["LICENSE_TIER"] = "starter"
+                ok("Activation code saved! It will be validated on first launch.")
+                print()
+                info("Skipping API key setup — your key will be provisioned automatically.")
+                print()
+                # Skip to engines (step 5 -> now step 4)
+                step(4, "Select Engines")
+                print()
+                info("Engines determine HOW ClawBridge automates tasks:")
+                print(f"    {c(C.CYAN, 'browser-use')}  — Headless browser automation (web tasks)")
+                print(f"    {c(C.CYAN, 'computer-use')} — Desktop control (clicks, types, screenshots)")
+                print(f"    {c(C.CYAN, 'openclaw')}     — Agent-based scripting (requires Node.js)")
+                print()
+
+                engines = []
+                if ask_yn("Enable browser-use engine?", default=True):
+                    engines.append("browser_use")
+                if ask_yn("Enable computer-use engine?", default=True):
+                    engines.append("computer_use")
+                if check_command("node") and ask_yn("Enable OpenClaw engine?", default=False):
+                    engines.append("openclaw")
+
+                config["ENABLED_ENGINES"] = ",".join(engines) if engines else "browser_use"
+                config["CLAWBRIDGE_HOST"] = "127.0.0.1"
+                config["CLAWBRIDGE_PORT"] = "8765"
+                config["BROWSER_MODE"] = "default"
+                config["AUTOMATION_MODE"] = "supervised"
+                config["ACTIVATION_BACKEND_URL"] = "https://api.clawbridge.ai"
+                return config
+        else:
+            warn("No code entered. Continuing with BYOK setup...")
+            activation_mode = "byok"
+
+    # BYOK mode
+    config["LICENSE_TIER"] = "byok"
+
+    step(4, "Configure Your API Keys")
     print()
     info("ClawBridge is BYOK (Bring Your Own Key) — your keys stay local.")
     info("You need at least ONE API key to get started.")
@@ -307,7 +376,7 @@ def wizard():
         warn("No API keys provided — you can add them later in the dashboard or .env file")
 
     # Default Model
-    step(4, "Choose Default Model")
+    step(5, "Choose Default Model")
     print()
     model_choices = [
         ("GPT-4o (OpenAI — fast, reliable)", "openai/gpt-4o"),
@@ -324,7 +393,7 @@ def wizard():
     config["DEFAULT_MODEL"] = ask_choice("Which model should be the default?", model_choices, default=default_model_idx)
 
     # Engines
-    step(5, "Select Engines")
+    step(6, "Select Engines")
     print()
     info("Engines determine HOW ClawBridge automates tasks:")
     print(f"    {c(C.CYAN, 'browser-use')}  — Headless browser automation (web tasks)")
@@ -343,7 +412,7 @@ def wizard():
     config["ENABLED_ENGINES"] = ",".join(engines) if engines else "browser_use"
 
     # Server settings
-    step(6, "Server Settings")
+    step(7, "Server Settings")
     print()
     config["CLAWBRIDGE_HOST"] = ask("Host", default="127.0.0.1")
     config["CLAWBRIDGE_PORT"] = ask("Port", default="8765")
@@ -357,7 +426,7 @@ def wizard():
     config["BROWSER_MODE"] = ask_choice("Browser mode:", browser_choices, default=0)
 
     # Policy
-    step(7, "Safety Policy")
+    step(8, "Safety Policy")
     print()
     policy_choices = [
         ("Guarded — auto-run safe reads, prompt for risky actions (recommended)", "guarded"),

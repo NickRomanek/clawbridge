@@ -139,13 +139,31 @@ def step_python_embedded():
     )
     print("    pip installed")
 
+    # Upgrade setuptools + pip to avoid build failures on user machines
+    # (embedded Python ships with minimal/broken setuptools)
+    print("    Upgrading setuptools and pip...")
+    subprocess.run(
+        [str(python_exe), "-m", "pip", "install", "--upgrade",
+         "setuptools", "pip", "--no-warn-script-location", "--disable-pip-version-check"],
+        check=True, capture_output=True
+    )
+    print("    setuptools and pip upgraded")
+
     # Install all dependencies
+    # Use --ignore-installed to force install into embedded Python even if
+    # packages exist in user's global site-packages
     print("    Installing ClawBridge dependencies (this takes a minute)...")
     req_file = ROOT / "requirements.txt"
+
+    # Set environment to isolate from user site-packages
+    pip_env = os.environ.copy()
+    pip_env["PYTHONNOUSERSITE"] = "1"  # Disable user site-packages
+
     result = subprocess.run(
         [str(python_exe), "-m", "pip", "install", "-r", str(req_file),
-         "--no-warn-script-location", "--disable-pip-version-check"],
-        capture_output=True, text=True
+         "--no-warn-script-location", "--disable-pip-version-check",
+         "--ignore-installed"],
+        capture_output=True, text=True, env=pip_env
     )
     if result.returncode != 0:
         print(f"    [!] pip install failed:\n{result.stderr[:2000]}")
@@ -166,6 +184,7 @@ def step_playwright(python_exe: Path):
 
     env = os.environ.copy()
     env["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
+    env["PYTHONNOUSERSITE"] = "1"  # Use only embedded Python packages
 
     print("    Downloading Chromium (this takes a minute)...")
     result = subprocess.run(
@@ -257,13 +276,14 @@ def step_launcher_scripts():
     print("    run.bat (console mode)")
 
     # ClawBridge.bat — windowless mode (uses pythonw.exe, system tray only)
+    # pythonw.exe is already windowless, no start command needed
     cb_bat = BUNDLE_DIR / "ClawBridge.bat"
     cb_bat.write_text(
         '@echo off\r\n'
         'cd /d "%~dp0"\r\n'
         'set PLAYWRIGHT_BROWSERS_PATH=%~dp0playwright_browsers\r\n'
         'set PATH=%~dp0nodejs;%~dp0python\\Scripts;%PATH%\r\n'
-        'start "" "%~dp0python\\pythonw.exe" clawbridge.py\r\n',
+        '"%~dp0python\\pythonw.exe" "%~dp0clawbridge.py"\r\n',
         encoding="utf-8"
     )
     print("    ClawBridge.bat (windowless/tray mode)")
