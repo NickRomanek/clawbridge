@@ -1,0 +1,129 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      skip_release:
+        description: 'Skip creating a GitHub release (just build artifacts)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Windows Build ───────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build portable distribution
+        run: python build.py --skip-playwright
+
+      - name: Install Playwright Chromium
+        run: |
+          $env:PLAYWRIGHT_BROWSERS_PATH = "${{ github.workspace }}\dist\ClawBridge\playwright_browsers"
+          & "${{ github.workspace }}\dist\ClawBridge\python\python.exe" -m playwright install chromium
+
+      - name: Create ZIP archive
+        run: |
+          cd dist
+          Compress-Archive -Path ClawBridge -DestinationPath ClawBridge-Windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClawBridge-Windows-x64
+          path: dist/ClawBridge-Windows-x64.zip
+          retention-days: 30
+
+  # ── macOS Build (Apple Silicon) ─────────────────────────────────────────
+  build-macos-arm64:
+    runs-on: macos-14  # Apple Silicon (M1)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build portable distribution
+        run: python build_macos.py --arch arm64
+
+      - name: Create DMG
+        run: |
+          pip install dmgbuild
+          dmgbuild -s dmg_settings.py "ClawBridge" dist/ClawBridge-macOS-arm64.dmg
+
+      - name: Create ZIP fallback
+        run: |
+          cd dist
+          zip -r ClawBridge-macOS-arm64.zip ClawBridge/ ClawBridge.app/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClawBridge-macOS-arm64
+          path: |
+            dist/ClawBridge-macOS-arm64.dmg
+            dist/ClawBridge-macOS-arm64.zip
+          retention-days: 30
+
+  # ── macOS Build (Intel) ─────────────────────────────────────────────────
+  build-macos-x64:
+    runs-on: macos-13  # Intel runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build portable distribution
+        run: python build_macos.py --arch x64
+
+      - name: Create DMG
+        run: |
+          pip install dmgbuild
+          dmgbuild -s dmg_settings.py "ClawBridge" dist/ClawBridge-macOS-x64.dmg
+
+      - name: Create ZIP fallback
+        run: |
+          cd dist
+          zip -r ClawBridge-macOS-x64.zip ClawBridge/ ClawBridge.app/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClawBridge-macOS-x64
+          path: |
+            dist/ClawBridge-macOS-x64.dmg
+            dist/ClawBridge-macOS-x64.zip
+          retention-days: 30
+
+  # ── GitHub Release ──────────────────────────────────────────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.skip_release != 'true'
+    needs: [build-windows, build-macos-arm64, build-macos-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: List artifacts
+        run: find artifacts/ -type f | head -20
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/ClawBridge-Windows-x64/ClawBridge-Windows-x64.zip
+            artifacts/ClawBridge-macOS-arm64/ClawBridge-macOS-arm64.dmg
+            artifacts/ClawBridge-macOS-arm64/ClawBridge-macOS-arm64.zip
+            artifacts/ClawBridge-macOS-x64/ClawBridge-macOS-x64.dmg
+            artifacts/ClawBridge-macOS-x64/ClawBridge-macOS-x64.zip
