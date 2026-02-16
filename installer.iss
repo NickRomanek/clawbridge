@@ -24,7 +24,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 ; Output installer to dist/
 OutputDir=dist
-OutputBaseFilename=ClawBridge-Setup-{#MyAppVersion}
+OutputBaseFilename=ClawBridge-Setup
 ; Compression
 Compression=lzma2/ultra64
 SolidCompression=yes
