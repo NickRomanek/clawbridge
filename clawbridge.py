@@ -2152,7 +2152,7 @@ WEB_SEARCH_FAILURE_PATTERNS = [
 ]
 
 SYSTEM_PROMPT_TEMPLATE = """\
-You are a desktop automation agent controlling a Windows PC.
+You are a desktop automation agent controlling a {platform_name}.
 The screen is {scaled_width}x{scaled_height} pixels.
 
 ================================================================
@@ -2391,9 +2391,9 @@ class ComputerUseEngine(EngineBase):
 
     async def initialize(self) -> None:
         self._status = EngineStatus.STARTING
-        if sys.platform != "win32":
+        if sys.platform not in ("win32", "darwin", "linux"):
             self._status = EngineStatus.NOT_INSTALLED
-            logging.info("computer-use engine: not available on this platform (Windows only)")
+            logging.info("computer-use engine: not available on this platform (%s)", sys.platform)
             return
         settings = get_settings()
         try:
@@ -2402,11 +2402,14 @@ class ComputerUseEngine(EngineBase):
             self._status = EngineStatus.NOT_INSTALLED
             logging.warning(f"computer-use deps not installed: {e}")
             return
-        try:
-            import ctypes as _ct
-            _ct.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+        if sys.platform == "win32":
+            try:
+                import ctypes as _ct
+                _ct.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+        elif sys.platform == "darwin":
+            logging.info("computer-use engine: macOS mode — Accessibility and Screen Recording permissions required")
         try:
             self._screen_width, self._screen_height = pyautogui.size()
         except Exception as e:
@@ -2453,6 +2456,8 @@ class ComputerUseEngine(EngineBase):
 
     async def _get_foreground_window_rect(self) -> tuple[int, int, int, int] | None:
         """Get the foreground window bounding box in raw screen pixels."""
+        if sys.platform != "win32":
+            return None  # Window crop only available on Windows
         loop = asyncio.get_event_loop()
         def _get():
             import ctypes
@@ -2499,6 +2504,8 @@ class ComputerUseEngine(EngineBase):
 
     async def _get_ui_elements(self) -> list[dict]:
         """Enumerate interactive UI elements from the foreground window using Windows UIA."""
+        if sys.platform != "win32":
+            return []  # Accessibility tree only available on Windows via pywinauto
         loop = asyncio.get_event_loop()
         def _enumerate():
             try:
@@ -2713,36 +2720,71 @@ class ComputerUseEngine(EngineBase):
         return bin(_avg_hash(b64_a) ^ _avg_hash(b64_b)).count("1") <= threshold
 
     async def _describe_screen(self) -> str:
-        """Use Windows APIs to describe visible windows as text."""
+        """Describe visible windows as text. Platform-adaptive."""
         loop = asyncio.get_event_loop()
         def _gather():
             import subprocess as _sp
             lines = []
-            try:
-                ps = "Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object ProcessName, MainWindowTitle | Format-Table -AutoSize -HideTableHeaders"
-                out = _sp.check_output(["powershell", "-NoProfile", "-Command", ps], timeout=3, text=True, creationflags=_sp.CREATE_NO_WINDOW)
-                windows = [w.strip() for w in out.strip().splitlines() if w.strip()]
-                if windows:
-                    lines.append("VISIBLE WINDOWS:")
-                    for w in windows[:15]:
-                        lines.append(f"  - {w}")
-            except Exception: pass
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
-                hwnd = user32.GetForegroundWindow()
-                buf = ctypes.create_unicode_buffer(512)
-                user32.GetWindowTextW(hwnd, buf, 512)
-                if buf.value:
-                    lines.append(f"\nFOREGROUND WINDOW: {buf.value}")
-            except Exception: pass
-            try:
-                ps2 = "Get-Process -Name Telegram,Discord,Slack,Spotify,chrome,msedge,firefox,Code,Telegram.Desktop -ErrorAction SilentlyContinue | Select-Object ProcessName -Unique | Format-Table -HideTableHeaders"
-                out2 = _sp.check_output(["powershell", "-NoProfile", "-Command", ps2], timeout=3, text=True, creationflags=_sp.CREATE_NO_WINDOW)
-                apps = [a.strip() for a in out2.strip().splitlines() if a.strip()]
-                if apps:
-                    lines.append(f"\nRUNNING APPS: {', '.join(apps)}")
-            except Exception: pass
+            if sys.platform == "win32":
+                try:
+                    ps = "Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object ProcessName, MainWindowTitle | Format-Table -AutoSize -HideTableHeaders"
+                    out = _sp.check_output(["powershell", "-NoProfile", "-Command", ps], timeout=3, text=True, creationflags=_sp.CREATE_NO_WINDOW)
+                    windows = [w.strip() for w in out.strip().splitlines() if w.strip()]
+                    if windows:
+                        lines.append("VISIBLE WINDOWS:")
+                        for w in windows[:15]:
+                            lines.append(f"  - {w}")
+                except Exception: pass
+                try:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    hwnd = user32.GetForegroundWindow()
+                    buf = ctypes.create_unicode_buffer(512)
+                    user32.GetWindowTextW(hwnd, buf, 512)
+                    if buf.value:
+                        lines.append(f"\nFOREGROUND WINDOW: {buf.value}")
+                except Exception: pass
+                try:
+                    ps2 = "Get-Process -Name Telegram,Discord,Slack,Spotify,chrome,msedge,firefox,Code,Telegram.Desktop -ErrorAction SilentlyContinue | Select-Object ProcessName -Unique | Format-Table -HideTableHeaders"
+                    out2 = _sp.check_output(["powershell", "-NoProfile", "-Command", ps2], timeout=3, text=True, creationflags=_sp.CREATE_NO_WINDOW)
+                    apps = [a.strip() for a in out2.strip().splitlines() if a.strip()]
+                    if apps:
+                        lines.append(f"\nRUNNING APPS: {', '.join(apps)}")
+                except Exception: pass
+            elif sys.platform == "darwin":
+                # macOS: use AppleScript and ps for screen description
+                try:
+                    out = _sp.check_output(["osascript", "-e",
+                        'tell application "System Events" to get name of every process whose visible is true'],
+                        timeout=3, text=True)
+                    apps = [a.strip() for a in out.strip().split(", ") if a.strip()]
+                    if apps:
+                        lines.append("VISIBLE APPS:")
+                        for a in apps[:15]:
+                            lines.append(f"  - {a}")
+                except Exception: pass
+                try:
+                    out = _sp.check_output(["osascript", "-e",
+                        'tell application "System Events" to get name of first application process whose frontmost is true'],
+                        timeout=3, text=True).strip()
+                    if out:
+                        lines.append(f"\nFRONTMOST APP: {out}")
+                except Exception: pass
+                try:
+                    out = _sp.check_output(["ps", "aux"], timeout=3, text=True)
+                    known = ["Telegram", "Discord", "Slack", "Spotify", "Chrome", "Safari", "Firefox", "Code"]
+                    found = [k for k in known if k.lower() in out.lower()]
+                    if found:
+                        lines.append(f"\nRUNNING APPS: {', '.join(found)}")
+                except Exception: pass
+            else:
+                # Linux fallback
+                try:
+                    out = _sp.check_output(["ps", "aux"], timeout=3, text=True)
+                    lines.append("RUNNING PROCESSES (summary):")
+                    for ln in out.strip().splitlines()[1:16]:
+                        lines.append(f"  {ln.strip()}")
+                except Exception: pass
             return "\n".join(lines) if lines else ""
         try:
             return await loop.run_in_executor(None, _gather)
@@ -2753,16 +2795,66 @@ class ComputerUseEngine(EngineBase):
         """Try to bring a window matching app_keyword to the foreground. Returns True if successful."""
         loop = asyncio.get_event_loop()
         def _focus():
+            if sys.platform == "darwin":
+                # macOS: use AppleScript to activate app
+                import subprocess as _sp
+                def _sanitize_as(s):
+                    """Strip chars dangerous in AppleScript string literals."""
+                    return s.replace('\\', '').replace('"', '').replace("'", "")
+                safe_kw = _sanitize_as(app_keyword)
+                if not safe_kw:
+                    return False
+                try:
+                    _sp.check_call(["osascript", "-e",
+                        f'tell application "{safe_kw}" to activate'], timeout=3)
+                    import time as _t; _t.sleep(0.5)
+                    return True
+                except Exception:
+                    # Try matching by process name
+                    try:
+                        out = _sp.check_output(["osascript", "-e",
+                            'tell application "System Events" to get name of every process whose visible is true'],
+                            timeout=3, text=True)
+                        for name in out.strip().split(", "):
+                            if safe_kw.lower() in name.strip().lower():
+                                safe_name = _sanitize_as(name.strip())
+                                _sp.check_call(["osascript", "-e",
+                                    f'tell application "{safe_name}" to activate'], timeout=3)
+                                import time as _t; _t.sleep(0.5)
+                                return True
+                    except Exception:
+                        pass
+                    return False
+            # Windows: pywinauto + ctypes for UWP activation
             try:
                 import ctypes
                 from pywinauto import Desktop
+                user32 = ctypes.windll.user32
+                SW_RESTORE = 9
+
+                def _activate_window(w):
+                    """Activate window robustly — works for both Win32 and UWP apps."""
+                    try:
+                        hwnd = w.handle
+                    except Exception:
+                        hwnd = None
+                    w.set_focus()
+                    if hwnd:
+                        # ShowWindow(SW_RESTORE) wakes up minimized/suspended UWP apps
+                        user32.ShowWindow(hwnd, SW_RESTORE)
+                        user32.BringWindowToTop(hwnd)
+                        user32.SetForegroundWindow(hwnd)
+                    # Send Alt key to trigger Windows activation flow for UWP
+                    import pyautogui as _pag
+                    _pag.press('alt')
+                    import time as _t; _t.sleep(0.5)
+
                 d = Desktop(backend='uia')
                 for w in d.windows():
                     try:
                         title = w.window_text()
                         if app_keyword.lower() in title.lower():
-                            w.set_focus()
-                            import time as _t; _t.sleep(0.5)
+                            _activate_window(w)
                             return True
                     except Exception:
                         pass
@@ -2772,8 +2864,7 @@ class ComputerUseEngine(EngineBase):
                     try:
                         title = w.window_text()
                         if app_keyword.lower() in title.lower():
-                            w.set_focus()
-                            import time as _t; _t.sleep(0.5)
+                            _activate_window(w)
                             return True
                     except Exception:
                         pass
@@ -2871,17 +2962,38 @@ class ComputerUseEngine(EngineBase):
         return most_common
 
     async def _focus_window_by_title(self, title: str) -> bool:
-        """Focus a window by its (partial) title using pywinauto."""
+        """Focus a window by its (partial) title."""
         loop = asyncio.get_running_loop()
         def _focus():
+            if sys.platform == "darwin":
+                import subprocess as _sp
+                try:
+                    app_name = title.split(" - ")[0].strip() if " - " in title else title
+                    safe_name = app_name.replace('\\', '').replace('"', '').replace("'", "")
+                    if not safe_name:
+                        return False
+                    _sp.check_call(["osascript", "-e",
+                        f'tell application "{safe_name}" to activate'], timeout=3)
+                    return True
+                except Exception:
+                    return False
             try:
+                import ctypes
                 from pywinauto import Desktop
+                user32 = ctypes.windll.user32
                 d = Desktop(backend='uia')
                 for w in d.windows():
                     try:
                         wt = w.window_text()
                         if wt and title and (title in wt or wt in title or title.split(" - ")[0] in wt):
                             w.set_focus()
+                            try:
+                                hwnd = w.handle
+                                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                                user32.BringWindowToTop(hwnd)
+                                user32.SetForegroundWindow(hwnd)
+                            except Exception:
+                                pass
                             return True
                     except Exception:
                         pass
@@ -2971,7 +3083,38 @@ class ComputerUseEngine(EngineBase):
 
                 completed_steps += 1
                 # Delay between actions to let UI settle
-                delay = 0.5 if atype in ("click", "key") else 0.15
+                # Longer delay after actions that likely launch or switch apps
+                next_action = wf.actions[i + 1] if i + 1 < len(wf.actions) else None
+                next_dict = (next_action.model_dump() if hasattr(next_action, 'model_dump') else next_action) if next_action else {}
+                curr_win = action_dict.get("window_title", "")
+                next_win = next_dict.get("window_title", "") if next_dict else ""
+                window_changing = curr_win and next_win and curr_win != next_win
+                is_launch_click = atype == "click" and window_changing
+                is_type_then_click = atype == "type" and next_dict.get("action_type") == "click"
+                if is_launch_click:
+                    # App is switching — wait for new window to appear and render
+                    delay = 2.0
+                    if next_win:
+                        # Poll for the new window to appear (up to 5 seconds)
+                        for _wait in range(10):
+                            await asyncio.sleep(0.5)
+                            focused = await self._focus_window_by_title(next_win)
+                            if focused:
+                                logging.info("Replay: target window '%s' appeared after %.1fs", next_win, (_wait + 1) * 0.5)
+                                await asyncio.sleep(1.0)  # Extra settle time after focus
+                                delay = 0  # Already waited
+                                break
+                        else:
+                            logging.warning("Replay: target window '%s' did not appear within 5s, proceeding anyway", next_win)
+                elif atype == "key" and action_dict.get("key", "") in ("return", "enter"):
+                    # Enter often confirms a launch/dialog
+                    delay = 1.5
+                elif is_type_then_click:
+                    delay = 0.8
+                elif atype in ("click", "key"):
+                    delay = 0.5
+                else:
+                    delay = 0.15
                 await asyncio.sleep(delay)
 
             if task.status != TaskStatus.ERROR:
@@ -3195,7 +3338,8 @@ class ComputerUseEngine(EngineBase):
             # Standard function tool for OpenRouter compatibility
             func_tool = [{"name": "computer", "description": f"Control the computer screen ({self._scaled_width}x{self._scaled_height}). Returns a screenshot and a list of interactive UI elements after every action. PREFER click_element over coordinate-based clicks for buttons, fields, and other named UI elements.", "input_schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["screenshot", "mouse_move", "left_click", "right_click", "double_click", "middle_click", "left_click_drag", "type", "key", "cursor_position", "scroll", "click_element"], "description": "The action to perform. Use 'click_element' with 'element_id' to click a UI element by its ID from the INTERACTIVE ELEMENTS list — this is MORE RELIABLE than coordinate-based clicks."}, "coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] pixel coordinates for mouse actions (not needed for click_element)"}, "start_coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] start coordinates for drag"}, "text": {"type": "string", "description": "Text to type, or key combo like 'ctrl+c'"}, "amount": {"type": "integer", "description": "Scroll amount (positive=up, negative=down)"}, "element_id": {"type": "integer", "description": "ID of the UI element to click (from the INTERACTIVE ELEMENTS list). Use with action='click_element'."}}, "required": ["action"]}}]
             tools = native_tool if not self._is_openrouter else func_tool
-            sys_prompt = SYSTEM_PROMPT_TEMPLATE.format(scaled_width=self._scaled_width, scaled_height=self._scaled_height)
+            _pname = "Windows PC" if sys.platform == "win32" else "macOS computer" if sys.platform == "darwin" else "Linux computer"
+            sys_prompt = SYSTEM_PROMPT_TEMPLATE.format(scaled_width=self._scaled_width, scaled_height=self._scaled_height, platform_name=_pname)
             # ── Inject personality/memory context into system prompt ─────
             personality_ctx = getattr(task, '_personality_context', '')
             if personality_ctx:
@@ -3310,6 +3454,15 @@ class ComputerUseEngine(EngineBase):
                 estimated_cost_usd=round(cost, 4),
             )
             task.status = TaskStatus.CANCELLED if self._cancel_requested else TaskStatus.COMPLETE
+            # Auto-capture: offer to save successful tasks as workflows
+            if task.status == TaskStatus.COMPLETE and step_count > 0 and self._broadcast_fn:
+                try:
+                    if not self._recording_active:
+                        # We didn't record during this task, but we can still notify
+                        # the dashboard so the user can save it as a workflow if desired
+                        pass  # Future: auto-record during task execution
+                except Exception:
+                    pass
         except Exception as e:
             task.status = TaskStatus.ERROR; task.error = str(e)
         finally:
@@ -3406,6 +3559,123 @@ class TaskManager:
                 e.set_broadcast_fn(lambda msg: self._broadcast(msg) if self._broadcast else None)
                 await e.initialize()
                 self._engines[EngineName.COMPUTER_USE] = e
+
+    # ── LLM-based auto-routing ──────────────────────────────────────
+    _routing_cache: dict[str, tuple[str, float]] = {}  # hash -> (engine, timestamp)
+    _ROUTING_CACHE_TTL = 300  # 5 minutes
+    _ROUTING_CACHE_MAX = 100
+
+    async def _classify_prompt_with_llm(self, prompt: str) -> str | None:
+        """Classify prompt as BROWSER, DESKTOP, or CHAT using cheapest available LLM.
+        Returns engine name string or None on failure/timeout."""
+        import hashlib
+        cache_key = hashlib.md5(prompt[:200].lower().encode()).hexdigest()
+        now = time.monotonic()
+        # Check cache
+        if cache_key in self._routing_cache:
+            cached_val, cached_time = self._routing_cache[cache_key]
+            if now - cached_time < self._ROUTING_CACHE_TTL:
+                return cached_val
+        settings = get_settings()
+        sys_prompt = (
+            "You are a task router. Classify the user's task into exactly one category.\n"
+            "Reply with ONLY one word: BROWSER, DESKTOP, or CHAT.\n\n"
+            "BROWSER = tasks involving websites, URLs, web searches, web scraping, online services\n"
+            "DESKTOP = tasks involving desktop apps, files, system settings, mouse/keyboard control\n"
+            "CHAT = questions, conversations, analysis, coding help, math, anything that doesn't need a browser or desktop"
+        )
+        try:
+            import httpx
+            if settings.has_openai_key():
+                url = "https://api.openai.com/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"}
+                body = {"model": "gpt-4o-mini", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt[:500]}], "max_tokens": 5, "temperature": 0}
+            elif settings.has_anthropic_key():
+                url = "https://api.anthropic.com/v1/messages"
+                headers = {"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+                body = {"model": "claude-haiku-4-5-20251001", "max_tokens": 5, "system": sys_prompt, "messages": [{"role": "user", "content": prompt[:500]}]}
+            elif settings.has_openrouter_key():
+                url = "https://openrouter.ai/api/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {settings.openrouter_api_key}", "Content-Type": "application/json"}
+                body = {"model": "anthropic/claude-haiku-4-5-20251001", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt[:500]}], "max_tokens": 5, "temperature": 0}
+            else:
+                return None
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.post(url, json=body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            # Extract classification text
+            text = ""
+            if "choices" in data:
+                text = data["choices"][0]["message"]["content"].strip().upper()
+            elif "content" in data and data["content"]:
+                text = data["content"][0]["text"].strip().upper()
+            mapping = {"BROWSER": "browser_use", "DESKTOP": "computer_use", "CHAT": "openclaw"}
+            result = mapping.get(text)
+            if result:
+                # Cache result
+                if len(self._routing_cache) >= self._ROUTING_CACHE_MAX:
+                    oldest_key = min(self._routing_cache, key=lambda k: self._routing_cache[k][1])
+                    del self._routing_cache[oldest_key]
+                self._routing_cache[cache_key] = (result, now)
+                logging.info("LLM routing classified prompt as %s (%s)", text, result)
+            return result
+        except Exception as e:
+            logging.debug("LLM routing classification failed: %s", e)
+            return None
+
+    async def _modify_workflow_actions(self, actions: list[dict], modifications: str) -> list[dict] | None:
+        """Use LLM to modify a workflow's action list based on natural-language instructions.
+        Returns modified action list or None on failure."""
+        settings = get_settings()
+        actions_json = json.dumps(actions[:50], indent=2)  # Limit to prevent token overflow
+        sys_prompt = (
+            "You are a workflow modification assistant. You receive a list of recorded desktop automation actions "
+            "and a user's modification request. Return ONLY a valid JSON array of the modified actions.\n"
+            "Keep the same structure for each action. Only change the fields that need to change based on the user's request.\n"
+            "If an action has a 'text' or 'typed_text' field and the user wants to change typed content, update that field.\n"
+            "If the user wants to add or remove steps, modify the array accordingly.\n"
+            "Return ONLY the JSON array, no markdown, no explanation."
+        )
+        user_msg = f"Actions:\n{actions_json}\n\nModification request: {modifications}"
+        try:
+            import httpx
+            if settings.has_openai_key():
+                url = "https://api.openai.com/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"}
+                body = {"model": "gpt-4o-mini", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}], "max_tokens": 4096, "temperature": 0}
+            elif settings.has_anthropic_key():
+                url = "https://api.anthropic.com/v1/messages"
+                headers = {"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+                body = {"model": "claude-haiku-4-5-20251001", "max_tokens": 4096, "system": sys_prompt, "messages": [{"role": "user", "content": user_msg}]}
+            elif settings.has_openrouter_key():
+                url = "https://openrouter.ai/api/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {settings.openrouter_api_key}", "Content-Type": "application/json"}
+                body = {"model": "anthropic/claude-haiku-4-5-20251001", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}], "max_tokens": 4096, "temperature": 0}
+            else:
+                return None
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, json=body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            text = ""
+            if "choices" in data:
+                text = data["choices"][0]["message"]["content"].strip()
+            elif "content" in data and data["content"]:
+                text = data["content"][0]["text"].strip()
+            # Parse JSON — handle markdown code fences
+            text = text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                text = text.rsplit("```", 1)[0]
+            modified = json.loads(text)
+            if isinstance(modified, list):
+                logging.info("Workflow modification succeeded: %d actions -> %d actions", len(actions), len(modified))
+                return modified
+            return None
+        except Exception as e:
+            logging.error("Workflow modification LLM call failed: %s", e)
+            return None
 
     def _engine_for(self, preferred: EngineName, prompt: str = "", exclude: list[EngineName] | None = None) -> EngineBase | None:
         """Select the best available engine for a task.
@@ -3524,12 +3794,33 @@ class TaskManager:
             logging.warning("Failed to load personality context: %s", e)
             task._personality_context = ""
 
+        routing_reason = "keyword match"
+        # LLM-based auto-routing: try LLM classification first, fall back to keyword heuristics
+        if task.engine == EngineName.AUTO:
+            try:
+                llm_engine = await self._classify_prompt_with_llm(task.prompt)
+                if llm_engine:
+                    try:
+                        task.engine = EngineName(llm_engine)
+                        routing_reason = "LLM routing"
+                    except ValueError:
+                        pass
+            except Exception as e:
+                logging.debug("LLM routing attempt failed: %s", e)
         engine = self._engine_for(task.engine, prompt=task.prompt)
         if not engine:
             task.status = TaskStatus.ERROR
             task.error = "No engine available"
         else:
             task.engine = engine.name
+            # Broadcast routing info to dashboard
+            _engine_display = {"browser_use": "Web Browser", "computer_use": "Desktop Control", "openclaw": "AI Chat"}
+            if self._broadcast:
+                await self._broadcast({"type": "routing_info", "payload": {
+                    "task_id": task.id,
+                    "engine_display": _engine_display.get(engine.name.value, engine.display_name),
+                    "reason": routing_reason,
+                }})
             get_audit().log(AuditEvent(task_id=task.id, event_type="task_started", detail=engine.display_name))
             # ── Reset live view for visual engines ────────────────────
             if self._broadcast and engine.name in (EngineName.BROWSER_USE, EngineName.COMPUTER_USE):
@@ -3846,6 +4137,20 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .msg-icon-btn{width:18px;height:18px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.1);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);transition:all 0.2s;padding:0;}
 .msg-icon-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(99,102,241,0.08);}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
+@keyframes recordPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.5);}50%{box-shadow:0 0 0 6px rgba(239,68,68,0);}}
+/* Engine chips */
+.engine-chip-row{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:0 0 6px 0;}
+.engine-chip{padding:4px 12px;border-radius:16px;font-size:11px;font-weight:600;border:1.5px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all 0.15s;white-space:nowrap;}
+.engine-chip:hover{border-color:var(--accent);color:var(--accent);background:rgba(99,102,241,0.06);}
+.engine-chip.active{border-color:var(--accent);color:#fff;background:var(--accent);}
+.engine-chip-spacer{flex:1;}
+.record-chip{padding:4px 12px;border-radius:16px;font-size:11px;font-weight:600;border:1.5px solid rgba(239,68,68,0.3);background:transparent;color:var(--muted);cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:5px;}
+.record-chip:hover{border-color:#ef4444;color:#ef4444;}
+.record-chip.active{border-color:#ef4444;background:rgba(127,29,29,0.6);color:#ef4444;animation:recordPulse 1.5s ease-in-out infinite;}
+.record-chip .rec-dot{width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0;}
+.record-chip .rec-timer{font-variant-numeric:tabular-nums;font-size:10px;}
+/* Routing indicator */
+.routing-indicator{font-size:11px;color:var(--muted);padding:2px 0 4px 0;font-style:italic;}
 @keyframes msgSlideUp{0%{opacity:0;transform:translateY(18px);}60%{opacity:1;transform:translateY(-2px);}100%{opacity:1;transform:translateY(0);}}
 .msg-group.msg-enter{animation:msgSlideUp 0.35s cubic-bezier(0.16,1,0.3,1) both;}
 .msg-assistant.msg-enter{animation:msgSlideUp 0.35s cubic-bezier(0.16,1,0.3,1) 0.05s both;}
@@ -3960,7 +4265,7 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 """
     # Inline JS
     js = """
-const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null};
+const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null,routingInfo:{},chatExtras:{},chatRecordStart:null};
 function updateSystemHealth(){
   const dot=document.getElementById("healthDot"),txt=document.getElementById("healthText");
   const wsEl=document.getElementById("healthWS"),engEl=document.getElementById("healthEngines"),brEl=document.getElementById("healthBridge");
@@ -4032,8 +4337,9 @@ function connect(){
       else if(m.type==="approval_request"){showApprovalModal(m.payload);}
       else if(m.type==="config_update"){if(m.payload.automation_mode){state.automationMode=m.payload.automation_mode;updateAutomationModeUI();}}
       else if(m.type==="workflow_update"){state.workflows=m.payload;renderWorkflows();updateTabBadges();}
-      else if(m.type==="recording_status"){handleRecordingStatus(m.payload);}
-      else if(m.type==="recording_result"){handleRecordingResult(m.payload);}
+      else if(m.type==="routing_info"){state.routingInfo[m.payload.task_id]={engine:m.payload.engine_display,reason:m.payload.reason};render();}
+      else if(m.type==="recording_status"){handleRecordingStatus(m.payload);updateChatRecordBtn(!!m.payload.active);}
+      else if(m.type==="recording_result"){handleRecordingResult(m.payload);handleChatRecordingResult(m.payload);}
       else if(m.type==="workflow_saved"){addActivity({timestamp:new Date().toISOString(),event_type:"workflow",detail:"Saved workflow: "+(m.payload.name||"")});}
       else if(m.type==="replay_started"){addActivity({timestamp:new Date().toISOString(),event_type:"replay",detail:"Replaying workflow: "+(m.payload.workflow||"")});}
     }catch(err){console.error("[ClawBridge] WS message parse error:",err);}
@@ -4227,15 +4533,72 @@ function toggleSection(id){
 }
 function upsert(t){const i=state.tasks.findIndex(x=>x.id===t.id);if(i>=0)state.tasks[i]=t;else state.tasks.push(t);render();}
 function scrollToBottom(){const el=document.getElementById("taskList");if(el)requestAnimationFrame(()=>el.scrollTop=el.scrollHeight);}
+const ENGINE_DISPLAY={browser_use:"Web Browser",computer_use:"Desktop Control",openclaw:"AI Chat",auto:"Auto"};
+const SLASH_ENGINE_MAP={"/browser":"browser_use","/computer":"computer_use","/chat":"openclaw"};
+function selectEngineChip(val){
+  document.getElementById("engine").value=val;
+  document.querySelectorAll(".engine-chip").forEach(c=>{c.classList.toggle("active",c.dataset.engine===val);});
+}
+let _chatRecordInterval=null;
+function toggleChatRecording(){
+  if(state.recording){
+    if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify({type:"recording_stop"}));
+  }else{
+    if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify({type:"recording_start"}));
+  }
+}
+function updateChatRecordBtn(active){
+  const btn=document.getElementById("chatRecordBtn");
+  const label=document.getElementById("chatRecordLabel");
+  const timer=document.getElementById("chatRecordTimer");
+  if(!btn)return;
+  if(active){
+    btn.classList.add("active");
+    if(label)label.textContent="Stop";
+    state.chatRecordStart=Date.now();
+    if(timer){timer.style.display="inline";timer.textContent="00:00";}
+    _chatRecordInterval=setInterval(()=>{
+      if(!state.chatRecordStart)return;
+      const s=Math.floor((Date.now()-state.chatRecordStart)/1000);
+      if(timer)timer.textContent=String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0");
+    },1000);
+  }else{
+    btn.classList.remove("active");
+    if(label)label.textContent="Record";
+    if(timer)timer.style.display="none";
+    state.chatRecordStart=null;
+    if(_chatRecordInterval){clearInterval(_chatRecordInterval);_chatRecordInterval=null;}
+  }
+}
 async function submit(){
-  const prompt=document.getElementById("prompt").value.trim();if(!prompt)return;
-  const engine=document.getElementById("engine").value;
+  const raw=document.getElementById("prompt").value.trim();if(!raw)return;
+  let prompt=raw, engine=document.getElementById("engine").value;
+  // Slash command parsing
+  if(raw.startsWith("/")){
+    const lower=raw.toLowerCase();
+    if(lower==="/record"||lower==="/record "){toggleChatRecording();document.getElementById("prompt").value="";return;}
+    if(lower==="/stop"||lower==="/stop "){if(state.recording)toggleChatRecording();document.getElementById("prompt").value="";return;}
+    if(lower.startsWith("/replay ")){
+      const rest=raw.slice(8).trim();
+      if(rest){await handleSlashReplay(rest);document.getElementById("prompt").value="";document.getElementById("prompt").style.height="auto";return;}
+    }
+    for(const[prefix,eng] of Object.entries(SLASH_ENGINE_MAP)){
+      if(lower.startsWith(prefix+" ")||lower.startsWith(prefix+"\\n")){
+        prompt=raw.slice(prefix.length).trim();engine=eng;break;
+      }else if(lower===prefix){
+        addActivity({timestamp:new Date().toISOString(),event_type:"error",detail:"Usage: "+prefix+" <message>"});
+        return;
+      }
+    }
+    if(!prompt){addActivity({timestamp:new Date().toISOString(),event_type:"error",detail:"Unknown command: "+raw.split(" ")[0]});return;}
+  }
   const btn=document.getElementById("submitBtn");btn.disabled=true;
   try {
     if(engine==="browser_use")await ensureBrowser();
     await api("POST","/api/tasks",{prompt,engine});
     document.getElementById("prompt").value="";
     document.getElementById("prompt").style.height = "auto";
+    selectEngineChip("auto");
     scrollToBottom();
     setTimeout(checkOnboarding,500);
   } catch(e) {
@@ -4243,6 +4606,25 @@ async function submit(){
   } finally {
     btn.disabled=false;
   }
+}
+async function handleSlashReplay(text){
+  // Parse: /replay <name> [with <modifications>] or /replay <name> but <modifications>
+  let wfName=text, modifications="";
+  const withIdx=text.toLowerCase().indexOf(" with ");
+  const butIdx=text.toLowerCase().indexOf(" but ");
+  const splitIdx=withIdx>=0?(butIdx>=0?Math.min(withIdx,butIdx):withIdx):butIdx;
+  if(splitIdx>0){wfName=text.slice(0,splitIdx).trim();modifications=text.slice(splitIdx).trim().replace(/^(with|but)\\s+/i,"");}
+  if(!wfName)return;
+  try{
+    const wfs=await api("GET","/api/workflows");
+    const wf=wfs.find(w=>w.name.toLowerCase()===wfName.toLowerCase());
+    if(!wf){addActivity({timestamp:new Date().toISOString(),event_type:"error",detail:"Workflow not found: "+wfName});return;}
+    if(modifications){
+      await api("POST","/api/workflows/"+wf.id+"/replay-modified",{modifications});
+    }else{
+      await api("POST","/api/workflows/"+wf.id+"/replay");
+    }
+  }catch(e){addActivity({timestamp:new Date().toISOString(),event_type:"error",detail:"Replay failed: "+e.message});}
 }
 async function cancel(id,ev){
   const btn=ev&&ev.target?ev.target.closest('button'):null;
@@ -4292,7 +4674,7 @@ function render(){
     if(hasResult||hasError||t.status!=="pending"){
       // Build tooltip rows
       let tipRows='<div class="tip-row"><span class="tip-label">Status</span><span class="tip-val status-'+t.status+'">'+t.status+'</span></div>'
-        +'<div class="tip-row"><span class="tip-label">Engine</span><span class="tip-val">'+esc(t.engine)+'</span></div>'
+        +'<div class="tip-row"><span class="tip-label">Engine</span><span class="tip-val">'+esc(ENGINE_DISPLAY[t.engine]||t.engine)+'</span></div>'
         +'<div class="tip-row"><span class="tip-label">Time</span><span class="tip-val">'+time+'</span></div>';
       if(t.result&&t.result.tokens_in){
         const ti=t.result.tokens_in;const to=t.result.tokens_out;const c=t.result.estimated_cost_usd;
@@ -4320,22 +4702,33 @@ function render(){
       assistantHtml+=ctl+'</div>';
     }
 
+    // Routing indicator
+    const ri=state.routingInfo[t.id];
+    const routingLine=ri?'<div class="routing-indicator">Using: '+esc(ri.engine)+' ('+esc(ri.reason)+')</div>':"";
+    // Chat extras (workflow save cards, etc.)
+    const extras=state.chatExtras[t.id]||"";
     return '<div class="msg-group'+(isNewMsg?' msg-enter':'')+'" data-tid="'+t.id+'">'
       +'<div class="msg-user"><div class="msg-user-bubble"><div class="msg-user-inner">'+esc(t.prompt)+'</div></div></div>'
+      +routingLine
       +assistantHtml
+      +extras
       +'</div>';
   }).join("");
   scrollToBottom();
 }
+const ENGINE_SUBTITLE={browser_use:"Browse the web with a real browser",computer_use:"Control desktop apps via mouse & keyboard",openclaw:"Fast AI chat with memory & skills"};
 function renderEngines(){
   const c=document.getElementById("engineList");
   if(!state.engines.length){c.innerHTML='<p class="muted">No engines</p>';return;}
   c.innerHTML=state.engines.map(e=>{
     const sc=e.status==="available"?"color:var(--ok)":e.status==="no_api_key"?"color:#f59e0b":e.status==="error"?"color:var(--err)":"color:var(--muted)";
+    const dn=ENGINE_DISPLAY[e.name]||e.display_name;
+    const sub=ENGINE_SUBTITLE[e.name]||"";
     let extra="";
+    if(sub)extra+='<div style="font-size:10px;color:var(--muted);margin-top:1px">'+sub+'</div>';
     if(e.error_hint)extra+='<div style="font-size:10px;color:var(--muted);margin-top:2px">'+esc(e.error_hint)+'</div>';
     if(e.status==="not_installed"&&e.name==="openclaw")extra+='<button class="btn" style="font-size:10px;padding:4px 10px;margin-top:6px" onclick="installEngine(\\'openclaw\\',event)">Install</button>';
-    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)"><div style="display:flex;justify-content:space-between"><span>'+esc(e.display_name)+'</span><span style="font-weight:600;'+sc+'">'+esc(e.status)+'</span></div>'+extra+'</div>';
+    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)"><div style="display:flex;justify-content:space-between"><span>'+esc(dn)+'</span><span style="font-weight:600;'+sc+'">'+esc(e.status)+'</span></div>'+extra+'</div>';
   }).join("");
   updateSystemHealth();
 }
@@ -4755,6 +5148,42 @@ function handleRecordingResult(p){
   if(form)form.style.display="block";
   if(info)info.textContent="Captured "+state.recordingActions.length+" actions. Give this workflow a name to save it.";
 }
+function handleChatRecordingResult(p){
+  const actions=p.actions||[];
+  if(!actions.length)return;
+  // Insert save-as-workflow card into chat stream
+  const lastTask=state.tasks.length?state.tasks[state.tasks.length-1]:null;
+  const anchorId=lastTask?lastTask.id:"_recording";
+  state.chatExtras[anchorId]='<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:8px;">'
+    +'<div style="font-size:13px;font-weight:600;margin-bottom:6px;">Save as workflow?</div>'
+    +'<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">'+actions.length+' actions captured</div>'
+    +'<input id="chatWfName" placeholder="Workflow name..." style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:8px;">'
+    +'<div style="display:flex;gap:6px;">'
+    +'<button class="btn" onclick="saveChatWorkflow()" style="font-size:11px;padding:4px 12px;">Save</button>'
+    +'<button class="btn" onclick="discardChatRecording(\\''+anchorId+'\\')">Discard</button>'
+    +'</div></div>';
+  state._pendingChatRecordActions=actions;
+  render();
+}
+function saveChatWorkflow(){
+  const nameEl=document.getElementById("chatWfName");
+  const name=nameEl?nameEl.value.trim():"";
+  if(!name){alert("Enter a workflow name.");return;}
+  const actions=state._pendingChatRecordActions||[];
+  if(!actions.length)return;
+  if(state.ws&&state.ws.readyState===1){
+    state.ws.send(JSON.stringify({type:"save_workflow",payload:{name,description:"",actions,tags:[]}}));
+  }
+  // Clear the card
+  Object.keys(state.chatExtras).forEach(k=>{if(state.chatExtras[k].includes("chatWfName"))delete state.chatExtras[k];});
+  state._pendingChatRecordActions=null;
+  render();
+}
+function discardChatRecording(anchorId){
+  delete state.chatExtras[anchorId];
+  state._pendingChatRecordActions=null;
+  render();
+}
 function saveWorkflow(){
   const name=(document.getElementById("wfName")||{}).value||"";
   const desc=(document.getElementById("wfDescription")||{}).value||"";
@@ -4794,7 +5223,14 @@ function renderWorkflows(){
     html+='<div><span style="font-weight:600;font-size:14px;">'+_esc(wf.name)+'</span>'+replayed+'</div>';
     html+='<div style="display:flex;gap:6px;">';
     html+='<button class="btn" onclick="replayWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 10px;">Replay</button>';
+    html+='<button class="btn" data-wf-id="'+wf.id+'" data-wf-name="'+_esc(wf.name)+'" onclick="showModifyReplayBtn(this)" style="font-size:11px;padding:4px 10px;background:rgba(99,102,241,0.15);border:1px solid var(--accent);color:var(--accent);">Replay with changes...</button>';
     html+='<button class="btn" onclick="deleteWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 10px;background:#2d3748;border:1px solid var(--border);">Delete</button>';
+    html+='</div></div>';
+    html+='<div id="modify-'+wf.id+'" style="display:none;margin-bottom:6px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border);">';
+    html+='<input id="modifyInput-'+wf.id+'" placeholder="Describe what to change..." style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;margin-bottom:6px;">';
+    html+='<div style="display:flex;gap:6px;">';
+    html+='<button class="btn" onclick="executeModifyReplay(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;">Replay Modified</button>';
+    html+='<button class="btn" onclick="document.getElementById(\\\'modify-'+wf.id+'\\\').style.display=\\\'none\\\'" style="font-size:11px;padding:4px 8px;background:#2d3748;">Cancel</button>';
     html+='</div></div>';
     if(wf.description)html+='<p style="font-size:12px;color:var(--muted);margin-bottom:6px;">'+_esc(wf.description)+'</p>';
     html+='<div style="display:flex;gap:12px;align-items:center;font-size:11px;color:var(--muted);">';
@@ -4823,7 +5259,25 @@ async function deleteWorkflow(id){
     }
   }catch(e){console.error("Delete workflow error:",e);}
 }
-function _esc(s){if(!s)return"";return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function _esc(s){if(!s)return"";return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
+function showModifyReplayBtn(btn){showModifyReplay(btn.dataset.wfId);}
+function showModifyReplay(id){
+  const el=document.getElementById("modify-"+id);
+  if(el)el.style.display=el.style.display==="none"?"block":"none";
+  const inp=document.getElementById("modifyInput-"+id);
+  if(inp)inp.focus();
+}
+async function executeModifyReplay(id){
+  const inp=document.getElementById("modifyInput-"+id);
+  const modifications=inp?inp.value.trim():"";
+  if(!modifications){alert("Describe what to change.");return;}
+  try{
+    await api("POST","/api/workflows/"+id+"/replay-modified",{modifications});
+    switchView("chat");
+    addActivity({timestamp:new Date().toISOString(),event_type:"replay",detail:"Replaying workflow with modifications"});
+    const el=document.getElementById("modify-"+id);if(el)el.style.display="none";
+  }catch(e){addActivity({timestamp:new Date().toISOString(),event_type:"error",detail:"Modified replay failed: "+e.message});}
+}
 // ── Onboarding ──
 function checkOnboarding(){
   if(localStorage.getItem("onboarding_dismissed")==="true"){
@@ -5400,7 +5854,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div class="card expandable" id="card-liveview">
         <h2 class="expandable-header" onclick="toggleSection('liveview')">
-          <span style="display:flex;align-items:center;gap:8px;"><svg id="monitorIcon" class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Browser</span>
+          <span style="display:flex;align-items:center;gap:8px;"><svg id="monitorIcon" class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Live View</span>
           <span style="display:flex;align-items:center;gap:6px;">
             <span id="liveStatus" style="font-size:9px;color:var(--muted)">Idle</span>
             <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -5503,16 +5957,24 @@ document.addEventListener('DOMContentLoaded', () => {
           <p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>
         </div>
         <div class="input-area">
+          <div class="engine-chip-row">
+            <button type="button" class="engine-chip active" data-engine="auto" onclick="selectEngineChip('auto')">Auto</button>
+            <button type="button" class="engine-chip" data-engine="browser_use" onclick="selectEngineChip('browser_use')">Browser</button>
+            <button type="button" class="engine-chip" data-engine="computer_use" onclick="selectEngineChip('computer_use')">Desktop</button>
+            <button type="button" class="engine-chip" data-engine="openclaw" onclick="selectEngineChip('openclaw')">Chat</button>
+            <span class="engine-chip-spacer"></span>
+            <button type="button" class="record-chip" id="chatRecordBtn" onclick="toggleChatRecording()"><span class="rec-dot"></span><span id="chatRecordLabel">Record</span><span class="rec-timer" id="chatRecordTimer" style="display:none">00:00</span></button>
+          </div>
           <form id="taskForm" class="input-container">
             <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
-              <select id="engine">
+              <select id="engine" style="display:none;">
                 <option value="auto">Auto</option>
-                <option value="browser_use">browser-use</option>
-                <option value="computer_use">computer-use</option>
-                <option value="openclaw">OpenClaw</option>
+                <option value="browser_use">Web Browser</option>
+                <option value="computer_use">Desktop Control</option>
+                <option value="openclaw">AI Chat</option>
               </select>
             </div>
-            <textarea id="prompt" placeholder="Send a message..." rows="1" title="Enter to send, Shift+Enter for new line"></textarea>
+            <textarea id="prompt" placeholder="Send a message... (try /browser, /computer, /chat, /record)" rows="1" title="Enter to send, Shift+Enter for new line"></textarea>
             <button type="submit" class="btn" id="submitBtn" title="Send message (Enter)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               Send
@@ -6478,6 +6940,44 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
         task = Task(prompt=f"replay: {wf.name}", engine=EngineName.COMPUTER_USE)
         result = await get_manager().submit(task)
         return {"workflow": wf.model_dump(mode="json"), "task": result.model_dump(mode="json")}
+
+    @app.post("/api/workflows/{wf_id}/replay-modified")
+    async def replay_workflow_modified(wf_id: str, body: dict):
+        wf = get_workflow_manager().get(wf_id)
+        if not wf:
+            raise HTTPException(404, "Workflow not found")
+        modifications = body.get("modifications", "").strip()
+        if not modifications:
+            raise HTTPException(400, "modifications field is required")
+        if len(modifications) > 2000:
+            raise HTTPException(400, "modifications text too long (max 2000 chars)")
+        # Safety scan modifications text for injection patterns
+        mod_scan = safety_scan_prompt(modifications)
+        if mod_scan.get("injection_flags"):
+            raise HTTPException(400, f"Modification text contains unsafe patterns")
+        # Use LLM to modify the action list
+        try:
+            modified_actions = await get_manager()._modify_workflow_actions(
+                [a if isinstance(a, dict) else a.model_dump() for a in wf.actions],
+                modifications
+            )
+        except Exception as e:
+            logging.error("Workflow modification failed: %s", e)
+            modified_actions = None
+        if not modified_actions:
+            # Fallback: replay unmodified
+            modified_actions = [a if isinstance(a, dict) else a.model_dump() for a in wf.actions]
+        # Create a temporary modified workflow for replay
+        temp_wf = get_workflow_manager().create(
+            name=f"{wf.name} (modified)",
+            description=f"Modified replay: {modifications[:200]}",
+            actions=modified_actions,
+            target_app=wf.target_app or "",
+            tags=["modified-replay"],
+        )
+        task = Task(prompt=f"replay: {temp_wf.name}", engine=EngineName.COMPUTER_USE)
+        result = await get_manager().submit(task)
+        return {"workflow": temp_wf.model_dump(mode="json"), "task": result.model_dump(mode="json"), "modifications": modifications}
 
     @app.post("/api/recording/start")
     async def start_recording():
