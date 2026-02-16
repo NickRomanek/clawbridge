@@ -35,6 +35,7 @@ from mcp.server.fastmcp import FastMCP
 # Configuration
 # ---------------------------------------------------------------------------
 CLAWBRIDGE_URL = os.environ.get("CLAWBRIDGE_URL", "http://127.0.0.1:8765")
+CLAWBRIDGE_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 
 # Logging goes to stderr (stdout is reserved for JSON-RPC in stdio mode)
 logging.basicConfig(
@@ -59,14 +60,17 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 # HTTP client helper
 # ---------------------------------------------------------------------------
-def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=CLAWBRIDGE_URL, timeout=600.0)
+def _client(timeout: float = 600.0) -> httpx.AsyncClient:
+    headers = {}
+    if CLAWBRIDGE_TOKEN:
+        headers["Authorization"] = f"Bearer {CLAWBRIDGE_TOKEN}"
+    return httpx.AsyncClient(base_url=CLAWBRIDGE_URL, timeout=timeout, headers=headers)
 
 
 async def _health_check() -> bool:
     """Check if ClawBridge is running."""
     try:
-        async with _client() as c:
+        async with _client(timeout=5.0) as c:
             resp = await c.get("/health")
             return resp.status_code == 200
     except Exception:
@@ -103,26 +107,37 @@ async def run_task(prompt: str, engine: str = "auto", wait: bool = True) -> dict
     if not await _health_check():
         return {"error": "ClawBridge is not running. Start it with: python clawbridge.py"}
 
-    async with _client() as client:
-        resp = await client.post("/api/tasks", json={"prompt": prompt, "engine": engine})
-        resp.raise_for_status()
-        task = resp.json()
-
-        if not wait:
-            return task
-
-        # Poll until task completes (with timeout)
-        task_id = task["id"]
-        poll_count = 0
-        max_polls = 300  # 10 minutes max (2s intervals)
-        while task["status"] in ("pending", "running") and poll_count < max_polls:
-            await asyncio.sleep(2)
-            resp = await client.get(f"/api/tasks/{task_id}")
+    try:
+        async with _client() as client:
+            resp = await client.post("/api/tasks", json={"prompt": prompt, "engine": engine})
             resp.raise_for_status()
             task = resp.json()
-            poll_count += 1
 
-        return task
+            if not wait:
+                return task
+
+            # Poll until task completes (with timeout)
+            task_id = task["id"]
+            poll_count = 0
+            max_polls = 300  # 10 minutes max (2s intervals)
+            while task["status"] in ("pending", "running") and poll_count < max_polls:
+                await asyncio.sleep(2)
+                resp = await client.get(f"/api/tasks/{task_id}")
+                resp.raise_for_status()
+                task = resp.json()
+                poll_count += 1
+
+            if task["status"] in ("pending", "running"):
+                return {"warning": "Task still running after 10 minutes", "task": task,
+                        "hint": "Use get_task_status(task_id) to check later"}
+
+            return task
+    except httpx.HTTPStatusError as e:
+        return {"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
 
 
 @mcp.tool()
@@ -135,10 +150,17 @@ async def get_task_status(task_id: str) -> dict:
     Returns:
         Task object with current status, result if complete, error if failed.
     """
-    async with _client() as client:
-        resp = await client.get(f"/api/tasks/{task_id}")
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.get(f"/api/tasks/{task_id}")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
 
 
 @mcp.tool()
@@ -151,11 +173,18 @@ async def list_tasks(limit: int = 20) -> list[dict]:
     Returns:
         List of task objects sorted by creation time.
     """
-    async with _client() as client:
-        resp = await client.get("/api/tasks")
-        resp.raise_for_status()
-        tasks = resp.json()
-        return tasks[:limit]
+    try:
+        async with _client() as client:
+            resp = await client.get("/api/tasks")
+            resp.raise_for_status()
+            tasks = resp.json()
+            return tasks[:limit]
+    except httpx.HTTPStatusError as e:
+        return [{"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}]
+    except httpx.ConnectError:
+        return [{"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}]
+    except Exception as e:
+        return [{"error": f"Unexpected error: {type(e).__name__}: {e}"}]
 
 
 @mcp.tool()
@@ -168,10 +197,17 @@ async def cancel_task(task_id: str) -> dict:
     Returns:
         Updated task object.
     """
-    async with _client() as client:
-        resp = await client.patch(f"/api/tasks/{task_id}", json={"action": "cancel"})
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.patch(f"/api/tasks/{task_id}", json={"action": "cancel"})
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -186,10 +222,17 @@ async def list_engines() -> list[dict]:
         List of engines with name, display_name, status (available/running/stopped/error),
         and error hints if any.
     """
-    async with _client() as client:
-        resp = await client.get("/api/engines")
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.get("/api/engines")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return [{"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}]
+    except httpx.ConnectError:
+        return [{"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}]
+    except Exception as e:
+        return [{"error": f"Unexpected error: {type(e).__name__}: {e}"}]
 
 
 # ---------------------------------------------------------------------------
@@ -209,10 +252,17 @@ async def get_task_steps(task_id: str) -> dict:
     Returns:
         Object with task_id, list of steps, and total_steps count.
     """
-    async with _client() as client:
-        resp = await client.get(f"/api/tasks/{task_id}/steps")
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.get(f"/api/tasks/{task_id}/steps")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
 
 
 @mcp.tool()
@@ -227,10 +277,17 @@ async def get_task_audit(task_id: str) -> list[dict]:
     Returns:
         List of audit events with timestamps and details.
     """
-    async with _client() as client:
-        resp = await client.get(f"/api/tasks/{task_id}/audit")
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.get(f"/api/tasks/{task_id}/audit")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return [{"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}]
+    except httpx.ConnectError:
+        return [{"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}]
+    except Exception as e:
+        return [{"error": f"Unexpected error: {type(e).__name__}: {e}"}]
 
 
 # ---------------------------------------------------------------------------
@@ -247,10 +304,17 @@ async def search_memory(query: str) -> list[dict]:
     Returns:
         List of matching memory entries with file source and content.
     """
-    async with _client() as client:
-        resp = await client.get("/api/memory/search", params={"q": query})
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.get("/api/memory/search", params={"q": query})
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return [{"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}]
+    except httpx.ConnectError:
+        return [{"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}]
+    except Exception as e:
+        return [{"error": f"Unexpected error: {type(e).__name__}: {e}"}]
 
 
 @mcp.tool()
@@ -263,11 +327,18 @@ async def get_agent_context() -> str:
     Returns:
         The full personality/memory context string.
     """
-    async with _client() as client:
-        resp = await client.get("/api/personality/context")
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("context", "")
+    try:
+        async with _client() as client:
+            resp = await client.get("/api/personality/context")
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("context", "")
+    except httpx.HTTPStatusError as e:
+        return f"ClawBridge API error: {e.response.status_code}: {e.response.text[:500]}"
+    except httpx.ConnectError:
+        return "Cannot connect to ClawBridge. Is it running on port 8765?"
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}: {e}"
 
 
 @mcp.tool()
@@ -282,10 +353,17 @@ async def append_memory(content: str, daily: bool = True) -> dict:
     Returns:
         Confirmation message.
     """
-    async with _client() as client:
-        resp = await client.post("/api/memory", json={"text": content, "daily": daily})
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.post("/api/memory", json={"text": content, "daily": daily})
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -299,37 +377,57 @@ async def list_schedules() -> list[dict]:
     Returns:
         List of schedules with ID, prompt, engine, interval, and enabled status.
     """
-    async with _client() as client:
-        resp = await client.get("/api/schedules")
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.get("/api/schedules")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return [{"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}]
+    except httpx.ConnectError:
+        return [{"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}]
+    except Exception as e:
+        return [{"error": f"Unexpected error: {type(e).__name__}: {e}"}]
 
 
 @mcp.tool()
 async def create_schedule(
+    name: str,
     prompt: str,
     engine: str = "auto",
-    interval_minutes: int = 60,
-    cron: str = "",
+    schedule_type: str = "interval",
+    schedule_value: str = "60",
 ) -> dict:
     """Create a recurring task schedule.
 
     Args:
+        name: Display name for the schedule.
         prompt: The task to run on each schedule trigger.
         engine: Which engine to use (auto, openclaw, computer_use, browser_use).
-        interval_minutes: Run every N minutes (ignored if cron is set).
-        cron: Cron expression (e.g., "0 9 * * *" for daily at 9am). Overrides interval.
+        schedule_type: "interval" (every N minutes), "cron" (cron expression), or "once".
+        schedule_value: For interval: minutes (e.g., "60"). For cron: expression (e.g., "0 9 * * *").
 
     Returns:
         Created schedule object.
     """
-    async with _client() as client:
-        body = {"prompt": prompt, "engine": engine, "interval_minutes": interval_minutes}
-        if cron:
-            body["cron"] = cron
-        resp = await client.post("/api/schedules", json=body)
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            body = {
+                "name": name,
+                "prompt": prompt,
+                "engine": engine,
+                "schedule_type": schedule_type,
+                "schedule_value": schedule_value,
+            }
+            resp = await client.post("/api/schedules", json=body)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -346,10 +444,17 @@ async def get_config() -> dict:
     Returns:
         Configuration summary dict.
     """
-    async with _client() as client:
-        resp = await client.get("/api/config")
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.get("/api/config")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
 
 
 @mcp.tool()
@@ -360,10 +465,17 @@ async def get_license_info() -> dict:
         License info including status (activated/byok/not_activated),
         tier (starter/byok), credit balance, and top-up URL.
     """
-    async with _client() as client:
-        resp = await client.get("/api/license/status")
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with _client() as client:
+            resp = await client.get("/api/license/status")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"ClawBridge API error: {e.response.status_code}", "detail": e.response.text[:500]}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to ClawBridge. Is it running on port 8765?"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
 
 
 # ---------------------------------------------------------------------------

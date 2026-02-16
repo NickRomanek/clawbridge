@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Visual step labels and percentage tracking
 
 ### Changed
-- Monolith grew from ~5600 to ~6200 lines with workflow recording, replay, and perception integration
+- Monolith grew from ~5600 to ~6700 lines with workflow recording, replay, perception integration, and security hardening
 - `pynput>=1.7.6` added to dependencies
 - Updated `_ensure_dependencies()` to auto-install pynput on first run
 - SQLite schema now includes `workflows` table
@@ -123,6 +123,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+#### Security Hardening
+- **WebSocket authentication**: Token checked before `accept()` using `hmac.compare_digest`, mirrors HTTP middleware logic
+- **CSRF protection**: Token generated per session, injected into dashboard via `__PRELOAD__`, validated on cookie-based POST/PUT/PATCH/DELETE requests. API clients using Authorization header or query param are exempt.
+- **HttpOnly cookie**: New `POST /api/auth/login` endpoint sets session cookie server-side with `httponly=True` and `samesite=strict`. Login form no longer sets cookie via JavaScript.
+- **Path traversal protection**: `PUT /api/personality/{filename}` validates against `..`, `/`, `\` in filename (defense-in-depth on top of existing whitelist)
+- **Memory injection filtering**: `safety_redact()` now strips prompt injection patterns (`[FILTERED]`) in addition to credentials and PII. Also applied to `POST /api/memory` input.
+- **Expanded injection detection**: 11 patterns (up from 6) including admin/debug mode, execute command, `[SYSTEM]`/`[ADMIN]`/`[OVERRIDE]` tags, and broader instruction override variants
+- **Remote bridge validation**: Requires HTTPS for non-localhost URLs and requires `REMOTE_AUTH_TOKEN` to be set
+- **XSS fix**: DOMPurify fallback changed from raw HTML to `esc()` (safe text encoding)
+- **Recorder/perception graceful degradation**: `start_recording()`, `stop_recording()`, and `_replay_single_action()` now handle missing `clawbridge.recorder` / `clawbridge.perception` packages with try/except ImportError
+
+#### MCP Server Improvements
+- **Auth token passthrough**: MCP proxy reads `DASHBOARD_TOKEN` from env and sends as Bearer header to ClawBridge API
+- **Error handling**: All 15 MCP tools wrapped in try/except with structured error dicts for `HTTPStatusError`, `ConnectError`, and generic exceptions
+- **`create_schedule` fix**: Parameters now match monolith API (`name`, `schedule_type`, `schedule_value` instead of `interval_minutes`/`cron`)
+- **Health check timeout**: Reduced from 600s to 5s to prevent blocking
+
+### Fixed
+- Computer-use engine post-action re-focus race condition — dialogs/popups opened by actions are no longer hidden by immediate re-focus. Pre-action sleep reduced from 0.5s to 0.3s.
+- Browser-use engine step broadcasting — `on_step` callback now fires during step extraction, dashboard shows step count and details for browser-use tasks
+- `pyautogui` dependency now has `sys_platform == 'win32'` marker in requirements.txt
 
 #### Licensing & Activation System
 - **Activation Backend** (`website/backend/`): Cloudflare Worker with D1 database for license management

@@ -22,3 +22,18 @@ nul
 .astro/
 .dev.vars
 website/
+
+# Dev scripts & artifacts
+_git.bat
+_rungit.bat
+_gitlog.txt
+git_err.txt
+git_out.txt
+check_html.py
+auto_continue.py
+test_ws_live.py
+IMPLEMENTATION_PLAN_READY.txt
+clawbridge-openadapt-integration.md
+MACOS_PORTING_PLAN.md
+CLAUDE.md
+workspace/workflows/

@@ -18,7 +18,7 @@ Submit a task, pick an engine (or let Auto choose), and watch it run. Everything
 
 ### Windows Installer (Recommended)
 
-Download `ClawBridge-Setup-0.2.0.exe` and run it. The installer:
+Download `ClawBridge-Setup.exe` and run it. The installer:
 
 1. Installs ClawBridge to `C:\Program Files\ClawBridge` (or user folder)
 2. Bundles Python 3.12, Playwright, and all dependencies
@@ -111,7 +111,7 @@ ClawBridge has two deployment forms that share the same logic:
 
 | Form | File | Use Case |
 |------|------|----------|
-| **Monolith** | `clawbridge.py` (~6200 lines) | Primary. Single file, easy to share/deploy |
+| **Monolith** | `clawbridge.py` (~6700 lines) | Primary. Single file, easy to share/deploy |
 | **Package** | `clawbridge/` directory | Modular. For development, testing, extensibility |
 
 ### How It Works
@@ -147,7 +147,7 @@ browser-use  computer-use  OpenClaw
 
 | Engine | Technology | Best For | Status |
 |--------|-----------|----------|--------|
-| **browser-use** | Python + Playwright | Web automation, extraction, form filling | Working (needs browser-use lib update) |
+| **browser-use** | Python + Playwright | Web automation, extraction, form filling | Working |
 | **computer-use** | Anthropic API + pyautogui + mss + pywinauto | Full desktop control — any app, any window | Working (accessibility-first navigation) |
 | **OpenClaw** | Node.js + Chrome DevTools Protocol | AI agent with persistent memory & skills | Requires separate install (`npm i -g openclaw`) |
 
@@ -259,7 +259,7 @@ ENABLED_ENGINES=browser_use,computer_use    # comma-separated
 DEFAULT_MODEL=openai/gpt-4o                 # for browser-use
 
 # Computer-Use
-COMPUTER_USE_MODEL=anthropic/claude-sonnet-4-20250514
+COMPUTER_USE_MODEL=anthropic/claude-sonnet-4
 COMPUTER_USE_MAX_SCREEN_WIDTH=1920
 COMPUTER_USE_MAX_SCREEN_HEIGHT=1080
 COMPUTER_USE_ACTION_DELAY_MS=500
@@ -328,9 +328,15 @@ AUTOMATION_MODE=supervised   # or: autonomous
 
 - All data stays on your machine in local mode. No cloud egress.
 - API keys are never logged or transmitted.
+- **Dashboard authentication**: Token-based auth with HttpOnly cookie, CSRF token protection on all state-changing endpoints.
+- **WebSocket authentication**: Token verified before connection is accepted.
 - Actions classified as safe/sensitive/high-risk with configurable policy.
 - Sensitive domain detection (banking, cloud consoles) auto-elevates risk level.
-- Credential pattern detection prevents leaking API keys, passwords, etc.
+- Credential and PII detection with automatic redaction before memory storage.
+- Prompt injection pattern detection and filtering in stored memory.
+- Path traversal protection on personality file endpoints.
+- Remote bridge requires HTTPS for non-localhost URLs.
+- XSS protection via DOMPurify with safe fallback.
 - Full audit trail in SQLite database.
 
 ## API Endpoints
@@ -365,6 +371,7 @@ AUTOMATION_MODE=supervised   # or: autonomous
 | `POST` | `/api/workflows/{id}/replay` | Trigger workflow replay |
 | `POST` | `/api/recording/start` | Start desktop recording |
 | `POST` | `/api/recording/stop` | Stop recording, return actions |
+| `POST` | `/api/auth/login` | Authenticate and set HttpOnly session cookie |
 | `WS` | `/ws` | WebSocket (tasks, frames, audit, approvals, workflows) |
 
 ### WebSocket Events
@@ -471,7 +478,7 @@ See `.mcp.json` for project-level registration.
 - [x] Workflow recording & replay with perception layer (v0.2.0)
 
 ### In Progress
-- [ ] Test & stabilize browser-use engine runtime
+- [ ] macOS support ([porting plan](MACOS_PORTING_PLAN.md) — Phase 1 minimal changes identified)
 - [ ] Refine workflow replay element matching accuracy
 
 ### Planned
@@ -480,7 +487,7 @@ See `.mcp.json` for project-level registration.
 - [ ] Remote Bridge cloud service
 - [ ] Hosted engine backends (cloud browser-use, cloud OpenClaw)
 - [ ] `pip install clawbridge` one-command setup
-- [ ] macOS build support
+- [ ] macOS .dmg packaging via GitHub Actions
 - [ ] Multi-machine fleet management via Remote Bridge
 
 ## Contributing

@@ -294,6 +294,7 @@ import io
 import json
 import logging
 import re
+import secrets
 import sqlite3
 import time
 import uuid
@@ -413,6 +414,11 @@ _INJECTION_PATTERNS = [
     re.compile(r"(?i)disregard\s+(previous|above|all)\s+"),
     re.compile(r"(?i)new\s+instructions?\s*:"),
     re.compile(r"(?i)override\s+(previous|system)\s+"),
+    re.compile(r"(?i)(ignore|disregard|forget|override).{0,50}(previous|above|prior|earlier|system).{0,50}(instruction|prompt|rule|directive)"),
+    re.compile(r"(?i)new\s+(role|identity|persona|character|system)\s*:"),
+    re.compile(r"(?i)(admin|root|developer|debug)\s+mode"),
+    re.compile(r"(?i)execute\s+(command|code|script|sql)"),
+    re.compile(r"\[SYSTEM\]|\[ADMIN\]|\[OVERRIDE\]", re.IGNORECASE),
 ]
 
 
@@ -433,12 +439,14 @@ def safety_scan_prompt(text: str) -> dict:
 
 
 def safety_redact(text: str) -> str:
-    """Redact credentials and PII from text before logging/storing."""
+    """Redact credentials, PII, and injection patterns from text before logging/storing."""
     result = text
     for p in _CREDENTIAL_PATTERNS:
         result = p.sub("[REDACTED_CREDENTIAL]", result)
     for p in _PII_PATTERNS:
         result = p.sub("[REDACTED_PII]", result)
+    for p in _INJECTION_PATTERNS:
+        result = p.sub("[FILTERED]", result)
     return result
 
 
@@ -602,16 +610,56 @@ def activate_license(activation_code: str) -> tuple[bool, str]:
         body = e.read().decode("utf-8")
         try:
             err_data = json.loads(body)
-            return False, err_data.get("error", f"Activation failed: {e.code}")
         except Exception:
             return False, f"Activation failed: {e.code}"
+        # If 403 with "another machine", try re-activation (machine transfer)
+        if e.code == 403 and "another machine" in err_data.get("error", ""):
+            return _reactivate_license(activation_code.strip().upper(), machine_id, settings)
+        return False, err_data.get("error", f"Activation failed: {e.code}")
     except Exception as e:
         return False, f"Network error: {e}"
 
     if not data.get("success"):
         return False, data.get("error", "Activation failed")
 
-    # Store the API key and update settings
+    return _apply_activation(activation_code, data)
+
+
+def _reactivate_license(code: str, machine_id: str, settings) -> tuple[bool, str]:
+    """Attempt re-activation (machine transfer) when activate returns 403."""
+    import urllib.request
+    import urllib.error
+
+    url = f"{settings.activation_backend_url}/api/reactivate"
+    payload = json.dumps({
+        "activation_code": code,
+        "machine_id": machine_id,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(url, data=payload, method="POST")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        try:
+            err_data = json.loads(body)
+            return False, err_data.get("error", f"Re-activation failed: {e.code}")
+        except Exception:
+            return False, f"Re-activation failed: {e.code}"
+    except Exception as e:
+        return False, f"Network error during re-activation: {e}"
+
+    if not data.get("success"):
+        return False, data.get("error", "Re-activation failed")
+
+    return _apply_activation(code, data)
+
+
+def _apply_activation(activation_code: str, data: dict) -> tuple[bool, str]:
+    """Apply activation response data: store API key and update settings."""
     api_key = data.get("api_key", "")
     tier = data.get("tier", "starter")
 
@@ -1821,6 +1869,20 @@ class BrowserUseEngine(EngineBase):
                     action_str = str(action)[:200] if action else "?"
                     result_str = str(result)[:200] if result else ""
                     logging.info("browser-use step %d/%d: %s -> %s", i+1, n_steps, action_str, result_str)
+                    # Broadcast step update to dashboard
+                    if self.on_step:
+                        try:
+                            self.on_step({
+                                "task_id": task.id,
+                                "step": i + 1,
+                                "max_steps": n_steps,
+                                "action": action_str[:100],
+                                "reasoning": result_str[:300],
+                                "tokens_in": total_in,
+                                "tokens_out": total_out,
+                            })
+                        except Exception:
+                            pass
                     # Build human-readable step summary
                     if action:
                         step_summaries.append(f"Step {i+1}: {action_str}")
@@ -2757,7 +2819,11 @@ class ComputerUseEngine(EngineBase):
         """Start recording desktop input. Returns True if started, False if already recording."""
         if self._recording_active:
             return False
-        from clawbridge.recorder.capture import InputRecorder
+        try:
+            from clawbridge.recorder.capture import InputRecorder
+        except ImportError:
+            logging.error("Recording unavailable: clawbridge.recorder package not found")
+            return False
         self._recorder = InputRecorder()
         self._recorder.start()
         self._recording_active = True
@@ -2773,7 +2839,11 @@ class ComputerUseEngine(EngineBase):
         self._recorder = None
         if not raw_events:
             return []
-        from clawbridge.recorder.processor import process_recording
+        try:
+            from clawbridge.recorder.processor import process_recording
+        except ImportError:
+            logging.error("Recording processing unavailable: clawbridge.recorder package not found")
+            return []
         actions = await process_recording(raw_events)
         logging.info("ComputerUseEngine: recording stopped, %d actions captured", len(actions))
         return actions
@@ -2935,9 +3005,13 @@ class ComputerUseEngine(EngineBase):
     async def _replay_single_action(self, action: dict, task: Task, target_app: str = "") -> bool:
         """Replay one action. Re-focuses target app before click/type actions."""
         import pyautogui
-        from clawbridge.perception.accessibility import (
-            get_accessibility_tree, find_matching_element, ElementSnapshot,
-        )
+        try:
+            from clawbridge.perception.accessibility import (
+                get_accessibility_tree, find_matching_element, ElementSnapshot,
+            )
+        except ImportError:
+            logging.error("Replay unavailable: clawbridge.perception package not found")
+            return False
 
         action_type = action.get("action_type", "")
         loop = asyncio.get_running_loop()
@@ -3179,13 +3253,9 @@ class ComputerUseEngine(EngineBase):
                         # Re-focus target app before every action to prevent wrong-window clicks
                         if target_app and action_name in ("left_click", "right_click", "double_click", "click_element", "type", "key"):
                             await self._bring_app_to_foreground(target_app)
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0.3)
                         await self._execute_action(tb.input)
                         await asyncio.sleep(delay)
-                    # Re-focus target before screenshot so the model sees the right window
-                    if target_app:
-                        await self._bring_app_to_foreground(target_app)
-                        await asyncio.sleep(0.5)
                     ss = await self._take_screenshot()
                     if self.on_screenshot:
                         try: self.on_screenshot(ss)
@@ -3567,6 +3637,16 @@ class TaskManager:
             logging.info("Remote Bridge URL not set, skipping polling.")
             return
 
+        # Validate bridge URL: require HTTPS for non-localhost
+        from urllib.parse import urlparse
+        parsed = urlparse(Settings.remote_bridge_url)
+        if parsed.hostname not in ("localhost", "127.0.0.1", "::1") and parsed.scheme != "https":
+            logging.error("Remote Bridge requires HTTPS for non-localhost URLs. Got: %s", Settings.remote_bridge_url)
+            return
+        if not Settings.remote_auth_token:
+            logging.error("Remote Bridge requires REMOTE_AUTH_TOKEN to be set.")
+            return
+
         logging.info(f"Starting Remote Bridge polling for Machine ID: {get_machine_id()}")
         while True:
             try:
@@ -3903,7 +3983,9 @@ function updateSystemHealth(){
   else{dot.className="system-health-dot sh-err";txt.textContent="Disconnected";}
 }
 async function api(method,path,body=null){
-  const r=await fetch(path,{method,headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):null});
+  const hdrs={"Content-Type":"application/json"};
+  const ct=window.__PRELOAD__&&window.__PRELOAD__.csrf_token;if(ct)hdrs["X-CSRF-Token"]=ct;
+  const r=await fetch(path,{method,headers:hdrs,body:body?JSON.stringify(body):null});
   if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);
   return r.json();
 }
@@ -4176,7 +4258,7 @@ function esc(s){if(!s)return"";const d=document.createElement("div");d.textConte
 function renderMarkdown(text){
   if(!text)return"";
   if(typeof marked==="undefined")return esc(text);
-  try{marked.setOptions({breaks:true,gfm:true});var html=marked.parse(text);return typeof DOMPurify!=="undefined"?DOMPurify.sanitize(html):html;}
+  try{marked.setOptions({breaks:true,gfm:true});var html=marked.parse(text);return typeof DOMPurify!=="undefined"?DOMPurify.sanitize(html):esc(text);}
   catch(e){console.error("Markdown render error:",e);return esc(text);}
 }
 let _settledTaskIds=new Set();
@@ -4733,7 +4815,8 @@ function replayWorkflow(id){
 async function deleteWorkflow(id){
   if(!confirm("Delete this workflow?"))return;
   try{
-    const r=await fetch("/api/workflows/"+id,{method:"DELETE"});
+    const dh={"Content-Type":"application/json"};const dct=window.__PRELOAD__&&window.__PRELOAD__.csrf_token;if(dct)dh["X-CSRF-Token"]=dct;
+    const r=await fetch("/api/workflows/"+id,{method:"DELETE",headers:dh});
     if(r.ok){
       state.workflows=state.workflows.filter(w=>w.id!==id);
       renderWorkflows();updateTabBadges();
@@ -4789,7 +4872,7 @@ function onboardAction(action){
   if(el&&el.classList.contains("done"))return;
   if(action==="keys"){
     if(_licenseStatus&&_licenseStatus.status==="not_activated"&&_licenseStatus.tier==="starter"){
-      showActivationModal();
+      showActivationModal(true);
     }else{
       const cc=document.getElementById("configContent");
       if(cc&&cc.classList.contains("collapsed"))toggleSection("config");
@@ -5050,8 +5133,8 @@ async function checkLicenseStatus() {
     window._topupUrl = _topupUrl;
     updateLicenseBadge(data);
     updateCreditWidget(data);
-    // Show activation modal if not activated and no keys
-    if (data.status === 'not_activated') {
+    // Show activation modal only on first load if not activated and never dismissed
+    if (data.status === 'not_activated' && !localStorage.getItem('activation_dismissed')) {
       showActivationModal();
     }
   } catch (e) {
@@ -5070,10 +5153,10 @@ function updateLicenseBadge(data) {
     badge.textContent = 'BYOK';
     badge.className = 'license-badge byok';
   } else if (data.status === 'not_activated') {
-    badge.textContent = 'FREE';
+    badge.textContent = 'ACTIVATE';
     badge.className = 'license-badge free';
-    badge.onclick = showActivationModal;
-    badge.title = 'Click to activate';
+    badge.onclick = () => { showActivationModal(true); };
+    badge.title = 'Activate or enter a license code';
   } else {
     badge.style.display = 'none';
   }
@@ -5099,16 +5182,41 @@ function updateCreditWidget(data) {
   if (pct < 20) bar.style.background = '#ef4444';
   else if (pct < 50) bar.style.background = '#f59e0b';
   else bar.style.background = '#6366f1';
+  // Low balance warning
+  let warn = document.getElementById('creditLowWarning');
+  if (pct < 20 && limit > 0) {
+    if (!warn) {
+      warn = document.createElement('div');
+      warn.id = 'creditLowWarning';
+      warn.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;font-size:12px;color:#fca5a5;';
+      var topupHref = window._topupUrl || 'https://clawbridge.ai/account';
+      if (topupHref.indexOf('http://') !== 0 && topupHref.indexOf('https://') !== 0) topupHref = 'https://clawbridge.ai/account';
+      warn.textContent = 'Credits running low \u2014 ';
+      var lnk = document.createElement('a');
+      lnk.href = topupHref;
+      lnk.target = '_blank';
+      lnk.style.cssText = 'color:#6366f1;text-decoration:underline';
+      lnk.textContent = 'Buy more';
+      warn.appendChild(lnk);
+      warn.appendChild(document.createTextNode(' to keep tasks running.'));
+      bar.parentElement.parentElement.insertBefore(warn, bar.parentElement.nextSibling);
+    }
+    warn.style.display = 'block';
+  } else if (warn) {
+    warn.style.display = 'none';
+  }
 }
 
-function showActivationModal() {
+function showActivationModal(force) {
   document.getElementById('activationModal').style.display = 'flex';
   document.getElementById('activationOptions').style.display = 'block';
   document.getElementById('activationCodeForm').style.display = 'none';
+  if (force) localStorage.removeItem('activation_dismissed');
 }
 
 function closeActivationModal() {
   document.getElementById('activationModal').style.display = 'none';
+  localStorage.setItem('activation_dismissed', 'true');
 }
 
 function showActivationCodeInput() {
@@ -5611,6 +5719,30 @@ document.addEventListener('DOMContentLoaded', () => {
     return html
 
 # ---------------------------------------------------------------------------
+# CSRF Token Management
+# ---------------------------------------------------------------------------
+_csrf_tokens: dict[str, float] = {}  # token -> expiry_timestamp
+
+def _generate_csrf_token() -> str:
+    """Generate a CSRF token valid for 24 hours."""
+    # Prune expired tokens
+    now = time.time()
+    expired = [k for k, v in _csrf_tokens.items() if now > v]
+    for k in expired:
+        del _csrf_tokens[k]
+    token = secrets.token_urlsafe(32)
+    _csrf_tokens[token] = now + 86400  # 24 hour expiry
+    return token
+
+def _validate_csrf_token(token: str) -> bool:
+    if not token or token not in _csrf_tokens:
+        return False
+    if time.time() > _csrf_tokens[token]:
+        del _csrf_tokens[token]
+        return False
+    return True
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
@@ -5628,8 +5760,8 @@ def create_app() -> FastAPI:
             token = get_settings().dashboard_token
             if not token:
                 return await call_next(request)  # No token set → open access
-            # Allow health check without auth
-            if request.url.path == "/health":
+            # Allow health check and login without auth
+            if request.url.path in ("/health", "/startup-status", "/api/auth/login"):
                 return await call_next(request)
             # Check query param, header, or cookie
             req_token = (
@@ -5637,7 +5769,15 @@ def create_app() -> FastAPI:
                 or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
                 or request.cookies.get("clawbridge_token", "")
             )
-            if hmac.compare_digest(req_token.encode(), token.encode()):
+            if req_token and hmac.compare_digest(req_token.encode(), token.encode()):
+                # CSRF check for state-changing methods (cookie-based auth only)
+                if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+                    auth_via_header = bool(request.headers.get("Authorization", "").removeprefix("Bearer ").strip())
+                    auth_via_cookie = not auth_via_header and not request.query_params.get("token", "")
+                    if auth_via_cookie:
+                        csrf_tok = request.headers.get("X-CSRF-Token", "")
+                        if not _validate_csrf_token(csrf_tok):
+                            return JSONResponse({"error": "Invalid or missing CSRF token"}, status_code=403)
                 return await call_next(request)
             # For dashboard root, show login form instead of 401
             if request.url.path == "/" and request.method == "GET":
@@ -5653,11 +5793,35 @@ def create_app() -> FastAPI:
 h2{{margin:0 0 8px;font-size:20px}}p{{color:#71717a;font-size:13px;margin:0 0 24px}}
 input{{width:100%;padding:10px 14px;background:#09090b;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#e4e4e7;font-size:14px;margin-bottom:16px;box-sizing:border-box}}
 button{{width:100%;padding:10px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer}}
-button:hover{{background:#4f46e5}}</style></head>
+button:hover{{background:#4f46e5}}.err{{color:#ef4444;font-size:12px;margin:8px 0 0;display:none}}</style></head>
 <body><div class="card"><h2>ClawBridge</h2><p>Enter your dashboard token to continue</p>
-<form onsubmit="event.preventDefault();const t=document.getElementById('tok').value;document.cookie='clawbridge_token='+t+';path=/;max-age=86400;SameSite=Strict';window.location.href='/?token='+encodeURIComponent(t)">
-<input id="tok" type="password" placeholder="Dashboard token" autofocus>
-<button type="submit">Unlock Dashboard</button></form></div></body></html>"""
+<form id="lf"><input id="tok" type="password" placeholder="Dashboard token" autofocus>
+<button type="submit">Unlock Dashboard</button><p class="err" id="lerr"></p></form>
+<script>document.getElementById('lf').onsubmit=async function(e){{e.preventDefault();const t=document.getElementById('tok').value;
+try{{const r=await fetch('/api/auth/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{token:t}})}});
+if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}}));document.getElementById('lerr').textContent=d.error||'Invalid token';document.getElementById('lerr').style.display='block';}}
+}}catch(ex){{document.getElementById('lerr').textContent='Connection error';document.getElementById('lerr').style.display='block';}}}}</script>
+</div></body></html>"""
+
+    @app.post("/api/auth/login")
+    async def auth_login(body: dict):
+        from starlette.responses import JSONResponse as StaJSONResponse
+        token_input = body.get("token", "").strip()
+        expected = get_settings().dashboard_token
+        if not expected or not token_input:
+            return StaJSONResponse({"error": "Invalid token"}, status_code=401)
+        if not hmac.compare_digest(token_input.encode(), expected.encode()):
+            return StaJSONResponse({"error": "Invalid token"}, status_code=401)
+        response = StaJSONResponse({"status": "ok"})
+        response.set_cookie(
+            key="clawbridge_token",
+            value=token_input,
+            max_age=86400,
+            path="/",
+            httponly=True,
+            samesite="strict",
+        )
+        return response
 
     @app.on_event("startup")
     async def startup():
@@ -5723,7 +5887,8 @@ button:hover{{background:#4f46e5}}</style></head>
             workflows = [w.model_dump(mode="json") for w in get_workflow_manager().list_all()]
         except Exception:
             workflows = []
-        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates, "workflows": workflows}
+        csrf_token = _generate_csrf_token() if get_settings().dashboard_token else ""
+        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates, "workflows": workflows, "csrf_token": csrf_token}
         preload = '<script>window.__PRELOAD__=' + _json.dumps(preload_data, default=str) + ';</script>'
         html = _dashboard_html()
         html = html.replace("</head>", preload + "\n</head>")
@@ -6170,6 +6335,9 @@ button:hover{{background:#4f46e5}}</style></head>
     async def save_personality_file(filename: str, body: dict):
         if filename not in PERSONALITY_FILES and filename != "MEMORY.md":
             raise HTTPException(400, f"Unknown personality file: {filename}")
+        # Path traversal protection (defense-in-depth beyond whitelist)
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(400, "Invalid filename")
         content = body.get("content", "")
         get_personality().save_file(filename, content)
         get_personality().append_memory(f"Updated {filename}", daily=True)
@@ -6186,7 +6354,7 @@ button:hover{{background:#4f46e5}}</style></head>
         daily = body.get("daily", True)
         if not text:
             raise HTTPException(400, "text is required")
-        get_personality().append_memory(text, daily=daily)
+        get_personality().append_memory(safety_redact(text), daily=daily)
         return {"status": "ok"}
 
     @app.get("/api/memory/search")
@@ -6360,6 +6528,16 @@ button:hover{{background:#4f46e5}}</style></head>
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
+        # ── Auth check (mirrors AuthMiddleware logic) ──
+        token = get_settings().dashboard_token
+        if token:
+            req_token = (
+                websocket.query_params.get("token", "")
+                or websocket.cookies.get("clawbridge_token", "")
+            )
+            if not req_token or not hmac.compare_digest(req_token.encode(), token.encode()):
+                await websocket.close(code=1008, reason="Unauthorized")
+                return
         await websocket.accept()
         connections.append(websocket)
         try:
