@@ -76,7 +76,7 @@ jobs:
 
   # ── macOS Build (Intel) ─────────────────────────────────────────────────
   build-macos-x64:
-    runs-on: macos-13  # Intel runner
+    runs-on: macos-14  # Intel compat via Rosetta
     steps:
       - uses: actions/checkout@v4
 
