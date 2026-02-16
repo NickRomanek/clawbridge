@@ -328,8 +328,11 @@ def wizard():
                 engines = []
                 if ask_yn("Enable browser-use engine?", default=True):
                     engines.append("browser_use")
-                if ask_yn("Enable computer-use engine?", default=True):
-                    engines.append("computer_use")
+                if IS_WINDOWS:
+                    if ask_yn("Enable computer-use engine?", default=True):
+                        engines.append("computer_use")
+                else:
+                    info("computer-use engine is Windows-only (skipped)")
                 if check_command("node") and ask_yn("Enable OpenClaw engine?", default=False):
                     engines.append("openclaw")
 
@@ -404,8 +407,11 @@ def wizard():
     engines = []
     if ask_yn("Enable browser-use engine?", default=True):
         engines.append("browser_use")
-    if ask_yn("Enable computer-use engine?", default=True):
-        engines.append("computer_use")
+    if IS_WINDOWS:
+        if ask_yn("Enable computer-use engine?", default=True):
+            engines.append("computer_use")
+    else:
+        info("computer-use engine is Windows-only (skipped)")
     if check_command("node") and ask_yn("Enable OpenClaw engine?", default=False):
         engines.append("openclaw")
 
@@ -668,12 +674,13 @@ def main():
         config = wizard()
     else:
         # Headless defaults
+        default_engines = "browser_use,computer_use" if IS_WINDOWS else "browser_use"
         config = {
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
             "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
             "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", ""),
             "DEFAULT_MODEL": "openai/gpt-4o",
-            "ENABLED_ENGINES": "browser_use,computer_use",
+            "ENABLED_ENGINES": default_engines,
             "CLAWBRIDGE_HOST": "127.0.0.1",
             "CLAWBRIDGE_PORT": "8765",
             "BROWSER_MODE": "default",

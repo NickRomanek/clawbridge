@@ -49,7 +49,7 @@ class TestTaskStatus:
 
 class TestEngineName:
     def test_all_values(self):
-        assert {e.value for e in EngineName} == {"browser_use", "openclaw", "auto"}
+        assert {e.value for e in EngineName} == {"browser_use", "computer_use", "openclaw", "auto"}
 
     def test_auto_is_default_for_task(self):
         task = Task(prompt="test")

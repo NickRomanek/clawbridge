@@ -283,7 +283,7 @@ async def append_memory(content: str, daily: bool = True) -> dict:
         Confirmation message.
     """
     async with _client() as client:
-        resp = await client.post("/api/memory", json={"content": content, "daily": daily})
+        resp = await client.post("/api/memory", json={"text": content, "daily": daily})
         resp.raise_for_status()
         return resp.json()
 

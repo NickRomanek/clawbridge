@@ -63,7 +63,7 @@ class TestSettings:
 
     def test_default_enabled_engines(self):
         s = self._make_settings()
-        assert s.enabled_engines == "browser_use,openclaw"
+        assert s.enabled_engines == "browser_use,computer_use,openclaw"
 
 
 class TestKeyDetection:
@@ -80,7 +80,7 @@ class TestKeyDetection:
                 os.environ.pop(k, None)
 
     def test_no_keys_by_default(self):
-        s = self._make_settings(ANTHROPIC_API_KEY="", OPENAI_API_KEY="")
+        s = self._make_settings(ANTHROPIC_API_KEY="", OPENAI_API_KEY="", OPENROUTER_API_KEY="")
         assert s.has_anthropic_key is False
         assert s.has_openai_key is False
         assert s.has_any_key is False

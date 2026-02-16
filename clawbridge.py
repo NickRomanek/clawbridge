@@ -13,6 +13,7 @@ from __future__ import annotations
 
 __version__ = "0.2.0"
 
+import hmac
 import os
 import shutil
 import subprocess
@@ -1627,21 +1628,36 @@ class EngineBase:
         }
 
 def _find_chrome_exe() -> str | None:
-    """Find the real Chrome/Edge executable on Windows."""
+    """Find the real Chrome/Edge executable on this platform."""
     import glob
-    candidates = [
-        os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe"),
-        os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
-    ]
+    if sys.platform == "darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    elif sys.platform == "win32":
+        candidates = [
+            os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
+        ]
+    else:
+        candidates = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/snap/bin/chromium",
+        ]
     for c in candidates:
         for p in glob.glob(c):
             if os.path.isfile(p):
                 return p
-    # Fallback: try shutil.which
-    for name in ("chrome", "google-chrome", "msedge"):
+    for name in ("chrome", "google-chrome", "google-chrome-stable", "chromium-browser", "chromium", "msedge"):
         found = shutil.which(name)
         if found:
             return found
@@ -1906,8 +1922,8 @@ class OpenClawEngine(EngineBase):
         if not self._openclaw_bin:
             return False
         import subprocess
-        env = dict(**os.environ)
         settings = get_settings()
+        env = os.environ.copy()
         if settings.anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
         if settings.openai_api_key:
@@ -1917,7 +1933,7 @@ class OpenClawEngine(EngineBase):
         try:
             logging.info("Starting OpenClaw gateway...")
             self._gateway_proc = subprocess.Popen(
-                [self._openclaw_bin, "gateway", "run", "--port", str(settings.openclaw_gateway_port)],
+                [self._openclaw_bin, "gateway", "run", "--host", "127.0.0.1", "--port", str(settings.openclaw_gateway_port)],
                 env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -2313,6 +2329,10 @@ class ComputerUseEngine(EngineBase):
 
     async def initialize(self) -> None:
         self._status = EngineStatus.STARTING
+        if sys.platform != "win32":
+            self._status = EngineStatus.NOT_INSTALLED
+            logging.info("computer-use engine: not available on this platform (Windows only)")
+            return
         settings = get_settings()
         try:
             import anthropic as _anth; import pyautogui; import mss as _mss; from PIL import Image as _img  # noqa
@@ -4156,7 +4176,7 @@ function esc(s){if(!s)return"";const d=document.createElement("div");d.textConte
 function renderMarkdown(text){
   if(!text)return"";
   if(typeof marked==="undefined")return esc(text);
-  try{marked.setOptions({breaks:true,gfm:true});return marked.parse(text);}
+  try{marked.setOptions({breaks:true,gfm:true});var html=marked.parse(text);return typeof DOMPurify!=="undefined"?DOMPurify.sanitize(html):html;}
   catch(e){console.error("Markdown render error:",e);return esc(text);}
 }
 let _settledTaskIds=new Set();
@@ -5116,13 +5136,13 @@ async function activateCode() {
   status.innerHTML = '<span style="color:var(--muted)">Connecting to activation server...</span>';
   try {
     const result = await api("POST", "/api/license/activate", { activation_code: code });
-    status.innerHTML = '<span style="color:var(--ok)">' + (result.message || 'Activated successfully!') + '</span>';
+    status.innerHTML = '<span style="color:var(--ok)">' + esc(result.message || 'Activated successfully!') + '</span>';
     setTimeout(() => {
       closeActivationModal();
       checkLicenseStatus();
     }, 1500);
   } catch (e) {
-    status.innerHTML = '<span style="color:var(--err)">' + (e.message || 'Activation failed') + '</span>';
+    status.innerHTML = '<span style="color:var(--err)">' + esc(e.message || 'Activation failed') + '</span>';
     btn.disabled = false;
     btn.textContent = 'Activate';
   }
@@ -5142,6 +5162,7 @@ document.addEventListener('DOMContentLoaded', () => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ClawBridge Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
   <style>""" + css + """</style>
 </head>
 <body>
@@ -5563,16 +5584,13 @@ document.addEventListener('DOMContentLoaded', () => {
       <p style="color:var(--muted);margin-bottom:24px;font-size:13px">Choose how to get started</p>
       <div id="activationOptions">
         <button class="btn activation-option" onclick="showActivationCodeInput()" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#2d3748;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
-          <div style="font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">I have an activation code</div>
-          <div style="font-size:11px;color:var(--muted)">Enter your code from purchase</div>
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">I have an activation code</div>
         </button>
-        <button class="btn activation-option" onclick="closeActivationModal();var cc=document.getElementById('configContent');if(cc&&cc.classList.contains('collapsed'))toggleSection('config');setTimeout(function(){toggleInlineKey('openrouter');},200);" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#2d3748;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
-          <div style="font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">My own API keys (BYOK)</div>
-          <div style="font-size:11px;color:var(--muted)">Use Anthropic, OpenAI, or OpenRouter keys</div>
+        <button class="btn activation-option" onclick="closeActivationModal()" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#2d3748;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Continue without code</div>
         </button>
         <button class="btn activation-option" onclick="window.open('https://clawbridge.ai/pricing','_blank')" style="width:100%;padding:14px;text-align:left;background:linear-gradient(135deg,#6366f1,#8b5cf6);border:none;box-sizing:border-box;overflow:hidden">
-          <div style="font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Buy ClawBridge</div>
-          <div style="font-size:11px;opacity:0.9">$9.99 includes $5 in API credits</div>
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Buy ClawBridge</div>
         </button>
       </div>
       <div id="activationCodeForm" style="display:none">
@@ -5619,7 +5637,7 @@ def create_app() -> FastAPI:
                 or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
                 or request.cookies.get("clawbridge_token", "")
             )
-            if req_token == token:
+            if hmac.compare_digest(req_token.encode(), token.encode()):
                 return await call_next(request)
             # For dashboard root, show login form instead of 401
             if request.url.path == "/" and request.method == "GET":
@@ -6031,7 +6049,12 @@ button:hover{{background:#4f46e5}}</style></head>
 
     # ── Chrome Launcher ──────────────────────────────────────────────────
     _chrome_proc: subprocess.Popen | None = None
-    _CLAWBRIDGE_PROFILE = os.path.expandvars(r"%LOCALAPPDATA%\ClawBridge\ChromeProfile")
+    if sys.platform == "darwin":
+        _CLAWBRIDGE_PROFILE = os.path.expanduser("~/Library/Application Support/ClawBridge/ChromeProfile")
+    elif sys.platform == "win32":
+        _CLAWBRIDGE_PROFILE = os.path.expandvars(r"%LOCALAPPDATA%\ClawBridge\ChromeProfile")
+    else:
+        _CLAWBRIDGE_PROFILE = os.path.expanduser("~/.local/share/ClawBridge/ChromeProfile")
 
     @app.post("/api/browser/launch")
     async def launch_chrome(body: dict = {}):
