@@ -44,29 +44,32 @@ _LOADING_PAGE_HTML = b'''<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>ClawBridge</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEuUlEQVR4nO1Wa0xTZxj+vsOhRdrCWstVLrZcS4EOKSow5DqyONymWROzxF0cmzOZDnQzmVtyWrf9MM4L29wwG/7gJyUDSUQMmchmGMx1AdIBMhBEoKU3W0tp6eV8yykwi6MtaJwu8UnOj/Od9zzP817Odz4AnuL/DAIhjCAI7D8VRQhBHw/hQxMiHySez9KIBlrToDrjR8WYoII4F9yAUMCDGMchhMhz4f57DwY3wYHWYXouy1nJYjONc/NW+qzdzs5LiFW3fVFnRAi1uoNW4PDGiy858yrsAalUCtV31uU4thcmdM2Y8i2zloBJjT7IiWN95MRkS1bFe4ng4rm/wBqArUYYUIMGIWpR6jYFOhxB9b+P8Hq6rhvi1jNGDXrj98quP2Jwgahkc3rKG3HZO6OWkl6VAbAaSKWUSSiIiNTqjKYtxhnVevPsXJcuOHIos7goPSUmLN5m0Lw5b7EkTTANWolEQs2D/8QAALjbqr8qSKVUNuTt6cmI8MTkOGWP0hbLYb49MzJoZVhnGeO9/TEkl9NE50Voy8JF0XL5VxMAUK31X13cv0cEgQySZWWSUDugpYOt5SmpM2Y4rTdFD1xutVMjFMzm6jbmZDIsPEEC7D0rkjRIptL+lCKZbIHgIVsAKQLMTGPtFL5fLTY2N124Na16NiEtLlD82uvohQN78cTM1DBF02U+Z0p1aePBw9vHarBymUxGAuS/C7g/9fj4Qjqd7nwJ40a/S6qnOiYY7D3sJFYIZ+bGkTktbwfUzRvUPT9fYz5XfqJfZ95SEmZEGJt7UJT9orUPws7FYfTqBPoSp15MyijlM7kRL9+dUo852FEnowpK+EKnuur8mU9qEJFGC5AN2EkAgOTwqZM38fBDd69cuEbDyNPBDJqANA2fVigUc0tc1Cd//7xhPtOHEISxGLbCrSKytuZjI0QYP8Zp+a7u9NFLV7WzX7d/2P9Lm8n+U6/J+lnDl9V1cVb98LydjFR2N44LU5PwsLA81+I+g7wNO+5Dn3IMng/M0vRPTNvYz5RakzdlaW0MblTlmeZaZnZOQYZ4A+5CAeDir7fzbcPKbSy+ABParOpe5SBXr9er2trOzkMpB/PVAmxRyVsrMFmnzHlz+IZGnCtWqJTdQ2DesI2WnFVclL3BnLIOXMlkgU6RmEc3MKNyTarx2JHe679VHfumf2hgcNBXdZcZgF72AYlE4jbGZgRrPjj2baMwU+SgR6dzdpXFj74SDDYXQFiaC2HRWxz4TvGOnEAdDCFLSvMEvKiIo/zo0BE3icy9ifk2sASEUABC6J81uVzuov73HR27u3VTt1zaaVWqy2HW5NPApxDCkQaEaBKEAiCEP/CCQCM0G52q0VFhILKq2tubVQtnheXJeVb7X5WnxD0N3AsiMISUtD37jrRU7Pv8Tkh5NWchjsAIogOnDib7T8h37a46jvZW7j+EUQwL27FfYJ43EEKSujydUe1BSIogTLfX1x5/NSbEJS+NCYqm4giCirhKyiAk1aN9zlBs7qP687WnSBJAIJdTX+eDAa0wlMtMrZTJvcW1n4pWC7eJhdKuJAILCQJf1dHtUQGtQfSxGASP2h163FkhhOCTXdqneBLxNxgGLw4/MHD9AAAAAElFTkSuQmCC">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0a0a0f;color:#e4e4e7;display:flex;justify-content:center;
+body{background:#18191c;color:#dbdee1;display:flex;justify-content:center;
      align-items:center;height:100vh;font-family:-apple-system,BlinkMacSystemFont,
      "Segoe UI",Roboto,sans-serif}
 .container{text-align:center;max-width:420px;padding:40px}
-.logo{font-size:32px;font-weight:700;color:#fff;margin-bottom:8px;letter-spacing:-0.5px}
-.logo span{color:#6366f1}
-.sub{color:#71717a;font-size:14px;margin-bottom:32px}
-.progress-wrap{background:#18181b;border-radius:8px;height:8px;overflow:hidden;
-               margin-bottom:20px;border:1px solid #27272a}
-.progress-bar{height:100%;background:linear-gradient(90deg,#6366f1,#818cf8);
+.logo{font-size:32px;font-weight:700;color:#e8eaf0;margin-bottom:8px;letter-spacing:-0.5px}
+.logo span{color:#5865f2}
+.logo-icon{width:48px;height:48px;margin:0 auto 12px;filter:drop-shadow(0 0 6px rgba(88,101,242,0.3))}
+.sub{color:#949ba4;font-size:14px;margin-bottom:32px}
+.progress-wrap{background:#1e1f23;border-radius:8px;height:8px;overflow:hidden;
+               margin-bottom:20px;border:1px solid #2b2d31}
+.progress-bar{height:100%;background:linear-gradient(90deg,#5865f2,#7983f5);
               border-radius:8px;width:0%;transition:width 0.5s ease}
-.stage{color:#a1a1aa;font-size:15px;font-weight:500;min-height:22px}
-.detail{color:#52525b;font-size:13px;min-height:18px;margin-top:4px}
+.stage{color:#949ba4;font-size:15px;font-weight:500;min-height:22px}
+.detail{color:#5a5b72;font-size:13px;min-height:18px;margin-top:4px}
 .ready{display:none;margin-top:24px}
-.ready .check{font-size:36px;color:#22c55e;margin-bottom:8px}
-.ready .msg{color:#22c55e;font-size:16px;font-weight:600}
+.ready .check{font-size:36px;color:#57a86d;margin-bottom:8px}
+.ready .msg{color:#57a86d;font-size:16px;font-weight:600}
 </style>
 </head>
 <body>
 <div class="container">
-  <div class="logo">Claw<span>Bridge</span></div>
+  <img class="logo-icon" src="data:image/png;base64,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">
+  <div class="logo">Claw<span>Bridge</span> <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:linear-gradient(135deg,#5865f2,#7289da);color:#fff;vertical-align:middle;letter-spacing:1px;text-transform:uppercase;">Beta</span></div>
   <div class="sub">Desktop &amp; Browser Automation</div>
   <div class="progress-wrap"><div class="progress-bar" id="bar"></div></div>
   <div class="stage" id="stage">Starting...</div>
@@ -300,6 +303,7 @@ import time
 import uuid
 import webbrowser
 from collections import deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -785,7 +789,7 @@ class ApprovalManager:
                     "action": action,
                     "reason": reason,
                     "details": details or {},
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             })
 
@@ -1035,7 +1039,7 @@ class ScheduledTask(BaseModel):
     schedule_type: str = "interval"  # once, interval, cron
     schedule_value: str = ""  # ISO datetime for once, seconds for interval, cron expr
     enabled: bool = True
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_run: str | None = None
     next_run: str | None = None
     run_count: int = 0
@@ -1118,7 +1122,7 @@ class ScheduleManager:
 
     def _calc_next_run(self, sched: ScheduledTask) -> str | None:
         """Calculate when this schedule should next run."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if sched.schedule_type == "once":
             try:
                 run_at = datetime.fromisoformat(sched.schedule_value)
@@ -1161,7 +1165,7 @@ class ScheduleManager:
             parts = cron_expr.strip().split()
             if len(parts) != 5:
                 return None
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             # Simple: find next matching minute within the next 24 hours
             from datetime import timedelta
             check = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
@@ -1203,7 +1207,7 @@ class ScheduleManager:
         self._running = True
         logging.info("Schedule manager started (%d schedules loaded)", len(self._schedules))
         while self._running:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             for sched in list(self._schedules.values()):
                 if not sched.enabled:
                     continue
@@ -1263,7 +1267,7 @@ class TaskTemplate(BaseModel):
     name: str = ""
     prompt: str = ""
     engine: str = "auto"
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     use_count: int = 0
 
 class TemplateManager:
@@ -1387,7 +1391,7 @@ class WorkflowManager:
         wf = self._workflows.get(wf_id)
         if wf:
             wf.replay_count += 1
-            wf.last_replayed = datetime.utcnow()
+            wf.last_replayed = datetime.now(timezone.utc)
             self._save_workflow(wf)
 
 
@@ -1494,15 +1498,15 @@ class Task(BaseModel):
     prompt: str = ""
     engine: EngineName = EngineName.AUTO
     status: TaskStatus = TaskStatus.PENDING
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     result: TaskResult | None = None
     error: str | None = None
     _personality_context: str = PrivateAttr(default="")  # injected at runtime, not serialized
 
 class AuditEvent(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     task_id: str = ""
     event_type: str = ""
     detail: str = ""
@@ -1529,8 +1533,8 @@ class WorkflowTemplate(BaseModel):
     name: str = ""
     description: str = ""
     actions: list[RecordedAction] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     replay_count: int = 0
     last_replayed: datetime | None = None
     target_app: str = ""
@@ -1621,7 +1625,7 @@ def save_step_to_db(step_data: dict) -> None:
                 step_data.get("reasoning", "")[:1000],
                 step_data.get("tokens_in", 0),
                 step_data.get("tokens_out", 0),
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
             )
         )
         conn.commit()
@@ -1788,6 +1792,14 @@ class BrowserUseEngine(EngineBase):
             personality_ctx = getattr(task, '_personality_context', '')
             if personality_ctx:
                 prompt_text = f"[AGENT CONTEXT]\n{personality_ctx}\n[END AGENT CONTEXT]\n\nTask: {task.prompt}"
+            # ── Detect extraction tasks and enhance prompt ─────────────
+            _extraction_keywords = ("tell me", "what is", "what are", "get me", "show me",
+                                    "summarize", "extract", "look up",
+                                    "how many", "who is", "when is", "where is")
+            _prompt_lower = prompt_text.lower()
+            _is_extraction = any(kw in _prompt_lower for kw in _extraction_keywords)
+            if _is_extraction:
+                prompt_text += "\n\nIMPORTANT: After completing the navigation, you MUST provide your findings as the final answer text. Extract the relevant information from the page and return it."
             agent = self._Agent(task=prompt_text, llm=self._llm, browser=self._browser)
             import time
             import base64
@@ -1889,11 +1901,29 @@ class BrowserUseEngine(EngineBase):
             except Exception as e:
                 logging.debug("browser-use step extraction error: %s", e)
 
-            # Build final summary — if final_result is None, summarize what steps were taken
+            # Build final summary — if final_result is None, try extracting page content
             if final and str(final).strip() and str(final).strip() != "None":
                 summary_text = str(final)
+            elif _is_extraction and n_steps > 0:
+                # Extraction task but no final_result — try getting page content directly
+                page_text = None
+                try:
+                    page = await agent.browser_session.get_current_page()
+                    if page:
+                        page_text = await page.inner_text("body")
+                        if page_text:
+                            page_text = page_text.strip()[:3000]
+                except Exception as ex:
+                    logging.info("Page content extraction failed: %s", ex)
+                if page_text and len(page_text) > 50:
+                    summary_text = f"Page content from {n_steps} navigation steps:\n\n{page_text}"
+                    logging.info("browser-use: extracted %d chars of page content as fallback", len(page_text))
+                elif step_summaries:
+                    summary_text = f"Completed {n_steps} steps (no content extracted):\n" + "\n".join(step_summaries[-5:])
+                else:
+                    summary_text = f"Task completed in {n_steps} steps ({duration_ms}ms) — no content extracted"
             elif step_summaries:
-                summary_text = f"Completed {n_steps} steps:\n" + "\n".join(step_summaries[-5:])  # show last 5 steps
+                summary_text = f"Completed {n_steps} steps:\n" + "\n".join(step_summaries[-5:])
                 if n_steps > 5:
                     summary_text = f"Completed {n_steps} steps (showing last 5):\n" + "\n".join(step_summaries[-5:])
             else:
@@ -1918,7 +1948,7 @@ class BrowserUseEngine(EngineBase):
             task.error = str(e)
         finally:
             self._status = EngineStatus.AVAILABLE
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(timezone.utc)
         return task
 
 class OpenClawEngine(EngineBase):
@@ -1994,8 +2024,9 @@ class OpenClawEngine(EngineBase):
             env["OPENROUTER_API_KEY"] = settings.openrouter_api_key
         try:
             logging.info("Starting OpenClaw gateway...")
+            cmd = [self._openclaw_bin, "gateway", "run", "--port", str(settings.openclaw_gateway_port)]
             self._gateway_proc = subprocess.Popen(
-                [self._openclaw_bin, "gateway", "run", "--host", "127.0.0.1", "--port", str(settings.openclaw_gateway_port)],
+                cmd,
                 env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -2082,7 +2113,7 @@ class OpenClawEngine(EngineBase):
             task.error = str(e)
         finally:
             self._status = EngineStatus.AVAILABLE
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(timezone.utc)
         return task
 
     async def stop(self):
@@ -2416,6 +2447,10 @@ class ComputerUseEngine(EngineBase):
             self._status = EngineStatus.ERROR
             logging.error(f"Cannot detect screen: {e}")
             return
+        self._is_ultrawide = (self._screen_width / max(self._screen_height, 1)) > 2.0
+        if self._is_ultrawide:
+            logging.info("Ultrawide detected (%dx%d, ratio %.2f) — will prefer active window crop for screenshots",
+                         self._screen_width, self._screen_height, self._screen_width / self._screen_height)
         max_w, max_h = settings.computer_use_max_screen_width, settings.computer_use_max_screen_height
         scale = min(max_w / self._screen_width, max_h / self._screen_height, 1.0)
         self._scaled_width = int(self._screen_width * scale)
@@ -2440,7 +2475,18 @@ class ComputerUseEngine(EngineBase):
         self._status = EngineStatus.AVAILABLE
         logging.info(f"computer-use engine initialized (model={self._model}, scaled={self._scaled_width}x{self._scaled_height})")
 
-    async def _take_screenshot(self) -> str:
+    async def _take_screenshot(self, force_full: bool = False) -> str:
+        # On ultrawide monitors, prefer the active window crop for better LLM accuracy
+        if self._is_ultrawide and not force_full:
+            rect = await self._get_foreground_window_rect()
+            if rect:
+                crop = await self._take_window_crop(rect, max_dim=1280)
+                if crop:
+                    return crop
+                else:
+                    logging.debug("Ultrawide: window crop failed, falling back to full screen")
+            else:
+                logging.debug("Ultrawide: no foreground window rect, falling back to full screen")
         import mss as mss_mod; from PIL import Image; import io as _io
         loop = asyncio.get_event_loop()
         def _cap():
@@ -2875,6 +2921,40 @@ class ComputerUseEngine(EngineBase):
             return await loop.run_in_executor(None, _focus)
         except Exception:
             return False
+
+    async def _verify_focus(self, app_keyword: str) -> tuple[bool, str]:
+        """Verify the foreground window matches app_keyword. Returns (matched, actual_title)."""
+        if sys.platform != "win32":
+            return (True, "")  # Skip verification on non-Windows
+        loop = asyncio.get_event_loop()
+        def _check():
+            try:
+                import ctypes
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                buf = ctypes.create_unicode_buffer(256)
+                ctypes.windll.user32.GetWindowTextW(hwnd, buf, 256)
+                actual_title = buf.value
+                matched = app_keyword.lower() in actual_title.lower()
+                return (matched, actual_title)
+            except Exception:
+                return (False, "")
+        try:
+            return await loop.run_in_executor(None, _check)
+        except Exception:
+            return (False, "")
+
+    async def _ensure_focus(self, app_keyword: str) -> bool:
+        """Bring app to foreground and verify focus. Retries once if verification fails."""
+        ok, actual = await self._verify_focus(app_keyword)
+        if ok:
+            return True
+        logging.warning("Focus verification failed: wanted '%s', got '%s' — retrying", app_keyword, actual)
+        await self._bring_app_to_foreground(app_keyword)
+        await asyncio.sleep(0.5)
+        ok2, actual2 = await self._verify_focus(app_keyword)
+        if not ok2:
+            logging.warning("Focus verification failed after retry: wanted '%s', got '%s'", app_keyword, actual2)
+        return ok2
 
     def _detect_target_app(self, prompt: str) -> str | None:
         """Detect which app the task is targeting from the prompt text."""
@@ -3321,12 +3401,11 @@ class ComputerUseEngine(EngineBase):
                 if focused:
                     logging.info("Pre-action: brought '%s' to foreground", target_app)
                     await asyncio.sleep(1.0)  # Let Windows fully switch focus
-                    # Focus again to be sure
-                    await self._bring_app_to_foreground(target_app)
-                    await asyncio.sleep(0.5)
+                    # Verify focus actually landed on the right window
+                    focused = await self._ensure_focus(target_app)
                 else:
                     logging.info("Pre-action: could not find '%s' window", target_app)
-            init_ss = await self._take_screenshot()
+            init_ss = await self._take_screenshot(force_full=True)  # Full screen for initial overview
             if self.on_screenshot:
                 try: self.on_screenshot(init_ss)
                 except Exception: pass
@@ -3393,10 +3472,13 @@ class ComputerUseEngine(EngineBase):
                     if not is_ss_only:
                         step_count += 1
                     logging.info("computer-use step %d/%d: %s%s", step_count, max_steps, action_name or "?", " (free)" if is_ss_only else "")
+                    _focus_warning = ""
                     if not is_ss_only:
                         # Re-focus target app before every action to prevent wrong-window clicks
                         if target_app and action_name in ("left_click", "right_click", "double_click", "click_element", "type", "key"):
-                            await self._bring_app_to_foreground(target_app)
+                            focus_ok = await self._ensure_focus(target_app)
+                            if not focus_ok:
+                                _focus_warning = f"WARNING: Focus verification failed — the active window may NOT be {target_app}. Your action might land on the wrong window. Consider clicking on the {target_app} window first."
                             await asyncio.sleep(0.3)
                         await self._execute_action(tb.input)
                         await asyncio.sleep(delay)
@@ -3431,6 +3513,8 @@ class ComputerUseEngine(EngineBase):
                     if ui_text:
                         hint += f"\n\n{ui_text}"
                     rc = [{"type": "text", "text": hint}]
+                    if _focus_warning:
+                        rc.append({"type": "text", "text": _focus_warning})
                     if not is_ss_only and prev_ss and self._screenshots_similar(prev_ss, ss):
                         rc.append({"type": "text", "text": "WARNING: The screenshot appears unchanged after your last action. The action may have had no effect. Consider trying a different approach."})
                         logging.warning("Stale screenshot detected at step %d", step_count)
@@ -3467,7 +3551,7 @@ class ComputerUseEngine(EngineBase):
             task.status = TaskStatus.ERROR; task.error = str(e)
         finally:
             self._status = EngineStatus.AVAILABLE
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(timezone.utc)
         return task
 
     async def execute_step(self, task, step):
@@ -3749,7 +3833,7 @@ class TaskManager:
     async def _run(self, task: Task) -> None:
         self._running += 1
         task.status = TaskStatus.RUNNING
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(timezone.utc)
         self._save_task_to_db(task)
         if self._broadcast:
             await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
@@ -3815,11 +3899,12 @@ class TaskManager:
             task.engine = engine.name
             # Broadcast routing info to dashboard
             _engine_display = {"browser_use": "Web Browser", "computer_use": "Desktop Control", "openclaw": "AI Chat"}
+            _is_replay = task.prompt.strip().lower().startswith("replay:")
             if self._broadcast:
                 await self._broadcast({"type": "routing_info", "payload": {
                     "task_id": task.id,
-                    "engine_display": _engine_display.get(engine.name.value, engine.display_name),
-                    "reason": routing_reason,
+                    "engine_display": "Replaying Workflow (Visual Automation)" if _is_replay else _engine_display.get(engine.name.value, engine.display_name),
+                    "reason": "workflow replay" if _is_replay else routing_reason,
                 }})
             get_audit().log(AuditEvent(task_id=task.id, event_type="task_started", detail=engine.display_name))
             # ── Reset live view for visual engines ────────────────────
@@ -3957,8 +4042,8 @@ class TaskManager:
                                 id=str(uuid.uuid4()),
                                 prompt=t_data["prompt"],
                                 engine=EngineName(t_data.get("engine", "auto")),
-                                created_at=datetime.utcnow(),
-                                updated_at=datetime.utcnow()
+                                created_at=datetime.now(timezone.utc),
+                                updated_at=datetime.now(timezone.utc)
                             )
                             await self.submit(task)
             except Exception as e:
@@ -4005,7 +4090,7 @@ class TaskManager:
             if fut:
                 fut.cancel()
             t.status = TaskStatus.PAUSED
-            t.updated_at = datetime.utcnow()
+            t.updated_at = datetime.now(timezone.utc)
         return t
 
     async def cancel(self, task_id: str) -> Task | None:
@@ -4020,7 +4105,7 @@ class TaskManager:
             if fut:
                 fut.cancel()
             t.status = TaskStatus.CANCELLED
-            t.updated_at = datetime.utcnow()
+            t.updated_at = datetime.now(timezone.utc)
         return t
 
 _manager: TaskManager | None = None
@@ -4038,38 +4123,46 @@ def get_manager() -> TaskManager:
 def _dashboard_html() -> str:
     # Inline CSS (enhanced for chat-like experience)
     css = """
-:root{--bg:#0f1117;--card:#1e2130;--border:#2d3148;--text:#e4e6f0;--fg:#e4e6f0;--muted:#a0aec0;--accent:#6366f1;--ok:#22c55e;--err:#ef4444;--warn:#f59e0b;}
+:root{--bg:#18191c;--card:#1e1f23;--border:#2b2d31;--text:#dbdee1;--fg:#dbdee1;--muted:#949ba4;--accent:#5865f2;--accent-dim:#4752c4;--ok:#57a86d;--err:#d9534f;--warn:#c49a3a;}
 *{margin:0;padding:0;box-sizing:border-box;}
 html,body{overflow:hidden;width:100%;height:100%;}
 body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;}
 *::-webkit-scrollbar{width:6px;height:0px;}
 *::-webkit-scrollbar-track{background:transparent;}
-*::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:3px;}
-*::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.25);}
+*::-webkit-scrollbar-thumb{background:rgba(88,101,242,0.15);border-radius:3px;}
+*::-webkit-scrollbar-thumb:hover{background:rgba(88,101,242,0.3);}
 .header{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;border-bottom:1px solid var(--border);flex-shrink:0;}
-.logo{font-weight:700;color:var(--accent);font-size:1.2rem;}
+.logo{font-weight:700;color:var(--accent);font-size:1.2rem;display:flex;align-items:center;gap:8px;}
+.logo-svg{width:28px;height:28px;flex-shrink:0;}
 /* Layout & Sidebars */
-.layout{display:grid;grid-template-columns:300px 1fr;gap:0;flex:1;overflow:hidden;max-width:100%;transition:grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);}
-.layout.left-collapsed{grid-template-columns:52px 1fr;}
+.layout{display:grid;grid-template-columns:260px 1fr;gap:0;flex:1;overflow:hidden;max-width:100%;transition:grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);position:relative;}
+.layout.left-collapsed{grid-template-columns:0px 1fr;}
 
-aside{border-right:1px solid var(--border);padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;position:relative;transition:all 0.3s;}
+aside{border-right:1px solid var(--border);padding:10px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;position:relative;transition:all 0.3s;}
 
-.collapsed-icons{display:none;flex-direction:column;align-items:center;gap:12px;padding-top:16px;}
-aside.collapsed .collapsed-icons{display:flex;}
-aside.collapsed .card, aside.collapsed .btn, aside.collapsed h2, aside.collapsed .sidebar-section-label, aside.collapsed .sidebar-nav-item{display:none;}
+.collapsed-icons{display:none;}
+aside.collapsed{width:0;min-width:0;padding:0;border:none;overflow:hidden;}
+aside.collapsed .card, aside.collapsed .btn, aside.collapsed h2, aside.collapsed .sidebar-section-label, aside.collapsed .sidebar-nav-item, aside.collapsed .sidebar-top-row, aside.collapsed .collapsed-icons{display:none;}
+.sidebar-top-row{display:flex;align-items:center;}
+/* Pull-tab: small tab on left edge to re-open sidebar */
+.sidebar-pull-tab{display:none;position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:100;cursor:pointer;padding:14px 4px;border-radius:0 8px 8px 0;background:linear-gradient(135deg,rgba(88,101,242,0.2),rgba(71,82,196,0.15));border:1px solid rgba(88,101,242,0.25);border-left:none;transition:all 0.25s cubic-bezier(0.4,0,0.2,1);backdrop-filter:blur(10px);}
+.sidebar-pull-tab:hover{background:linear-gradient(135deg,rgba(88,101,242,0.4),rgba(71,82,196,0.3));padding-right:8px;box-shadow:0 0 12px rgba(88,101,242,0.3);}
+.sidebar-pull-tab svg{width:10px;height:10px;color:var(--accent);opacity:0.6;transition:all 0.25s;}
+.sidebar-pull-tab:hover svg{opacity:1;transform:translateX(1px);}
+.layout.left-collapsed .sidebar-pull-tab{display:flex;}
 .sidebar-section-label{font-size:9px;text-transform:uppercase;color:rgba(160,174,192,0.5);letter-spacing:1.2px;font-weight:700;margin:14px 0 6px 4px;}
 .sidebar-section-label:first-of-type{margin-top:0;}
 .sidebar-nav-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);transition:all 0.15s;position:relative;}
 .sidebar-nav-item:hover{background:rgba(255,255,255,0.05);color:var(--text);}
-.sidebar-nav-item.active{background:rgba(99,102,241,0.12);color:var(--accent);}
+.sidebar-nav-item.active{background:rgba(88,101,242,0.12);color:var(--accent);}
 .sidebar-nav-item .icon-svg{width:14px;height:14px;flex-shrink:0;}
 .nav-badge{background:var(--accent);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:10px;min-width:16px;text-align:center;line-height:1;margin-left:auto;}
-aside.collapsed{padding:10px;overflow:hidden;min-width:52px;}
+/* old collapsed aside padding removed — sidebar fully hides now */
 
 .toggle-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:8px;z-index:10;transition:color 0.2s;display:flex;align-items:center;justify-content:center;border-radius:8px;}
 .toggle-btn:hover{color:var(--accent);background:rgba(255,255,255,0.05);}
 .toggle-btn svg{width:20px;height:20px;}
-aside.collapsed .toggle-btn svg{transform:rotate(180deg);}
+/* toggle-btn rotation removed — pull-tab replaces collapsed toggle */
 
 /* Expandable sidebar sections */
 .expandable-header{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0;}
@@ -4087,13 +4180,13 @@ aside.collapsed .toggle-btn svg{transform:rotate(180deg);}
 .sidebar-icon-large{width:20px;height:20px;color:var(--muted);cursor:pointer;transition:color 0.2s;}
 .sidebar-icon-large:hover{color:var(--accent);}
 textarea,select,input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:10px 14px;font-size:14px;outline:none;transition:border-color 0.2s,box-shadow 0.2s;}
-textarea:focus,select:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,0.15);}
+textarea:focus,select:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(88,101,242,0.15);}
 select{width:auto !important;min-width:0;padding:8px 32px 8px 12px;font-size:13px;font-weight:500;border-radius:10px;cursor:pointer;appearance:none;-webkit-appearance:none;background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23a0aec0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E") no-repeat right 10px center;}
-select option{background:#1e2130;color:#e4e6f0;padding:8px 12px;}
+select option{background:#1e1f23;color:#dbdee1;padding:8px 12px;}
 textarea{min-height:44px;max-height:120px;resize:none;line-height:1.4;flex:1;}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 20px;border:none;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;background:var(--accent);color:#fff;transition:all 0.2s;white-space:nowrap;}
-.mode-btn{flex-direction:column;align-items:center;background:#2d3748;border:1px solid var(--border);transition:all 0.2s;}.mode-btn:hover{background:rgba(99,102,241,0.15);}
-.btn:hover{opacity:.9;transform:translateY(-1px);box-shadow:0 4px 12px rgba(99,102,241,0.3);}
+.mode-btn{flex-direction:column;align-items:center;background:#232428;border:1px solid var(--border);transition:all 0.2s;}.mode-btn:hover{background:rgba(88,101,242,0.15);}
+.btn:hover{opacity:.9;transform:translateY(-1px);box-shadow:0 4px 12px rgba(88,101,242,0.3);}
 .btn:active{transform:translateY(0);}
 .btn:disabled{background:var(--muted);cursor:not-allowed;transform:none;box-shadow:none;}
 
@@ -4103,51 +4196,60 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .task-list{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 0;display:flex;flex-direction:column;gap:0;}
 .input-area{padding:12px 20px 16px;background:var(--bg);border-top:1px solid var(--border);flex-shrink:0;}
 .input-container{display:flex;gap:8px;align-items:flex-end;max-width:800px;margin:0 auto;width:100%;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:6px;transition:border-color 0.2s,box-shadow 0.2s;}
-.input-container:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,0.1);}
+.input-container:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(88,101,242,0.1);}
+#slash-dropdown{display:none;position:absolute;bottom:100%;left:0;right:0;max-height:260px;overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:6px;box-shadow:0 -4px 24px rgba(0,0,0,0.4);z-index:50;scrollbar-width:thin;}
+#slash-dropdown .slash-item{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;transition:background 0.1s;border-bottom:1px solid rgba(255,255,255,0.04);}
+#slash-dropdown .slash-item:last-child{border-bottom:none;}
+#slash-dropdown .slash-item:hover,#slash-dropdown .slash-item.active{background:rgba(88,101,242,0.15);}
+#slash-dropdown .slash-cmd{font-weight:600;color:var(--accent);font-size:13px;min-width:80px;}
+#slash-dropdown .slash-desc{color:var(--muted);font-size:12px;}
+#slash-dropdown .slash-section{font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);padding:8px 14px 4px;opacity:0.7;}
 .input-container select{border:1px solid var(--border);background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%23a0aec0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E") no-repeat right 8px center;padding:8px 28px 8px 10px;font-size:12px;font-weight:600;border-radius:8px;color:var(--text);letter-spacing:0.3px;}
 .input-container select:focus{box-shadow:none;outline:none;border-color:var(--accent);}
-.input-container select option{background:#1e2130;color:#e4e6f0;padding:8px 12px;font-weight:500;}
+.input-container select option{background:#1e1f23;color:#dbdee1;padding:8px 12px;font-weight:500;}
 .input-container textarea{border:none;background:transparent;padding:8px 8px;min-height:36px;border-radius:0;font-size:14px;}
 .input-container textarea:focus{box-shadow:none;border:none;}
-.input-container .btn{border-radius:10px;padding:8px 18px;font-size:13px;flex-shrink:0;}
+.input-container .btn{border-radius:10px;padding:8px 18px;font-size:13px;flex-shrink:0;transition:background 0.2s,color 0.2s;}
+.input-container .btn[style*="ef4444"]{animation:stopPulse 1.5s ease-in-out infinite;}
+@keyframes stopPulse{0%,100%{opacity:1}50%{opacity:0.85}}
 
 /* Chat message groups - like Claude/ChatGPT */
 .msg-group{max-width:800px;margin:0 auto;width:100%;padding:0 24px;}
 .msg-user{padding:16px 0;border-bottom:1px solid rgba(255,255,255,0.04);}
 .msg-user-bubble{display:flex;justify-content:flex-end;}
-.msg-user-inner{background:var(--accent);color:#fff;padding:10px 16px;border-radius:18px 18px 4px 18px;max-width:75%;font-size:14px;line-height:1.5;word-break:break-word;}
+.msg-user-inner{background:#4752c4;color:#fff;padding:10px 16px;border-radius:18px 18px 4px 18px;max-width:75%;font-size:14px;line-height:1.5;word-break:break-word;font-weight:500;}
 .msg-assistant{padding:16px 0;border-bottom:1px solid rgba(255,255,255,0.04);position:relative;}
 .msg-info-wrap{position:relative;display:inline-block;margin-bottom:6px;}
 .msg-info-btn{width:18px;height:18px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.15);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px;font-weight:700;font-style:italic;font-family:Georgia,serif;transition:all 0.2s;line-height:1;}
-.msg-info-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(99,102,241,0.08);}
-.msg-info-btn.status-running{border-color:rgba(245,158,11,0.5);color:#f59e0b;animation:pulse 1.5s ease-in-out infinite;}
-.msg-info-btn.status-error{border-color:rgba(239,68,68,0.4);color:var(--err);}
+.msg-info-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(88,101,242,0.08);}
+.msg-info-btn.status-running{border-color:rgba(196,154,58,0.5);color:#c49a3a;animation:pulse 1.5s ease-in-out infinite;}
+.msg-info-btn.status-error{border-color:rgba(217,83,79,0.4);color:var(--err);}
 .msg-info-tip{display:none;position:absolute;left:24px;top:-4px;background:var(--card);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px 14px;font-size:11px;color:var(--text);white-space:nowrap;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:160px;}
 .msg-info-wrap:hover .msg-info-tip,.msg-info-wrap:focus-within .msg-info-tip{display:block;}
 .msg-info-tip .tip-row{display:flex;justify-content:space-between;gap:16px;padding:2px 0;}
 .msg-info-tip .tip-label{color:var(--muted);}
 .msg-info-tip .tip-val{font-weight:600;}
-.msg-info-tip .tip-val.status-running{color:#f59e0b;}
+.msg-info-tip .tip-val.status-running{color:#c49a3a;}
 .msg-info-tip .tip-val.status-complete{color:var(--ok);}
 .msg-info-tip .tip-val.status-error{color:var(--err);}
 .msg-info-tip .tip-val.status-cancelled,.msg-info-tip .tip-val.status-pending{color:var(--muted);}
-.msg-info-tip .tip-val.status-retrying{color:#f59e0b;}
+.msg-info-tip .tip-val.status-retrying{color:#c49a3a;}
 .msg-info-tip .tip-divider{border-top:1px solid rgba(255,255,255,0.06);margin:4px 0;}
 .msg-icon-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;}
 .msg-icon-btn{width:18px;height:18px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.1);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);transition:all 0.2s;padding:0;}
-.msg-icon-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(99,102,241,0.08);}
+.msg-icon-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(88,101,242,0.08);}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
-@keyframes recordPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.5);}50%{box-shadow:0 0 0 6px rgba(239,68,68,0);}}
+@keyframes recordPulse{0%,100%{box-shadow:0 0 0 0 rgba(217,83,79,0.5);}50%{box-shadow:0 0 0 6px rgba(217,83,79,0);}}
 /* Engine chips */
 .engine-chip-row{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:0 0 6px 0;}
 .engine-chip{padding:4px 12px;border-radius:16px;font-size:11px;font-weight:600;border:1.5px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all 0.15s;white-space:nowrap;}
-.engine-chip:hover{border-color:var(--accent);color:var(--accent);background:rgba(99,102,241,0.06);}
-.engine-chip.active{border-color:var(--accent);color:#fff;background:var(--accent);}
+.engine-chip:hover{border-color:var(--accent);color:var(--accent);background:rgba(88,101,242,0.06);}
+.engine-chip.active{border-color:var(--accent);color:#fff;background:var(--accent);font-weight:700;}
 .engine-chip-spacer{flex:1;}
-.record-chip{padding:4px 12px;border-radius:16px;font-size:11px;font-weight:600;border:1.5px solid rgba(239,68,68,0.3);background:transparent;color:var(--muted);cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:5px;}
-.record-chip:hover{border-color:#ef4444;color:#ef4444;}
-.record-chip.active{border-color:#ef4444;background:rgba(127,29,29,0.6);color:#ef4444;animation:recordPulse 1.5s ease-in-out infinite;}
-.record-chip .rec-dot{width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0;}
+.record-chip{padding:4px 12px;border-radius:16px;font-size:11px;font-weight:600;border:1.5px solid rgba(217,83,79,0.3);background:transparent;color:var(--muted);cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:5px;}
+.record-chip:hover{border-color:#d9534f;color:#d9534f;}
+.record-chip.active{border-color:#d9534f;background:rgba(127,29,29,0.6);color:#d9534f;animation:recordPulse 1.5s ease-in-out infinite;}
+.record-chip .rec-dot{width:8px;height:8px;border-radius:50%;background:#d9534f;flex-shrink:0;}
 .record-chip .rec-timer{font-variant-numeric:tabular-nums;font-size:10px;}
 /* Routing indicator */
 .routing-indicator{font-size:11px;color:var(--muted);padding:2px 0 4px 0;font-style:italic;}
@@ -4159,7 +4261,7 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .msg-body h1{font-size:1.4em;border-bottom:1px solid var(--border);padding-bottom:4px;}
 .msg-body h2{font-size:1.2em;}
 .msg-body h3{font-size:1.05em;}
-.msg-body code{background:rgba(99,102,241,0.1);padding:2px 6px;border-radius:4px;font-family:monospace;font-size:0.9em;color:var(--accent);}
+.msg-body code{background:rgba(88,101,242,0.1);padding:2px 6px;border-radius:4px;font-family:monospace;font-size:0.9em;color:var(--accent);}
 .msg-body pre{background:rgba(0,0,0,0.3);padding:12px;border-radius:8px;overflow-x:auto;margin:10px 0;border:1px solid var(--border);}
 .msg-body pre code{background:none;padding:0;color:var(--text);}
 .msg-body ul,.msg-body ol{margin:8px 0 8px 20px;}
@@ -4172,11 +4274,11 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .msg-body hr{border:none;border-top:1px solid var(--border);margin:12px 0;}
 .msg-body table{border-collapse:collapse;width:100%;margin:10px 0;}
 .msg-body th,.msg-body td{border:1px solid var(--border);padding:6px 10px;text-align:left;}
-.msg-body th{background:rgba(99,102,241,0.1);font-weight:600;}
+.msg-body th{background:rgba(88,101,242,0.1);font-weight:600;}
 .msg-body p{margin:6px 0;}
 .msg-actions{margin-top:8px;}
 .msg-actions .btn{padding:4px 12px;font-size:11px;}
-.msg-error{margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:var(--err);font-size:13px;word-break:break-word;}
+.msg-error{margin-top:8px;padding:8px 12px;background:rgba(217,83,79,0.1);border:1px solid rgba(217,83,79,0.2);border-radius:8px;color:var(--err);font-size:13px;word-break:break-word;}
 .step-stream{margin-top:4px;transition:all 0.3s ease;}
 
 .activity-feed{font-size:11px;}
@@ -4204,31 +4306,31 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .health-value{font-weight:600;}
 .health-value.h-ok{color:var(--ok);}.health-value.h-warn{color:var(--warn);}.health-value.h-err{color:var(--err);}
 .config-chip{display:inline-block;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;letter-spacing:0.3px;}
-.config-chip.configured{background:rgba(34,197,94,0.15);color:var(--ok);border:1px solid rgba(34,197,94,0.2);}
+.config-chip.configured{background:rgba(87,168,109,0.15);color:var(--ok);border:1px solid rgba(87,168,109,0.2);}
 .config-chip.not-set{background:rgba(160,174,192,0.08);color:var(--muted);border:1px solid rgba(160,174,192,0.15);}
-.config-provider-primary{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:12px;padding:8px 12px;background:rgba(99,102,241,0.08);border-radius:8px;border:1px solid rgba(99,102,241,0.15);}
+.config-provider-primary{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:12px;padding:8px 12px;background:rgba(88,101,242,0.08);border-radius:8px;border:1px solid rgba(88,101,242,0.15);}
 .config-chip.clickable-chip{cursor:pointer;transition:all 0.15s;}
-.config-chip.clickable-chip:hover{background:rgba(99,102,241,0.15);color:var(--accent);border-color:rgba(99,102,241,0.3);}
+.config-chip.clickable-chip:hover{background:rgba(88,101,242,0.15);color:var(--accent);border-color:rgba(88,101,242,0.3);}
 .config-provider-row{border-bottom:1px solid rgba(255,255,255,0.03);}
 .config-provider-row:last-child{border-bottom:none;}
 .history-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
 .history-table{width:100%;border-collapse:collapse;font-size:12px;}
-.history-table thead{background:rgba(99,102,241,0.08);border-bottom:2px solid var(--border);}
+.history-table thead{background:rgba(88,101,242,0.08);border-bottom:2px solid var(--border);}
 .history-table th{text-align:left;padding:10px 12px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);}
 .history-table tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);cursor:pointer;transition:background 0.15s;}
-.history-table tbody tr:hover{background:rgba(99,102,241,0.05);}
+.history-table tbody tr:hover{background:rgba(88,101,242,0.05);}
 .history-table td{padding:12px;}
 .history-badge{display:inline-block;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;text-transform:uppercase;}
-.history-badge.complete{background:rgba(34,197,94,0.15);color:var(--ok);}
-.history-badge.error{background:rgba(239,68,68,0.15);color:var(--err);}
-.history-badge.running{background:rgba(245,158,11,0.15);color:var(--warn);}
+.history-badge.complete{background:rgba(87,168,109,0.15);color:var(--ok);}
+.history-badge.error{background:rgba(217,83,79,0.15);color:var(--err);}
+.history-badge.running{background:rgba(196,154,58,0.15);color:var(--warn);}
 .history-badge.pending,.history-badge.cancelled{background:rgba(160,174,192,0.15);color:var(--muted);}
-.history-expanded{background:rgba(99,102,241,0.03)!important;}
+.history-expanded{background:rgba(88,101,242,0.03)!important;}
 .history-detail{padding:16px;border-top:1px solid var(--border);background:rgba(0,0,0,0.2);}
 .history-result{font-size:12px;line-height:1.6;max-height:200px;overflow-y:auto;margin-bottom:12px;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;border:1px solid var(--border);}
-.onboarding-card{background:linear-gradient(135deg,rgba(99,102,241,0.08) 0%,rgba(99,102,241,0.02) 100%);border:1px solid rgba(99,102,241,0.2);border-radius:12px;padding:20px;margin:16px 24px;max-width:760px;margin-left:auto;margin-right:auto;transition:all 0.3s;}
+.onboarding-card{background:linear-gradient(135deg,rgba(88,101,242,0.08) 0%,rgba(88,101,242,0.02) 100%);border:1px solid rgba(88,101,242,0.2);border-radius:12px;padding:20px;margin:16px 24px;max-width:760px;margin-left:auto;margin-right:auto;transition:all 0.3s;}
 .onboarding-item{display:flex;align-items:center;gap:12px;padding:10px 12px;background:rgba(0,0,0,0.15);border-radius:8px;cursor:pointer;transition:all 0.15s;border:1px solid transparent;margin-bottom:8px;}
-.onboarding-item:hover{background:rgba(0,0,0,0.25);border-color:rgba(99,102,241,0.3);}
+.onboarding-item:hover{background:rgba(0,0,0,0.25);border-color:rgba(88,101,242,0.3);}
 .onboarding-item.done{opacity:0.6;cursor:default;}
 .onboarding-item.done:hover{background:rgba(0,0,0,0.15);border-color:transparent;}
 .onboarding-check{width:20px;height:20px;border:2px solid var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.2s;font-size:14px;font-weight:700;color:transparent;}
@@ -4237,12 +4339,12 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .onboarding-progress-fill{height:100%;background:var(--ok);transition:width 0.3s;border-radius:2px;}
 
 /* Live View in Sidebar */
-.live-view-img-wrap{background:#0a0a0f;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:80px;}
+.live-view-img-wrap{background:#111214;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:80px;}
 #liveImage{max-width:100%;display:block;border-radius:8px;}
 #livePlaceholder{color:var(--muted);font-size:11px;text-align:center;padding:16px;}
 #liveImage[src=""]{display:none;}
 #liveImage:not([src=""])~#livePlaceholder{display:none;}
-@keyframes monitor-pulse{0%,100%{color:var(--ok);}50%{color:rgba(34,197,94,0.3);}}
+@keyframes monitor-pulse{0%,100%{color:var(--ok);}50%{color:rgba(87,168,109,0.3);}}
 .monitor-active{animation:monitor-pulse 2s ease-in-out infinite;}
 
 /* View Tabs */
@@ -4250,22 +4352,24 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 /* tab-badge/tab-tooltip styles removed — views now use sidebar nav-badge */
 
 /* Soul Tabs */
-.soul-tab.active{background:rgba(99,102,241,0.15)!important;color:var(--accent)!important;}
+.soul-tab.active{background:rgba(88,101,242,0.15)!important;color:var(--accent)!important;}
 .soul-tab:hover{background:rgba(255,255,255,0.08)!important;color:var(--text)!important;}
+/* Beta Badge */
+.beta-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:linear-gradient(135deg,#5865f2,#7289da);color:#fff;vertical-align:middle;margin-left:8px;text-transform:uppercase;letter-spacing:1px;}
 /* License Badge */
 .license-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;vertical-align:middle;margin-left:8px;text-transform:uppercase;letter-spacing:0.5px;}
-.license-badge.pro{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;}
-.license-badge.byok{background:#374151;color:#9ca3af;}
-.license-badge.free{background:#f59e0b;color:#000;cursor:pointer;}
+.license-badge.pro{background:linear-gradient(135deg,#4752c4,#5865f2);color:#fff;}
+.license-badge.byok{background:#2b2d31;color:#949ba4;cursor:pointer;}
+.license-badge.free{background:#c49a3a;color:#000;cursor:pointer;}
 /* Activation Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:1000;backdrop-filter:blur(4px);}
 .modal-content{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px;max-width:500px;width:90%;max-height:90vh;overflow-y:auto;animation:modalIn 0.2s ease;}
 @keyframes modalIn{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
-.activation-option{box-sizing:border-box;overflow:hidden;}.activation-option:hover{border-color:var(--accent)!important;background:#374151!important;}
+.activation-option{box-sizing:border-box;overflow:hidden;}.activation-option:hover{border-color:var(--accent)!important;background:#2b2d31!important;}
 """
     # Inline JS
     js = """
-const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null,routingInfo:{},chatExtras:{},chatRecordStart:null};
+const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null,routingInfo:{},chatExtras:{},chatRecordStart:null,runningTaskId:null};
 function updateSystemHealth(){
   const dot=document.getElementById("healthDot"),txt=document.getElementById("healthText");
   const wsEl=document.getElementById("healthWS"),engEl=document.getElementById("healthEngines"),brEl=document.getElementById("healthBridge");
@@ -4393,7 +4497,7 @@ function handleStepUpdate(p){
   // Update the running task's step info in the chat
   const el=document.getElementById("steps-"+p.task_id);
   if(el){
-    el.innerHTML='<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(99,102,241,0.08);border-radius:8px;font-size:12px;margin-top:8px">'
+    el.innerHTML='<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(88,101,242,0.08);border-radius:8px;font-size:12px;margin-top:8px">'
       +'<span style="color:var(--accent);font-weight:600">Step '+p.step+'/'+p.max_steps+'</span>'
       +'<span style="color:var(--muted)">'+esc(p.action||"")+'</span>'
       +(p.reasoning?'<span style="color:var(--muted);font-style:italic;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.reasoning.substring(0,120))+'</span>':'')
@@ -4424,7 +4528,7 @@ async function showReplay(taskId){
       const tok=(s.tokens_in||0)+(s.tokens_out||0);
       const tokStr=tok>0?' &middot; '+tok.toLocaleString()+' tok':'';
       const ts=s.timestamp?new Date(s.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'';
-      html+='<div style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.12);border-radius:8px;padding:10px 14px">'
+      html+='<div style="background:rgba(88,101,242,0.06);border:1px solid rgba(88,101,242,0.12);border-radius:8px;padding:10px 14px">'
         +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
         +'<span style="color:var(--accent);font-weight:600;font-size:12px">Step '+s.step+'/'+s.max_steps+'</span>'
         +'<span style="color:var(--fg);font-size:12px;font-weight:500">'+esc(s.action||"unknown")+'</span>'
@@ -4466,7 +4570,7 @@ function showApprovalModal(p){
 
   // Create modal
   const modal=document.createElement("div");
-  modal.style.cssText="background:var(--bg);border:2px solid #f59e0b;border-radius:16px;padding:28px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5)";
+  modal.style.cssText="background:var(--bg);border:2px solid #c49a3a;border-radius:16px;padding:28px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5)";
 
   const details=p.details||{};
   const urlInfo=details.url?'<div style="margin-top:8px;padding:8px 12px;background:rgba(255,255,255,0.05);border-radius:6px;font-family:monospace;font-size:11px;color:var(--muted);word-break:break-all">'+esc(details.url)+'</div>':'';
@@ -4474,8 +4578,8 @@ function showApprovalModal(p){
 
   modal.innerHTML=
     '<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">'
-    +'<div style="width:48px;height:48px;border-radius:50%;background:rgba(245,158,11,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">'
-    +'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
+    +'<div style="width:48px;height:48px;border-radius:50%;background:rgba(196,154,58,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+    +'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#c49a3a" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
     +'</div>'
     +'<div>'
     +'<h3 style="margin:0;font-size:18px;font-weight:600;color:var(--fg)">Approval Required</h3>'
@@ -4484,15 +4588,15 @@ function showApprovalModal(p){
     +'</div>'
     +'<div style="margin-bottom:20px">'
     +'<div style="font-size:14px;color:var(--fg);font-weight:500;margin-bottom:6px">The agent wants to:</div>'
-    +'<div style="font-size:15px;color:#f59e0b;font-weight:600;padding:12px 16px;background:rgba(245,158,11,0.1);border-radius:8px;border-left:3px solid #f59e0b">'+esc(p.action)+'</div>'
+    +'<div style="font-size:15px;color:#c49a3a;font-weight:600;padding:12px 16px;background:rgba(196,154,58,0.1);border-radius:8px;border-left:3px solid #c49a3a">'+esc(p.action)+'</div>'
     +urlInfo
     +contextInfo
     +'</div>'
-    +'<div style="font-size:12px;color:var(--muted);margin-bottom:20px;padding:10px 14px;background:rgba(99,102,241,0.08);border-radius:8px">'
+    +'<div style="font-size:12px;color:var(--muted);margin-bottom:20px;padding:10px 14px;background:rgba(88,101,242,0.08);border-radius:8px">'
     +'<strong>Reason:</strong> '+esc(p.reason)
     +'</div>'
     +'<div style="display:flex;gap:12px">'
-    +'<button onclick="sendApprovalResponse(\\''+p.request_id+'\\',false)" style="flex:1;padding:14px;border:1px solid var(--border);border-radius:10px;background:#2d3748;color:var(--fg);font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseenter="this.style.background=\\'rgba(239,68,68,0.2)\\';this.style.borderColor=\\'var(--err)\\'" onmouseleave="this.style.background=\\'#2d3748\\';this.style.borderColor=\\'var(--border)\\'">Deny</button>'
+    +'<button onclick="sendApprovalResponse(\\''+p.request_id+'\\',false)" style="flex:1;padding:14px;border:1px solid var(--border);border-radius:10px;background:#232428;color:var(--fg);font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseenter="this.style.background=\\'rgba(217,83,79,0.2)\\';this.style.borderColor=\\'var(--err)\\'" onmouseleave="this.style.background=\\'#232428\\';this.style.borderColor=\\'var(--border)\\'">Deny</button>'
     +'<button onclick="sendApprovalResponse(\\''+p.request_id+'\\',true)" style="flex:1;padding:14px;border:none;border-radius:10px;background:var(--ok);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseenter="this.style.opacity=\\'0.85\\'" onmouseleave="this.style.opacity=\\'1\\'">Approve</button>'
     +'</div>'
     +'<div style="margin-top:16px;font-size:10px;color:var(--muted);text-align:center">Request will timeout in 2 minutes if no response</div>';
@@ -4531,10 +4635,71 @@ function toggleSection(id){
   chevron.classList.toggle('collapsed',collapsed);
   localStorage.setItem('section_'+id, collapsed?'1':'0');
 }
-function upsert(t){const i=state.tasks.findIndex(x=>x.id===t.id);if(i>=0)state.tasks[i]=t;else state.tasks.push(t);render();}
+function upsert(t){const i=state.tasks.findIndex(x=>x.id===t.id);if(i>=0)state.tasks[i]=t;else state.tasks.push(t);if(t.status==="running"&&!state.runningTaskId){state.runningTaskId=t.id;updateSubmitBtn();}if(state.runningTaskId===t.id&&(t.status==="complete"||t.status==="error"||t.status==="cancelled")){state.runningTaskId=null;updateSubmitBtn();}render();}
 function scrollToBottom(){const el=document.getElementById("taskList");if(el)requestAnimationFrame(()=>el.scrollTop=el.scrollHeight);}
 const ENGINE_DISPLAY={browser_use:"Web Browser",computer_use:"Desktop Control",openclaw:"AI Chat",auto:"Auto"};
 const SLASH_ENGINE_MAP={"/browser":"browser_use","/computer":"computer_use","/chat":"openclaw"};
+const SLASH_COMMANDS=[
+  {cmd:"/record",desc:"Start/stop recording desktop actions"},
+  {cmd:"/stop",desc:"Stop recording"},
+  {cmd:"/replay",desc:"Replay a saved workflow",hasArg:true},
+  {cmd:"/browser",desc:"Force browser engine",hasArg:true},
+  {cmd:"/computer",desc:"Force desktop engine",hasArg:true},
+  {cmd:"/chat",desc:"Force chat/LLM engine",hasArg:true},
+];
+let _slashIdx=-1;
+function showSlashDropdown(filter){
+  const dd=document.getElementById("slash-dropdown");if(!dd)return;
+  const f=(filter||"/").toLowerCase();
+  let html="";
+  const cmds=SLASH_COMMANDS.filter(c=>c.cmd.startsWith(f));
+  if(cmds.length){
+    html+='<div class="slash-section">Commands</div>';
+    cmds.forEach((c,i)=>{
+      html+='<div class="slash-item'+(i===0?" active":"")+'" data-idx="'+i+'" data-value="'+c.cmd+(c.hasArg?" ":"")+'" onclick="selectSlashItem(this)"><span class="slash-cmd">'+esc(c.cmd)+'</span><span class="slash-desc">'+esc(c.desc)+'</span></div>';
+    });
+  }
+  // Show workflow names for /replay prefix
+  if("/replay".startsWith(f)||f.startsWith("/replay")){
+    const wfs=state.workflows||[];
+    if(wfs.length){
+      html+='<div class="slash-section">Workflows</div>';
+      wfs.forEach(w=>{
+        const val="/replay "+w.name+" ";
+        html+='<div class="slash-item" data-value="'+esc(val)+'" onclick="selectSlashItem(this)"><span class="slash-cmd">/replay</span><span class="slash-desc">'+esc(w.name)+(w.action_count?" ("+w.action_count+" actions)":"")+'</span></div>';
+      });
+    }
+  }
+  if(!html){dd.style.display="none";_slashIdx=-1;return;}
+  dd.innerHTML=html;dd.style.display="block";
+  _slashIdx=0;
+}
+function hideSlashDropdown(){
+  const dd=document.getElementById("slash-dropdown");if(dd)dd.style.display="none";
+  _slashIdx=-1;
+}
+function selectSlashItem(el){
+  const val=el.dataset.value;
+  const prompt=document.getElementById("prompt");
+  prompt.value=val;prompt.focus();
+  prompt.style.height="auto";prompt.style.height=prompt.scrollHeight+"px";
+  hideSlashDropdown();
+}
+function navigateSlash(dir){
+  const dd=document.getElementById("slash-dropdown");if(!dd||dd.style.display==="none")return false;
+  const items=dd.querySelectorAll(".slash-item");if(!items.length)return false;
+  items.forEach(i=>i.classList.remove("active"));
+  _slashIdx=(_slashIdx+dir+items.length)%items.length;
+  items[_slashIdx].classList.add("active");
+  items[_slashIdx].scrollIntoView({block:"nearest"});
+  return true;
+}
+function confirmSlash(){
+  const dd=document.getElementById("slash-dropdown");if(!dd||dd.style.display==="none")return false;
+  const items=dd.querySelectorAll(".slash-item");
+  if(_slashIdx>=0&&_slashIdx<items.length){selectSlashItem(items[_slashIdx]);return true;}
+  return false;
+}
 function selectEngineChip(val){
   document.getElementById("engine").value=val;
   document.querySelectorAll(".engine-chip").forEach(c=>{c.classList.toggle("active",c.dataset.engine===val);});
@@ -4571,6 +4736,7 @@ function updateChatRecordBtn(active){
   }
 }
 async function submit(){
+  if(state.runningTaskId){addActivity({timestamp:new Date().toISOString(),event_type:"info",detail:"A task is already running. Stop it first or wait for it to finish."});return;}
   const raw=document.getElementById("prompt").value.trim();if(!raw)return;
   let prompt=raw, engine=document.getElementById("engine").value;
   // Slash command parsing
@@ -4595,10 +4761,10 @@ async function submit(){
   const btn=document.getElementById("submitBtn");btn.disabled=true;
   try {
     if(engine==="browser_use")await ensureBrowser();
-    await api("POST","/api/tasks",{prompt,engine});
+    const result=await api("POST","/api/tasks",{prompt,engine});
+    if(result&&result.id){state.runningTaskId=result.id;updateSubmitBtn();}
     document.getElementById("prompt").value="";
     document.getElementById("prompt").style.height = "auto";
-    selectEngineChip("auto");
     scrollToBottom();
     setTimeout(checkOnboarding,500);
   } catch(e) {
@@ -4628,9 +4794,32 @@ async function handleSlashReplay(text){
 }
 async function cancel(id,ev){
   const btn=ev&&ev.target?ev.target.closest('button'):null;
-  if(btn){btn.disabled=true;btn.style.background='rgba(239,68,68,0.4)';btn.style.color='#fff';btn.textContent='Stopping...';}
+  if(btn){btn.disabled=true;btn.style.background='rgba(217,83,79,0.4)';btn.style.color='#fff';btn.textContent='Stopping...';}
   try{await api("PATCH","/api/tasks/"+id,{action:"cancel"});}catch(e){console.error(e);}
   if(btn){btn.style.background='rgba(160,174,192,0.3)';btn.textContent='Stopped';}
+}
+function updateSubmitBtn(){
+  const btn=document.getElementById("submitBtn");if(!btn)return;
+  if(state.runningTaskId){
+    btn.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Stop';
+    btn.style.background='#d9534f';btn.style.color='#fff';
+    btn.onclick=function(e){e.preventDefault();stopRunningTask();};
+    btn.type='button';
+  }else{
+    btn.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send';
+    btn.style.background='';btn.style.color='';
+    btn.onclick=null;btn.type='submit';
+  }
+}
+async function stopRunningTask(){
+  if(!state.runningTaskId)return;
+  const id=state.runningTaskId;
+  const btn=document.getElementById("submitBtn");
+  if(btn){btn.disabled=true;btn.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Stopping...';btn.style.background='rgba(217,83,79,0.4)';}
+  try{await api("PATCH","/api/tasks/"+id,{action:"cancel"});}catch(e){console.error(e);}
+  state.runningTaskId=null;
+  if(btn)btn.disabled=false;
+  updateSubmitBtn();
 }
 async function clearChat(){
   if(!state.tasks.length)return;
@@ -4721,7 +4910,7 @@ function renderEngines(){
   const c=document.getElementById("engineList");
   if(!state.engines.length){c.innerHTML='<p class="muted">No engines</p>';return;}
   c.innerHTML=state.engines.map(e=>{
-    const sc=e.status==="available"?"color:var(--ok)":e.status==="no_api_key"?"color:#f59e0b":e.status==="error"?"color:var(--err)":"color:var(--muted)";
+    const sc=e.status==="available"?"color:var(--ok)":e.status==="no_api_key"?"color:#c49a3a":e.status==="error"?"color:var(--err)":"color:var(--muted)";
     const dn=ENGINE_DISPLAY[e.name]||e.display_name;
     const sub=ENGINE_SUBTITLE[e.name]||"";
     let extra="";
@@ -4869,15 +5058,15 @@ function updateAutomationModeUI(){
   const hint=document.getElementById("automationModeHint");
   if(!supBtn||!autoBtn)return;
   const isSupervised=state.automationMode==="supervised";
-  supBtn.style.background=isSupervised?"rgba(99,102,241,0.2)":"#2d3748";
+  supBtn.style.background=isSupervised?"rgba(88,101,242,0.2)":"#232428";
   supBtn.style.borderColor=isSupervised?"var(--accent)":"var(--border)";
-  autoBtn.style.background=isSupervised?"#2d3748":"rgba(245,158,11,0.15)";
-  autoBtn.style.borderColor=isSupervised?"var(--border)":"#f59e0b";
+  autoBtn.style.background=isSupervised?"#232428":"rgba(196,154,58,0.15)";
+  autoBtn.style.borderColor=isSupervised?"var(--border)":"#c49a3a";
   if(hint){
     hint.innerHTML=isSupervised
       ?'<strong>Supervised:</strong> Pauses before high-risk actions (purchases, form submissions, sensitive sites). Recommended for learning the system.'
-      :'<strong style="color:#f59e0b">Autonomous:</strong> Runs without interruption. Monitor the Live View! You are responsible for any actions taken.';
-    hint.style.background=isSupervised?"rgba(99,102,241,0.08)":"rgba(245,158,11,0.1)";
+      :'<strong style="color:#c49a3a">Autonomous:</strong> Runs without interruption. Monitor the Live View! You are responsible for any actions taken.';
+    hint.style.background=isSupervised?"rgba(88,101,242,0.08)":"rgba(196,154,58,0.1)";
   }
 }
 async function setAutomationMode(mode){
@@ -4919,7 +5108,7 @@ function goToHistoryTask(taskId){
     const row=document.getElementById('hrow-'+taskId);
     if(row){
       row.scrollIntoView({behavior:'smooth',block:'center'});
-      row.style.background='rgba(99,102,241,0.15)';
+      row.style.background='rgba(88,101,242,0.15)';
       setTimeout(()=>row.style.background='',2000);
       toggleHistoryRow(taskId);
     }
@@ -4932,13 +5121,13 @@ function renderSchedules(){
   if(!state.schedules.length){c.innerHTML='<p style="color:var(--muted);font-size:11px">No scheduled tasks</p>';return;}
   c.innerHTML=state.schedules.map(s=>{
     const sc=s.enabled?'color:var(--ok)':'color:var(--muted)';
-    const typeLabel=s.schedule_type==='once'?'Once':s.schedule_type==='interval'?'Every '+s.schedule_value:'Cron: '+s.schedule_value;
+    const typeLabel=s.schedule_type==='once'?'Once':s.schedule_type==='interval'?'Every '+esc(s.schedule_value):'Cron: '+esc(s.schedule_value);
     const lastRun=s.last_run?new Date(s.last_run).toLocaleString():'Never';
     return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)">'
       +'<div style="display:flex;justify-content:space-between;align-items:center">'
       +'<span style="font-size:12px;font-weight:600">'+esc(s.name)+'</span>'
       +'<div style="display:flex;gap:4px">'
-      +'<button onclick="toggleSchedule(\\''+s.id+'\\','+!s.enabled+')" style="background:none;border:none;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:4px;'+(s.enabled?'color:var(--ok);background:rgba(34,197,94,0.1)':'color:var(--muted);background:rgba(255,255,255,0.05)')+'">'+(s.enabled?'ON':'OFF')+'</button>'
+      +'<button onclick="toggleSchedule(\\''+s.id+'\\','+!s.enabled+')" style="background:none;border:none;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:4px;'+(s.enabled?'color:var(--ok);background:rgba(87,168,109,0.1)':'color:var(--muted);background:rgba(255,255,255,0.05)')+'">'+(s.enabled?'ON':'OFF')+'</button>'
       +'<button onclick="deleteSchedule(\\''+s.id+'\\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:10px;padding:2px 4px" title="Delete">✕</button>'
       +'</div></div>'
       +'<div style="font-size:10px;color:var(--muted)">'+typeLabel+' · Runs: '+s.run_count+' · Last: '+lastRun+'</div>'
@@ -5122,7 +5311,7 @@ function handleRecordingStatus(p){
   if(state.recording){
     if(btn)btn.style.background="#7f1d1d";
     if(btnText)btnText.textContent="Stop";
-    if(btnIcon)btnIcon.style.background="#ef4444";
+    if(btnIcon)btnIcon.style.background="#d9534f";
     state.recordingStartTime=Date.now();
     if(timer){timer.style.display="inline";timer.textContent="00:00";}
     _recordingInterval=setInterval(()=>{
@@ -5133,9 +5322,9 @@ function handleRecordingStatus(p){
       if(timer)timer.textContent=mm+":"+ss;
     },1000);
   }else{
-    if(btn)btn.style.background="#2d3748";
+    if(btn)btn.style.background="#232428";
     if(btnText)btnText.textContent="Record";
-    if(btnIcon)btnIcon.style.background="#ef4444";
+    if(btnIcon)btnIcon.style.background="#d9534f";
     if(timer)timer.style.display="none";
     state.recordingStartTime=null;
     if(_recordingInterval){clearInterval(_recordingInterval);_recordingInterval=null;}
@@ -5151,19 +5340,25 @@ function handleRecordingResult(p){
 function handleChatRecordingResult(p){
   const actions=p.actions||[];
   if(!actions.length)return;
-  // Insert save-as-workflow card into chat stream
-  const lastTask=state.tasks.length?state.tasks[state.tasks.length-1]:null;
-  const anchorId=lastTask?lastTask.id:"_recording";
-  state.chatExtras[anchorId]='<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:8px;">'
+  state._pendingChatRecordActions=actions;
+  const card=document.getElementById("chatWfSaveCard");
+  if(!card)return;
+  // Default name: "Recording" + short timestamp
+  const now=new Date();
+  const defaultName="Recording "+now.toLocaleDateString([],{month:"short",day:"numeric"})+" "+now.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+  card.innerHTML='<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;">'
     +'<div style="font-size:13px;font-weight:600;margin-bottom:6px;">Save as workflow?</div>'
     +'<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">'+actions.length+' actions captured</div>'
-    +'<input id="chatWfName" placeholder="Workflow name..." style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:8px;">'
+    +'<input id="chatWfName" value="'+defaultName.replace(/"/g,"&quot;")+'" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:8px;">'
     +'<div style="display:flex;gap:6px;">'
     +'<button class="btn" onclick="saveChatWorkflow()" style="font-size:11px;padding:4px 12px;">Save</button>'
-    +'<button class="btn" onclick="discardChatRecording(\\''+anchorId+'\\')">Discard</button>'
+    +'<button class="btn" onclick="discardChatRecording()">Discard</button>'
     +'</div></div>';
-  state._pendingChatRecordActions=actions;
-  render();
+  card.style.display="block";
+  scrollToBottom();
+  // Auto-select the name so user can type a custom one or just hit Save
+  const nameInput=document.getElementById("chatWfName");
+  if(nameInput){nameInput.focus();nameInput.select();}
 }
 function saveChatWorkflow(){
   const nameEl=document.getElementById("chatWfName");
@@ -5174,15 +5369,14 @@ function saveChatWorkflow(){
   if(state.ws&&state.ws.readyState===1){
     state.ws.send(JSON.stringify({type:"save_workflow",payload:{name,description:"",actions,tags:[]}}));
   }
-  // Clear the card
-  Object.keys(state.chatExtras).forEach(k=>{if(state.chatExtras[k].includes("chatWfName"))delete state.chatExtras[k];});
   state._pendingChatRecordActions=null;
-  render();
+  const card=document.getElementById("chatWfSaveCard");
+  if(card){card.style.display="none";card.innerHTML="";}
 }
-function discardChatRecording(anchorId){
-  delete state.chatExtras[anchorId];
+function discardChatRecording(){
   state._pendingChatRecordActions=null;
-  render();
+  const card=document.getElementById("chatWfSaveCard");
+  if(card){card.style.display="none";card.innerHTML="";}
 }
 function saveWorkflow(){
   const name=(document.getElementById("wfName")||{}).value||"";
@@ -5215,7 +5409,7 @@ function renderWorkflows(){
   let html="";
   for(const wf of wfs){
     const stepCount=(wf.actions||[]).length;
-    const tags=(wf.tags||[]).map(t=>'<span style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:10px;color:var(--muted);">'+t+'</span>').join(" ");
+    const tags=(wf.tags||[]).map(t=>'<span style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:10px;color:var(--muted);">'+esc(t)+'</span>').join(" ");
     const replayed=wf.replay_count>0?' <span style="font-size:11px;color:var(--muted);">Replayed '+wf.replay_count+'x</span>':"";
     const created=wf.created_at?new Date(wf.created_at).toLocaleString():"";
     html+='<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;">';
@@ -5223,14 +5417,14 @@ function renderWorkflows(){
     html+='<div><span style="font-weight:600;font-size:14px;">'+_esc(wf.name)+'</span>'+replayed+'</div>';
     html+='<div style="display:flex;gap:6px;">';
     html+='<button class="btn" onclick="replayWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 10px;">Replay</button>';
-    html+='<button class="btn" data-wf-id="'+wf.id+'" data-wf-name="'+_esc(wf.name)+'" onclick="showModifyReplayBtn(this)" style="font-size:11px;padding:4px 10px;background:rgba(99,102,241,0.15);border:1px solid var(--accent);color:var(--accent);">Replay with changes...</button>';
-    html+='<button class="btn" onclick="deleteWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 10px;background:#2d3748;border:1px solid var(--border);">Delete</button>';
+    html+='<button class="btn" data-wf-id="'+wf.id+'" data-wf-name="'+_esc(wf.name)+'" onclick="showModifyReplayBtn(this)" style="font-size:11px;padding:4px 10px;background:rgba(88,101,242,0.15);border:1px solid var(--accent);color:var(--accent);">Replay with changes...</button>';
+    html+='<button class="btn" onclick="deleteWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 10px;background:#232428;border:1px solid var(--border);">Delete</button>';
     html+='</div></div>';
     html+='<div id="modify-'+wf.id+'" style="display:none;margin-bottom:6px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border);">';
     html+='<input id="modifyInput-'+wf.id+'" placeholder="Describe what to change..." style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;margin-bottom:6px;">';
     html+='<div style="display:flex;gap:6px;">';
     html+='<button class="btn" onclick="executeModifyReplay(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;">Replay Modified</button>';
-    html+='<button class="btn" onclick="document.getElementById(\\\'modify-'+wf.id+'\\\').style.display=\\\'none\\\'" style="font-size:11px;padding:4px 8px;background:#2d3748;">Cancel</button>';
+    html+='<button class="btn" onclick="document.getElementById(\\\'modify-'+wf.id+'\\\').style.display=\\\'none\\\'" style="font-size:11px;padding:4px 8px;background:#232428;">Cancel</button>';
     html+='</div></div>';
     if(wf.description)html+='<p style="font-size:12px;color:var(--muted);margin-bottom:6px;">'+_esc(wf.description)+'</p>';
     html+='<div style="display:flex;gap:12px;align-items:center;font-size:11px;color:var(--muted);">';
@@ -5431,7 +5625,7 @@ function renderScheduleView(){
   if(!state.schedules.length){c.innerHTML='<div style="text-align:center;padding:40px;color:var(--muted)"><p style="font-size:16px;margin-bottom:8px">No scheduled tasks yet</p><p style="font-size:12px">Create recurring tasks that run automatically on a schedule.</p></div>';return;}
   c.innerHTML=state.schedules.map(s=>{
     const typeIcon=s.schedule_type==='once'?'⏱':'🔄';
-    const typeLabel=s.schedule_type==='once'?'One-shot':s.schedule_type==='interval'?'Every '+s.schedule_value:'Cron: '+s.schedule_value;
+    const typeLabel=s.schedule_type==='once'?'One-shot':s.schedule_type==='interval'?'Every '+esc(s.schedule_value):'Cron: '+esc(s.schedule_value);
     const nextRun=s.next_run?new Date(s.next_run).toLocaleString():'—';
     const lastRun=s.last_run?new Date(s.last_run).toLocaleString():'Never';
     return '<div class="card" style="margin-bottom:8px">'
@@ -5439,7 +5633,7 @@ function renderScheduleView(){
       +'<div><span style="font-size:14px;font-weight:600">'+typeIcon+' '+esc(s.name)+'</span></div>'
       +'<div style="display:flex;gap:6px;align-items:center">'
       +'<button onclick="toggleSchedule(\\''+s.id+'\\','+!s.enabled+')" class="btn" style="font-size:11px;padding:4px 10px;'+(s.enabled?'background:var(--ok)':'background:var(--muted)')+'">'+(s.enabled?'Enabled':'Disabled')+'</button>'
-      +'<button onclick="deleteSchedule(\\''+s.id+'\\')" class="btn" style="font-size:11px;padding:4px 10px;background:rgba(239,68,68,0.15);color:var(--err)">Delete</button>'
+      +'<button onclick="deleteSchedule(\\''+s.id+'\\')" class="btn" style="font-size:11px;padding:4px 10px;background:rgba(217,83,79,0.15);color:var(--err)">Delete</button>'
       +'</div></div>'
       +'<div style="font-size:12px;color:var(--text);margin-bottom:4px">'+esc(s.prompt)+'</div>'
       +'<div style="display:flex;gap:16px;font-size:11px;color:var(--muted)">'
@@ -5499,20 +5693,33 @@ function toggleHistoryRow(taskId){
   html+='<div style="display:flex;gap:8px">';
   if(t.status==="complete"&&t.result){
     html+='<button class="btn" onclick="event.stopPropagation();copyResult(\\''+taskId+'\\',this)" style="font-size:11px;padding:6px 12px">Copy</button>';
-    if(t.result.total_steps>0)html+='<button class="btn" onclick="event.stopPropagation();showReplay(\\''+taskId+'\\')" style="font-size:11px;padding:6px 12px;background:#2d3748;border:1px solid var(--border)">Replay Steps</button>';
+    if(t.result.total_steps>0)html+='<button class="btn" onclick="event.stopPropagation();showReplay(\\''+taskId+'\\')" style="font-size:11px;padding:6px 12px;background:#232428;border:1px solid var(--border)">Replay Steps</button>';
   }
   html+='</div></div>';
   const tr=document.createElement("tr");tr.className="history-expanded";
   tr.innerHTML='<td colspan="6" style="padding:0">'+html+'</td>';
   row.insertAdjacentElement("afterend",tr);
-  row.style.background="rgba(99,102,241,0.08)";
+  row.style.background="rgba(88,101,242,0.08)";
   _expandedHistoryRow=taskId;
 }
 
 document.addEventListener("DOMContentLoaded",()=>{
   const prompt = document.getElementById("prompt");
-  prompt.onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submit();}};
-  prompt.oninput=e=>{prompt.style.height="auto";prompt.style.height=prompt.scrollHeight+"px";};
+  prompt.onkeydown=e=>{
+    const dd=document.getElementById("slash-dropdown");
+    const ddVisible=dd&&dd.style.display==="block";
+    if(ddVisible&&e.key==="ArrowUp"){e.preventDefault();navigateSlash(-1);return;}
+    if(ddVisible&&e.key==="ArrowDown"){e.preventDefault();navigateSlash(1);return;}
+    if(ddVisible&&e.key==="Tab"){e.preventDefault();confirmSlash();return;}
+    if(ddVisible&&e.key==="Escape"){e.preventDefault();hideSlashDropdown();return;}
+    if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();if(ddVisible&&confirmSlash())return;submit();}
+  };
+  prompt.oninput=e=>{
+    prompt.style.height="auto";prompt.style.height=prompt.scrollHeight+"px";
+    const v=prompt.value;
+    if(v.startsWith("/")&&!v.includes("\\n")){showSlashDropdown(v.split(" ")[0]);}
+    else{hideSlashDropdown();}
+  };
   document.getElementById("taskForm").onsubmit=e=>{e.preventDefault();submit();};
   
   if(localStorage.getItem('sidebar_left')==='true') toggleSidebar('left');
@@ -5606,6 +5813,9 @@ function updateLicenseBadge(data) {
   } else if (data.status === 'byok' || data.tier === 'byok') {
     badge.textContent = 'BYOK';
     badge.className = 'license-badge byok';
+    badge.style.cursor = 'pointer';
+    badge.onclick = () => { showActivationModal(true); };
+    badge.title = 'View activation options or upgrade';
   } else if (data.status === 'not_activated') {
     badge.textContent = 'ACTIVATE';
     badge.className = 'license-badge free';
@@ -5633,23 +5843,23 @@ function updateCreditWidget(data) {
   document.getElementById('creditBar').style.width = pct + '%';
   // Change bar color based on remaining
   const bar = document.getElementById('creditBar');
-  if (pct < 20) bar.style.background = '#ef4444';
-  else if (pct < 50) bar.style.background = '#f59e0b';
-  else bar.style.background = '#6366f1';
+  if (pct < 20) bar.style.background = '#d9534f';
+  else if (pct < 50) bar.style.background = '#c49a3a';
+  else bar.style.background = '#5865f2';
   // Low balance warning
   let warn = document.getElementById('creditLowWarning');
   if (pct < 20 && limit > 0) {
     if (!warn) {
       warn = document.createElement('div');
       warn.id = 'creditLowWarning';
-      warn.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;font-size:12px;color:#fca5a5;';
+      warn.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(217,83,79,0.1);border:1px solid rgba(217,83,79,0.3);border-radius:6px;font-size:12px;color:#c9a0a0;';
       var topupHref = window._topupUrl || 'https://clawbridge.ai/account';
       if (topupHref.indexOf('http://') !== 0 && topupHref.indexOf('https://') !== 0) topupHref = 'https://clawbridge.ai/account';
       warn.textContent = 'Credits running low \u2014 ';
       var lnk = document.createElement('a');
       lnk.href = topupHref;
       lnk.target = '_blank';
-      lnk.style.cssText = 'color:#6366f1;text-decoration:underline';
+      lnk.style.cssText = 'color:#5865f2;text-decoration:underline';
       lnk.textContent = 'Buy more';
       warn.appendChild(lnk);
       warn.appendChild(document.createTextNode(' to keep tasks running.'));
@@ -5723,13 +5933,14 @@ document.addEventListener('DOMContentLoaded', () => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ClawBridge Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+  <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEuUlEQVR4nO1Wa0xTZxj+vsOhRdrCWstVLrZcS4EOKSow5DqyONymWROzxF0cmzOZDnQzmVtyWrf9MM4L29wwG/7gJyUDSUQMmchmGMx1AdIBMhBEoKU3W0tp6eV8yykwi6MtaJwu8UnOj/Od9zzP817Odz4AnuL/DAIhjCAI7D8VRQhBHw/hQxMiHySez9KIBlrToDrjR8WYoII4F9yAUMCDGMchhMhz4f57DwY3wYHWYXouy1nJYjONc/NW+qzdzs5LiFW3fVFnRAi1uoNW4PDGiy858yrsAalUCtV31uU4thcmdM2Y8i2zloBJjT7IiWN95MRkS1bFe4ng4rm/wBqArUYYUIMGIWpR6jYFOhxB9b+P8Hq6rhvi1jNGDXrj98quP2Jwgahkc3rKG3HZO6OWkl6VAbAaSKWUSSiIiNTqjKYtxhnVevPsXJcuOHIos7goPSUmLN5m0Lw5b7EkTTANWolEQs2D/8QAALjbqr8qSKVUNuTt6cmI8MTkOGWP0hbLYb49MzJoZVhnGeO9/TEkl9NE50Voy8JF0XL5VxMAUK31X13cv0cEgQySZWWSUDugpYOt5SmpM2Y4rTdFD1xutVMjFMzm6jbmZDIsPEEC7D0rkjRIptL+lCKZbIHgIVsAKQLMTGPtFL5fLTY2N124Na16NiEtLlD82uvohQN78cTM1DBF02U+Z0p1aePBw9vHarBymUxGAuS/C7g/9fj4Qjqd7nwJ40a/S6qnOiYY7D3sJFYIZ+bGkTktbwfUzRvUPT9fYz5XfqJfZ95SEmZEGJt7UJT9orUPws7FYfTqBPoSp15MyijlM7kRL9+dUo852FEnowpK+EKnuur8mU9qEJFGC5AN2EkAgOTwqZM38fBDd69cuEbDyNPBDJqANA2fVigUc0tc1Cd//7xhPtOHEISxGLbCrSKytuZjI0QYP8Zp+a7u9NFLV7WzX7d/2P9Lm8n+U6/J+lnDl9V1cVb98LydjFR2N44LU5PwsLA81+I+g7wNO+5Dn3IMng/M0vRPTNvYz5RakzdlaW0MblTlmeZaZnZOQYZ4A+5CAeDir7fzbcPKbSy+ABParOpe5SBXr9er2trOzkMpB/PVAmxRyVsrMFmnzHlz+IZGnCtWqJTdQ2DesI2WnFVclL3BnLIOXMlkgU6RmEc3MKNyTarx2JHe679VHfumf2hgcNBXdZcZgF72AYlE4jbGZgRrPjj2baMwU+SgR6dzdpXFj74SDDYXQFiaC2HRWxz4TvGOnEAdDCFLSvMEvKiIo/zo0BE3icy9ifk2sASEUABC6J81uVzuov73HR27u3VTt1zaaVWqy2HW5NPApxDCkQaEaBKEAiCEP/CCQCM0G52q0VFhILKq2tubVQtnheXJeVb7X5WnxD0N3AsiMISUtD37jrRU7Pv8Tkh5NWchjsAIogOnDib7T8h37a46jvZW7j+EUQwL27FfYJ43EEKSujydUe1BSIogTLfX1x5/NSbEJS+NCYqm4giCirhKyiAk1aN9zlBs7qP687WnSBJAIJdTX+eDAa0wlMtMrZTJvcW1n4pWC7eJhdKuJAILCQJf1dHtUQGtQfSxGASP2h163FkhhOCTXdqneBLxNxgGLw4/MHD9AAAAAElFTkSuQmCC">
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js" integrity="sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js" integrity="sha384-eEu5CTj3qGvu9PdJuS+YlkNi7d2XxQROAFYOr59zgObtlcux1ae1Il3u7jvdCSWu" crossorigin="anonymous"></script>
   <style>""" + css + """</style>
 </head>
 <body>
   <header class="header">
-    <h1 class="logo">ClawBridge <span id="licenseBadge" class="license-badge" style="display:none"></span></h1>
+    <h1 class="logo"><img class="logo-svg" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAD0ElEQVR4nO1WbWxTVRg+57SlXyt169b6Ae0ttEDvZJtzFWQCQoLBxP0QcwsBoskSnBqj4i9c1Nur4Ych/lDUZfyA8MOv3QxDIHHBOMAYsiybZpTdbQTb2c1+jNu629uWffT2mNtlWkzbrcbpH57knpx7z3ve93nP855zLgD3UAAYYyg/YKVB0zSiMUb572UHxsuckG93jhNMXQO/GPNGlx1UCSHESxnRNEYQwuzpKz63xVRpkZQp9QyCFe90dvN8fHqk4y3olwktx5dykXkJY+j1AjwYpquT4dCTETG9NxJL6CMxQSFJs1eF68MZcucrU16vN72YbqmAMnOZWgkjDJra2pSpWLyxdyKmu9jbp7ZUaLhwhD8/OjbZbN++fZ/LWdnCMEyWorr+1LdowKUMKMqDBjs7MxXSbEXQd6MxfXtqTDTbo807tjWZlHOu0OjY0yg5zS9Ys0u5A8rSwxiyLMiugVAD2zseNWYQDF65+ozv3FcqSUyqA0McX9d6sE9QoFoagO8ZkpRXSpYI/8MM5aWGuP7IsT3qDQ26ufBv+hrXpiqo1yurNq0Hm7e6q5I3/SrD5q1rfjp09DHAMFmAS9dNqYCIoiiF3fEEBde6XjWoQCQoZtyrYYoj6mpjhNMa/D0eC94KJRo2ks6YZCaOE8SWLQDCkn6L7R95QtbRsJdUa3V7AFaszTgbnyeslmjP8dZ6L0WZwyyb4ABQ47c/54SJ4B2Nf+iLeYAFUYif9V//bqrY0hZhQudanVaBjr58OGTUadM6UdC//5y7tS+Vean5bNfH+xPzn53B+KkWV027RhDsLsLie7ZlV7qm2gQXkiyraJis3M5lZsKc78Y6R+3GcAjfFz9xYehN6/TqA027rCCLleCbC5wnGU33Wwgb73xIgUORaNJqkvj+heRw2VW64xFPoveHi3eM5gcCwCDqTbt3H9jWZL1lB6BbAYE25Xa8eDmW2pn6uX/82q+3A/7ghPrmYI8EaBrlCqgAioorF8ypU23z65yEhiTXfzK7yjztrrPx+wzg8UYIj9VD+PqR+1e9YKt1gExWM0M4bB9tsFXyfwlSGHcFxBirFvssy0rybdD+xsM9iehktxGJ9vHhYQZCyJ+5HNB0DgyolAh2ocDIJa0kPAjEaMe3578elefIp06ez7sULShv3kGcG1cgiFtfe/f0eEQcvfTlhyc8HhaR5DBmAAAtk9KnRDXiTn7w3kkAaLSof1n4Gyu5DxEEYGTkR0M+0dxFHLymzX2RdfuXUbTY6RUItoACl/V/9rvxvwKXkSFaWSr3AFYefwD41qY87JgeZAAAAABJRU5ErkJggg==">ClawBridge <span class="beta-badge">Beta</span><span id="licenseBadge" class="license-badge" style="display:none"></span></h1>
     <div class="system-health" tabindex="0" title="System Health">
       <span id="healthDot" class="system-health-dot sh-err"></span>
       <span id="healthText">Connecting...</span>
@@ -5743,11 +5954,6 @@ document.addEventListener('DOMContentLoaded', () => {
   </header>
   <div class="layout" id="mainLayout">
     <aside id="leftSidebar">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-        <button class="toggle-btn" onclick="toggleSidebar('left')" title="Toggle Sidebar">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
-        </button>
-      </div>
       <div class="collapsed-icons">
         <div onclick="toggleSidebar('left')" title="Engines">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
@@ -5781,7 +5987,12 @@ document.addEventListener('DOMContentLoaded', () => {
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
         </div>
       </div>
-      <div class="sidebar-section-label">System</div>
+      <div class="sidebar-top-row">
+        <span class="sidebar-section-label" style="margin:0">System</span>
+        <button class="toggle-btn" onclick="toggleSidebar('left')" title="Toggle Sidebar" style="padding:4px;margin-left:auto;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
+        </button>
+      </div>
       <div class="card expandable" id="card-engines">
         <h2 class="expandable-header" onclick="toggleSection('engines')">
           <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>Engines</span>
@@ -5796,17 +6007,17 @@ document.addEventListener('DOMContentLoaded', () => {
         </h2>
         <div class="expandable-content" id="configContent">
           <div id="configSummary"><p class="muted">Loading...</p></div>
-          <div id="creditBalanceWidget" style="display:none;margin-top:16px;padding:12px;background:rgba(99,102,241,0.08);border-radius:8px;border:1px solid rgba(99,102,241,0.2)">
+          <div id="creditBalanceWidget" style="display:none;margin-top:16px;padding:12px;background:rgba(88,101,242,0.08);border-radius:8px;border:1px solid rgba(88,101,242,0.2)">
             <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Credit Balance</div>
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-              <span id="creditAmount" style="font-size:18px;font-weight:600;color:#6366f1">$0.00</span>
+              <span id="creditAmount" style="font-size:18px;font-weight:600;color:#5865f2">$0.00</span>
               <span style="color:var(--muted);font-size:12px">/</span>
               <span id="creditLimit" style="font-size:14px;color:var(--muted)">$0.00</span>
             </div>
             <div style="background:rgba(255,255,255,0.1);border-radius:4px;height:6px;overflow:hidden;margin-bottom:8px">
-              <div id="creditBar" style="height:100%;background:#6366f1;transition:width 0.3s;width:0%"></div>
+              <div id="creditBar" style="height:100%;background:#5865f2;transition:width 0.3s;width:0%"></div>
             </div>
-            <button class="btn" onclick="window.open(window._topupUrl||'https://clawbridge.ai/account','_blank')" style="width:100%;font-size:11px;background:#6366f1">Buy More Credits</button>
+            <button class="btn" onclick="window.open(window._topupUrl||'https://clawbridge.ai/account','_blank')" style="width:100%;font-size:11px;background:#5865f2">Buy More Credits</button>
           </div>
           <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)">
             <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Automation Mode</div>
@@ -5821,7 +6032,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   <div style="font-size:8px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">No pauses</div>
                 </button>
               </div>
-              <div id="automationModeHint" style="font-size:10px;color:var(--muted);line-height:1.4;padding:6px 8px;background:rgba(99,102,241,0.08);border-radius:4px">
+              <div id="automationModeHint" style="font-size:10px;color:var(--muted);line-height:1.4;padding:6px 8px;background:rgba(88,101,242,0.08);border-radius:4px">
                 <strong>Supervised:</strong> Pauses before high-risk actions (purchases, form submissions, sensitive sites). Recommended for learning the system.
               </div>
             </div>
@@ -5836,7 +6047,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <div id="chromeModeText" style="font-size:10px;color:var(--muted)"></div>
             </div>
             <button class="btn" id="launchChromeBtn" style="width:100%;font-size:12px;margin-bottom:6px" onclick="launchChrome()">Launch Chrome Session</button>
-            <button class="btn" id="stopChromeBtn" style="width:100%;font-size:12px;margin-bottom:6px;background:rgba(239,68,68,0.15);color:var(--err);display:none" onclick="stopChrome()">Stop Chrome Session</button>
+            <button class="btn" id="stopChromeBtn" style="width:100%;font-size:12px;margin-bottom:6px;background:rgba(217,83,79,0.15);color:var(--err);display:none" onclick="stopChrome()">Stop Chrome Session</button>
             <div style="font-size:10px;color:var(--muted);line-height:1.4" title="Opens a dedicated Chrome profile at %LOCALAPPDATA%\\ClawBridge\\ChromeProfile. Sign into your accounts once — logins persist between sessions.">Persistent Chrome profile with saved logins</div>
             <div id="chromeExeInfo" style="font-size:10px;color:var(--muted);margin-top:6px"></div>
           </div>
@@ -5879,7 +6090,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </h2>
         <div class="expandable-content collapsed" id="templatesContent">
           <div id="templateList"><p style="color:var(--muted);font-size:11px">No templates yet</p></div>
-          <button class="btn" style="width:100%;font-size:11px;margin-top:8px;background:#2d3748;border:1px solid var(--border)" onclick="showNewTemplateForm()">+ New Template</button>
+          <button class="btn" style="width:100%;font-size:11px;margin-top:8px;background:#232428;border:1px solid var(--border)" onclick="showNewTemplateForm()">+ New Template</button>
           <div id="newTemplateForm" style="display:none;margin-top:8px">
             <input id="tmplName" placeholder="Template name" style="margin-bottom:6px;font-size:12px">
             <textarea id="tmplPrompt" placeholder="Task prompt..." style="margin-bottom:6px;font-size:12px;min-height:50px"></textarea>
@@ -5918,16 +6129,19 @@ document.addEventListener('DOMContentLoaded', () => {
         <span id="workflowsBadge" class="nav-badge" style="display:none">0</span>
       </div>
     </aside>
+    <div class="sidebar-pull-tab" onclick="toggleSidebar('left')" title="Open sidebar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+    </div>
     <main>
       <div class="chat-header">
         <div style="display:flex;align-items:center;gap:12px;">
-          <span style="font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px">
+          <span onclick="switchView('chat')" style="font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;cursor:pointer" title="Back to Chat">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
             Chat
           </span>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
-          <span id="taskCount" style="font-size:12px;color:var(--muted);cursor:pointer;padding:4px 8px;border-radius:6px;transition:all 0.15s;" onclick="switchView('history')" onmouseenter="this.style.background='rgba(99,102,241,0.1)';this.style.color='var(--accent)'" onmouseleave="this.style.background='transparent';this.style.color='var(--muted)'" title="View task history">0 tasks</span>
+          <span id="taskCount" style="font-size:12px;color:var(--muted);cursor:pointer;padding:4px 8px;border-radius:6px;transition:all 0.15s;" onclick="switchView('history')" onmouseenter="this.style.background='rgba(88,101,242,0.1)';this.style.color='var(--accent)'" onmouseleave="this.style.background='transparent';this.style.color='var(--muted)'" title="View task history">0 tasks</span>
           <button id="clearChatBtn" onclick="clearChat()" title="Clear chat" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;cursor:pointer;color:var(--muted);display:flex;align-items:center;gap:4px;font-size:11px;transition:all 0.15s;" onmouseenter="this.style.color='var(--err)';this.style.borderColor='var(--err)'" onmouseleave="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
             Clear
@@ -5956,30 +6170,34 @@ document.addEventListener('DOMContentLoaded', () => {
         <div id="taskList" class="task-list">
           <p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>
         </div>
+        <div id="chatWfSaveCard" style="display:none;flex-shrink:0;padding:0 16px;"></div>
         <div class="input-area">
           <div class="engine-chip-row">
-            <button type="button" class="engine-chip active" data-engine="auto" onclick="selectEngineChip('auto')">Auto</button>
-            <button type="button" class="engine-chip" data-engine="browser_use" onclick="selectEngineChip('browser_use')">Browser</button>
-            <button type="button" class="engine-chip" data-engine="computer_use" onclick="selectEngineChip('computer_use')">Desktop</button>
-            <button type="button" class="engine-chip" data-engine="openclaw" onclick="selectEngineChip('openclaw')">Chat</button>
+            <button type="button" class="engine-chip active" data-engine="auto" onclick="selectEngineChip('auto')" title="Auto-detect engine based on task">Auto</button>
+            <button type="button" class="engine-chip" data-engine="browser_use" onclick="selectEngineChip('browser_use')" title="Force browser engine for web tasks">Browser</button>
+            <button type="button" class="engine-chip" data-engine="computer_use" onclick="selectEngineChip('computer_use')" title="Force desktop engine for app control">Desktop</button>
+            <button type="button" class="engine-chip" data-engine="openclaw" onclick="selectEngineChip('openclaw')" title="Force AI chat engine">Chat</button>
             <span class="engine-chip-spacer"></span>
             <button type="button" class="record-chip" id="chatRecordBtn" onclick="toggleChatRecording()"><span class="rec-dot"></span><span id="chatRecordLabel">Record</span><span class="rec-timer" id="chatRecordTimer" style="display:none">00:00</span></button>
           </div>
-          <form id="taskForm" class="input-container">
-            <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
-              <select id="engine" style="display:none;">
-                <option value="auto">Auto</option>
-                <option value="browser_use">Web Browser</option>
-                <option value="computer_use">Desktop Control</option>
-                <option value="openclaw">AI Chat</option>
-              </select>
-            </div>
-            <textarea id="prompt" placeholder="Send a message... (try /browser, /computer, /chat, /record)" rows="1" title="Enter to send, Shift+Enter for new line"></textarea>
-            <button type="submit" class="btn" id="submitBtn" title="Send message (Enter)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-              Send
-            </button>
-          </form>
+          <div style="position:relative;max-width:800px;margin:0 auto;width:100%;">
+            <div id="slash-dropdown"></div>
+            <form id="taskForm" class="input-container">
+              <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
+                <select id="engine" style="display:none;">
+                  <option value="auto">Auto</option>
+                  <option value="browser_use">Web Browser</option>
+                  <option value="computer_use">Desktop Control</option>
+                  <option value="openclaw">AI Chat</option>
+                </select>
+              </div>
+              <textarea id="prompt" placeholder="Send a message... (try /browser, /computer, /chat, /record)" rows="1" title="Enter to send, Shift+Enter for new line"></textarea>
+              <button type="submit" class="btn" id="submitBtn" title="Send message (Enter)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Send
+              </button>
+            </form>
+          </div>
           <div style="font-size:10px;color:rgba(160,174,192,0.5);text-align:center;margin-top:6px;letter-spacing:0.3px;">Enter to send &middot; Shift+Enter for new line</div>
         </div>
       </div>
@@ -5993,7 +6211,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </div>
           <div style="display:flex;gap:8px;margin-bottom:12px;">
-            <button class="soul-tab active" data-file="SOUL.md" onclick="loadSoulFile('SOUL.md')" style="background:rgba(99,102,241,0.15);color:var(--accent);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">SOUL.md</button>
+            <button class="soul-tab active" data-file="SOUL.md" onclick="loadSoulFile('SOUL.md')" style="background:rgba(88,101,242,0.15);color:var(--accent);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">SOUL.md</button>
             <button class="soul-tab" data-file="IDENTITY.md" onclick="loadSoulFile('IDENTITY.md')" style="background:rgba(255,255,255,0.05);color:var(--muted);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">IDENTITY.md</button>
             <button class="soul-tab" data-file="USER.md" onclick="loadSoulFile('USER.md')" style="background:rgba(255,255,255,0.05);color:var(--muted);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">USER.md</button>
           </div>
@@ -6017,7 +6235,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div style="display:flex;gap:8px;margin-bottom:16px;">
             <input id="memorySearchInput" placeholder="Search memory..." style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter')searchMemory()">
-            <button class="btn" onclick="searchMemory()" style="font-size:12px;background:#2d3748;border:1px solid var(--border)">Search</button>
+            <button class="btn" onclick="searchMemory()" style="font-size:12px;background:#232428;border:1px solid var(--border)">Search</button>
           </div>
           <div id="memorySearchResults" style="margin-bottom:16px"></div>
           <div class="card" style="margin-bottom:16px">
@@ -6060,7 +6278,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
             <div style="display:flex;gap:8px;">
               <button class="btn" onclick="createSchedule()" style="flex:1;font-size:13px">Create</button>
-              <button class="btn" onclick="showNewScheduleForm()" style="flex:0;font-size:13px;background:#2d3748;border:1px solid var(--border)">Cancel</button>
+              <button class="btn" onclick="showNewScheduleForm()" style="flex:0;font-size:13px;background:#232428;border:1px solid var(--border)">Cancel</button>
             </div>
           </div>
           <div id="scheduleViewList"></div>
@@ -6074,7 +6292,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Task History</h3>
               <p style="font-size:12px;color:var(--muted)">Browse, search, and replay all tasks</p>
             </div>
-            <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#2d3748;border:1px solid var(--border)">Back to Chat</button>
+            <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#232428;border:1px solid var(--border)">Back to Chat</button>
           </div>
           <div class="history-filters">
             <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Filter:</span>
@@ -6119,12 +6337,12 @@ document.addEventListener('DOMContentLoaded', () => {
               <p style="font-size:12px;color:var(--muted)">Record, save, and replay desktop workflows</p>
             </div>
             <div style="display:flex;gap:8px;align-items:center;">
-              <span id="recordingTimer" style="display:none;font-size:12px;color:#ef4444;font-weight:600;font-variant-numeric:tabular-nums;">00:00</span>
-              <button id="recordBtn" class="btn" onclick="toggleRecording()" style="font-size:13px;background:#2d3748;border:1px solid var(--border)">
-                <span id="recordBtnIcon" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:6px;vertical-align:middle;"></span>
+              <span id="recordingTimer" style="display:none;font-size:12px;color:#d9534f;font-weight:600;font-variant-numeric:tabular-nums;">00:00</span>
+              <button id="recordBtn" class="btn" onclick="toggleRecording()" style="font-size:13px;background:#232428;border:1px solid var(--border)">
+                <span id="recordBtnIcon" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#d9534f;margin-right:6px;vertical-align:middle;"></span>
                 <span id="recordBtnText">Record</span>
               </button>
-              <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#2d3748;border:1px solid var(--border)">Back to Chat</button>
+              <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#232428;border:1px solid var(--border)">Back to Chat</button>
             </div>
           </div>
           <!-- Save workflow form (hidden until recording stops) -->
@@ -6136,7 +6354,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <input id="wfTags" placeholder="Tags (comma-separated, optional)" style="margin-bottom:8px;font-size:12px;width:100%;box-sizing:border-box;">
             <div style="display:flex;gap:8px;">
               <button class="btn" onclick="saveWorkflow()" style="font-size:12px;flex:1;">Save Workflow</button>
-              <button class="btn" onclick="discardRecording()" style="font-size:12px;background:#2d3748;border:1px solid var(--border);">Discard</button>
+              <button class="btn" onclick="discardRecording()" style="font-size:12px;background:#232428;border:1px solid var(--border);">Discard</button>
             </div>
           </div>
           <!-- Workflow list -->
@@ -6153,13 +6371,13 @@ document.addEventListener('DOMContentLoaded', () => {
       <h2 style="font-size:20px;margin-bottom:8px">Welcome to ClawBridge</h2>
       <p style="color:var(--muted);margin-bottom:24px;font-size:13px">Choose how to get started</p>
       <div id="activationOptions">
-        <button class="btn activation-option" onclick="showActivationCodeInput()" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#2d3748;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
+        <button class="btn activation-option" onclick="showActivationCodeInput()" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#232428;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
           <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">I have an activation code</div>
         </button>
-        <button class="btn activation-option" onclick="closeActivationModal()" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#2d3748;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
+        <button class="btn activation-option" onclick="closeActivationModal()" style="width:100%;margin-bottom:12px;padding:14px;text-align:left;background:#232428;border:1px solid var(--border);box-sizing:border-box;overflow:hidden">
           <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Continue without code</div>
         </button>
-        <button class="btn activation-option" onclick="window.open('https://clawbridge.ai/pricing','_blank')" style="width:100%;padding:14px;text-align:left;background:linear-gradient(135deg,#6366f1,#8b5cf6);border:none;box-sizing:border-box;overflow:hidden">
+        <button class="btn activation-option" onclick="window.open('https://clawbridge.ai/pricing','_blank')" style="width:100%;padding:14px;text-align:left;background:linear-gradient(135deg,#5865f2,#4752c4);border:none;box-sizing:border-box;overflow:hidden">
           <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Buy ClawBridge</div>
         </button>
       </div>
@@ -6169,8 +6387,8 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
         <div id="activationStatus" style="font-size:12px;margin-bottom:12px"></div>
         <div style="display:flex;gap:8px">
-          <button class="btn" onclick="hideActivationCodeInput()" style="flex:1;background:#2d3748;border:1px solid var(--border)">Back</button>
-          <button class="btn" onclick="activateCode()" style="flex:2;background:#6366f1" id="activateBtn">Activate</button>
+          <button class="btn" onclick="hideActivationCodeInput()" style="flex:1;background:#232428;border:1px solid var(--border)">Back</button>
+          <button class="btn" onclick="activateCode()" style="flex:2;background:#5865f2" id="activateBtn">Activate</button>
         </div>
       </div>
     </div>
@@ -6209,7 +6427,34 @@ def _validate_csrf_token(token: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="ClawBridge", version="0.1.0")
+    connections: list[WebSocket] = []
+
+    async def _broadcast(msg: dict) -> None:
+        dead: list[WebSocket] = []
+        for ws in connections[:]:
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            try:
+                connections.remove(ws)
+            except ValueError:
+                pass
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        logging.basicConfig(level=getattr(logging, get_settings().log_level.upper(), logging.INFO))
+        await get_manager().init_engines()
+        get_manager()._broadcast = _broadcast
+        # Link audit logger to websocket broadcast
+        get_audit()._on_log = lambda ev: asyncio.create_task(_broadcast({"type": "audit_event", "payload": ev.model_dump(mode="json")}))
+        asyncio.create_task(get_manager().remote_bridge_loop())
+        # Start schedule manager loop
+        asyncio.create_task(get_schedule_manager().run_loop(get_manager().submit))
+        yield
+
+    app = FastAPI(title="ClawBridge", version="0.1.0", lifespan=lifespan)
 
     # ── Dashboard Authentication Middleware ──────────────────────────
     from starlette.middleware.base import BaseHTTPMiddleware
@@ -6250,13 +6495,16 @@ def create_app() -> FastAPI:
 
     def _login_page_html(redirect_to: str = "/") -> str:
         return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>ClawBridge Login</title>
-<style>body{{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0a0a0f;color:#e4e4e7;font-family:system-ui}}
-.card{{background:#18181b;padding:40px;border-radius:16px;border:1px solid rgba(255,255,255,0.06);max-width:360px;width:100%}}
-h2{{margin:0 0 8px;font-size:20px}}p{{color:#71717a;font-size:13px;margin:0 0 24px}}
-input{{width:100%;padding:10px 14px;background:#09090b;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#e4e4e7;font-size:14px;margin-bottom:16px;box-sizing:border-box}}
-button{{width:100%;padding:10px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer}}
-button:hover{{background:#4f46e5}}.err{{color:#ef4444;font-size:12px;margin:8px 0 0;display:none}}</style></head>
-<body><div class="card"><h2>ClawBridge</h2><p>Enter your dashboard token to continue</p>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEuUlEQVR4nO1Wa0xTZxj+vsOhRdrCWstVLrZcS4EOKSow5DqyONymWROzxF0cmzOZDnQzmVtyWrf9MM4L29wwG/7gJyUDSUQMmchmGMx1AdIBMhBEoKU3W0tp6eV8yykwi6MtaJwu8UnOj/Od9zzP817Odz4AnuL/DAIhjCAI7D8VRQhBHw/hQxMiHySez9KIBlrToDrjR8WYoII4F9yAUMCDGMchhMhz4f57DwY3wYHWYXouy1nJYjONc/NW+qzdzs5LiFW3fVFnRAi1uoNW4PDGiy858yrsAalUCtV31uU4thcmdM2Y8i2zloBJjT7IiWN95MRkS1bFe4ng4rm/wBqArUYYUIMGIWpR6jYFOhxB9b+P8Hq6rhvi1jNGDXrj98quP2Jwgahkc3rKG3HZO6OWkl6VAbAaSKWUSSiIiNTqjKYtxhnVevPsXJcuOHIos7goPSUmLN5m0Lw5b7EkTTANWolEQs2D/8QAALjbqr8qSKVUNuTt6cmI8MTkOGWP0hbLYb49MzJoZVhnGeO9/TEkl9NE50Voy8JF0XL5VxMAUK31X13cv0cEgQySZWWSUDugpYOt5SmpM2Y4rTdFD1xutVMjFMzm6jbmZDIsPEEC7D0rkjRIptL+lCKZbIHgIVsAKQLMTGPtFL5fLTY2N124Na16NiEtLlD82uvohQN78cTM1DBF02U+Z0p1aePBw9vHarBymUxGAuS/C7g/9fj4Qjqd7nwJ40a/S6qnOiYY7D3sJFYIZ+bGkTktbwfUzRvUPT9fYz5XfqJfZ95SEmZEGJt7UJT9orUPws7FYfTqBPoSp15MyijlM7kRL9+dUo852FEnowpK+EKnuur8mU9qEJFGC5AN2EkAgOTwqZM38fBDd69cuEbDyNPBDJqANA2fVigUc0tc1Cd//7xhPtOHEISxGLbCrSKytuZjI0QYP8Zp+a7u9NFLV7WzX7d/2P9Lm8n+U6/J+lnDl9V1cVb98LydjFR2N44LU5PwsLA81+I+g7wNO+5Dn3IMng/M0vRPTNvYz5RakzdlaW0MblTlmeZaZnZOQYZ4A+5CAeDir7fzbcPKbSy+ABParOpe5SBXr9er2trOzkMpB/PVAmxRyVsrMFmnzHlz+IZGnCtWqJTdQ2DesI2WnFVclL3BnLIOXMlkgU6RmEc3MKNyTarx2JHe679VHfumf2hgcNBXdZcZgF72AYlE4jbGZgRrPjj2baMwU+SgR6dzdpXFj74SDDYXQFiaC2HRWxz4TvGOnEAdDCFLSvMEvKiIo/zo0BE3icy9ifk2sASEUABC6J81uVzuov73HR27u3VTt1zaaVWqy2HW5NPApxDCkQaEaBKEAiCEP/CCQCM0G52q0VFhILKq2tubVQtnheXJeVb7X5WnxD0N3AsiMISUtD37jrRU7Pv8Tkh5NWchjsAIogOnDib7T8h37a46jvZW7j+EUQwL27FfYJ43EEKSujydUe1BSIogTLfX1x5/NSbEJS+NCYqm4giCirhKyiAk1aN9zlBs7qP687WnSBJAIJdTX+eDAa0wlMtMrZTJvcW1n4pWC7eJhdKuJAILCQJf1dHtUQGtQfSxGASP2h163FkhhOCTXdqneBLxNxgGLw4/MHD9AAAAAElFTkSuQmCC">
+<style>body{{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#18191c;color:#dbdee1;font-family:system-ui}}
+.card{{background:#1e1f23;padding:40px;border-radius:16px;border:1px solid #2b2d31;max-width:360px;width:100%}}
+.login-logo{{width:48px;height:48px;margin:0 auto 16px;display:block;filter:drop-shadow(0 0 8px rgba(88,101,242,0.4))}}
+h2{{margin:0 0 8px;font-size:20px;color:#5865f2}}p{{color:#949ba4;font-size:13px;margin:0 0 24px}}
+input{{width:100%;padding:10px 14px;background:#18191c;border:1px solid #2b2d31;border-radius:8px;color:#dbdee1;font-size:14px;margin-bottom:16px;box-sizing:border-box}}
+input:focus{{border-color:#5865f2;outline:none;box-shadow:0 0 0 3px rgba(88,101,242,0.15)}}
+button{{width:100%;padding:10px;background:#5865f2;color:#fff;font-weight:600;border:none;border-radius:8px;font-size:14px;cursor:pointer}}
+button:hover{{background:#4752c4}}.err{{color:#d9534f;font-size:12px;margin:8px 0 0;display:none}}</style></head>
+<body><div class="card"><img class="login-logo" src="data:image/png;base64,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"><h2>ClawBridge</h2><p>Enter your dashboard token to continue</p>
 <form id="lf"><input id="tok" type="password" placeholder="Dashboard token" autofocus>
 <button type="submit">Unlock Dashboard</button><p class="err" id="lerr"></p></form>
 <script>document.getElementById('lf').onsubmit=async function(e){{e.preventDefault();const t=document.getElementById('tok').value;
@@ -6284,32 +6532,6 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
             samesite="strict",
         )
         return response
-
-    @app.on_event("startup")
-    async def startup():
-        logging.basicConfig(level=getattr(logging, get_settings().log_level.upper(), logging.INFO))
-        await get_manager().init_engines()
-        get_manager()._broadcast = _broadcast
-        # Link audit logger to websocket broadcast
-        get_audit()._on_log = lambda ev: asyncio.create_task(_broadcast({"type": "audit_event", "payload": ev.model_dump(mode="json")}))
-        asyncio.create_task(get_manager().remote_bridge_loop())
-        # Start schedule manager loop
-        asyncio.create_task(get_schedule_manager().run_loop(get_manager().submit))
-
-    connections: list[WebSocket] = []
-
-    async def _broadcast(msg: dict) -> None:
-        dead: list[WebSocket] = []
-        for ws in connections[:]:
-            try:
-                await ws.send_json(msg)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            try:
-                connections.remove(ws)
-            except ValueError:
-                pass  # already removed by another broadcast
 
     @app.get("/health")
     def health():
@@ -6365,7 +6587,7 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
                 if status == "available":
                     sc = "color:var(--ok)"
                 elif status == "no_api_key":
-                    sc = "color:#f59e0b"
+                    sc = "color:#c49a3a"
                 elif status == "error":
                     sc = "color:var(--err)"
                 else:
@@ -6775,6 +6997,7 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
 
     @app.get("/api/config/audit")
     async def get_audit_events(limit: int = 50, task_id: str | None = None):
+        limit = min(limit, 500)
         return [e.model_dump(mode="json") for e in get_audit().recent(limit=limit, task_id=task_id)]
 
     # ── Personality / Soul Endpoints ────────────────────────────────────────
@@ -7018,6 +7241,8 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
             prompt = body.get("prompt", "").strip()
             if not prompt:
                 raise HTTPException(400, "prompt is required")
+            if len(prompt) > 50000:
+                raise HTTPException(400, "Prompt too long (max 50,000 chars)")
             engine = body.get("engine", "auto")
             task = Task(prompt=prompt, engine=EngineName(engine) if engine != "auto" else EngineName.AUTO)
         else:
@@ -7203,6 +7428,8 @@ def main() -> None:
 
     # 5. Start the real server — loading page's /health poll will detect this
     print()
+    if not s.dashboard_token:
+        print("  [SECURITY] Dashboard has no authentication. Set DASHBOARD_TOKEN in .env to require login.")
     uvicorn.run(app, host=s.host, port=s.port, log_level=s.log_level.lower())
 
 if __name__ == "__main__":

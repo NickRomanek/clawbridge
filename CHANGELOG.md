@@ -120,6 +120,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-02-17
+
+### Added
+
+#### Dashboard UX Overhaul (Phase 0)
+- **Always-visible Stop button**: Send button swaps to red Stop when any task is running. Tracks via `state.runningTaskId` set from WebSocket `task_update` events. Resets on terminal status (complete/error/cancelled). Double-submit guard prevents sending while task is active.
+- **Slash command autocomplete**: Typing `/` shows dropdown above input with all commands (`/record`, `/stop`, `/replay`, `/browser`, `/computer`, `/chat`) and saved workflow names. Arrow keys navigate, Enter selects, Escape dismisses.
+- **Chat workflow save card**: Stopping a recording from chat shows a save card (positioned between task list and input, outside render cycle) with pre-filled timestamp name. One-click save or customize.
+- **Engine chip tooltips**: All 4 engine chips (Auto/Browser/Desktop/Chat) have descriptive `title=` attributes.
+
+#### Computer-Use Improvements
+- **Focus verification**: `_verify_focus()` checks foreground window title via ctypes after every focus attempt. Retries once on mismatch. `_focus_warning` string fed back to LLM so it knows when focus is wrong.
+- **Ultrawide monitor support**: Monitors with aspect ratio > 2.0 auto-detected. Uses active window crop as primary screenshot (better for LLM reasoning). Full screen only on first screenshot or explicit `force_full=True`. Configurable via `COMPUTER_USE_MAX_SCREEN_WIDTH`/`HEIGHT`.
+
+#### Browser-Use Improvements
+- **Extraction-aware prompting**: When prompts contain extraction keywords ("tell me", "what is", "show me", etc.), appends instruction for browser-use Agent to return findings as final answer.
+- **Page content fallback**: When `final_result` is None and prompt asked for information, extracts page text via `page.inner_text("body")` and summarizes with LLM.
+
+#### Replay & Recording Fixes
+- **Replay routing clarity**: `/replay` always forces `computer_use` engine regardless of chip selection. Routing info shows "Replaying Workflow (Visual Automation)".
+- **Recorder space key fix**: pynput `Key.space` now mapped to actual `" "` character via `_PRINTABLE_KEY_MAP` before text coalescing. Previously recorded as literal string "space" (e.g., "spaceu" instead of " u").
+- **Unknown special key safety**: pynput keys not in special list or printable map now recorded as standalone `key` events, preventing key names like "f1" or "home" from being dumped into text buffer.
+
+#### Testing
+- **E2E test suite**: 33 tests across 10 files covering dashboard integrity, task cancel, browser extraction, replay routing, computer focus, ultrawide, and engine routing
+- **E2E harness fix**: Function-scoped async clients prevent Windows ProactorEventLoop cascade failures
+- **Recorder unit tests**: 5 tests verifying space key mapping, character coalescing, enter breaking, unknown key handling
+
+### Changed
+- Monolith grew from ~6700 to ~7400 lines with UX features, focus verification, ultrawide support, and extraction enhancement
+- Engine chip no longer resets to Auto after submitting a task
+- Recording save from chat now uses dedicated container div (outside render cycle) instead of chatExtras (which was wiped by innerHTML replacement)
+
+### Fixed
+- Stop button no longer shows on fresh page load when orphaned "running" tasks exist from killed server sessions
+- Chat recording save card now actually appears (was targeting nonexistent `chatMessages` element; actual ID is `taskList`)
+
+---
+
 ## [Unreleased]
 
 ### Added

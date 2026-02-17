@@ -144,6 +144,13 @@ class InputRecorder:
                 "window_title": window_title,
             })
 
+    # Map special key names to their printable characters for text coalescing.
+    # Without this, e.g. Key.space records as the literal string "space" in the
+    # coalesce buffer, producing "spaceu" instead of " u".
+    _PRINTABLE_KEY_MAP: dict[str, str] = {
+        "space": " ",
+    }
+
     def _on_key_press(self, key: Any) -> None:
         if not self._recording:
             return
@@ -153,7 +160,7 @@ class InputRecorder:
                 char = key.char
             else:
                 char = str(key).replace("Key.", "")
-                # Special keys that break text coalescing
+                # Special keys that break text coalescing — recorded as "key" events
                 if char in ("enter", "return", "tab", "escape", "backspace", "delete",
                             "ctrl_l", "ctrl_r", "alt_l", "alt_r", "shift", "shift_r",
                             "cmd", "cmd_r", "caps_lock"):
@@ -164,6 +171,20 @@ class InputRecorder:
                             "type": "key",
                             "timestamp": self._elapsed(),
                             "key": char,
+                            "window_title": window_title,
+                        })
+                    return
+                # Convert printable special keys (e.g. space) to actual characters
+                char = self._PRINTABLE_KEY_MAP.get(char, None)
+                if char is None:
+                    # Unknown special key — record as "key" event, don't coalesce
+                    self._flush_key_buffer()
+                    window_title = _get_fg_window_title()
+                    with self._lock:
+                        self._events.append({
+                            "type": "key",
+                            "timestamp": self._elapsed(),
+                            "key": str(key).replace("Key.", ""),
                             "window_title": window_title,
                         })
                     return

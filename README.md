@@ -6,7 +6,7 @@ ClawBridge is a local-first AI agent platform that unifies multiple automation e
 
 Submit a task, pick an engine (or let Auto choose), and watch it run. Everything stays on your machine — or bridge to the cloud.
 
-**Version:** 0.2.0 | [Changelog](CHANGELOG.md)
+**Version:** 0.3.0 | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
 
 ---
 
@@ -111,7 +111,7 @@ ClawBridge has two deployment forms that share the same logic:
 
 | Form | File | Use Case |
 |------|------|----------|
-| **Monolith** | `clawbridge.py` (~6700 lines) | Primary. Single file, easy to share/deploy |
+| **Monolith** | `clawbridge.py` (~7400 lines) | Primary. Single file, easy to share/deploy |
 | **Package** | `clawbridge/` directory | Modular. For development, testing, extensibility |
 
 ### How It Works
@@ -193,15 +193,21 @@ ClawBridge can record your desktop actions and replay them adaptively — even w
 
 ### Recording
 
-1. Navigate to the **Workflows** tab in the dashboard
+**From Chat** (recommended):
+1. Click **Record** in the chat input bar (or type `/record`)
+2. Perform your desktop actions (clicks, typing, keyboard shortcuts)
+3. Click **Stop** (or type `/stop`) — a save card appears with a pre-filled name
+4. Click **Save** or customize the name first
+
+**From Workflows Tab**:
+1. Navigate to the **Workflows** tab
 2. Click **Start Recording** — a red indicator and timer appear
-3. Perform your desktop actions (clicks, typing, keyboard shortcuts)
-4. Click **Stop Recording** — actions are captured with per-event window titles
-5. Save with a name and optional description
+3. Perform your desktop actions
+4. Click **Stop Recording** — enter a name and save
 
 ### Replay
 
-- Click **Replay** on any saved workflow, or type `replay: Workflow Name` in chat
+- Click **Replay** on any saved workflow, or type `/replay Workflow Name` in chat
 - ClawBridge replays each action using **element matching** (accessibility tree comparison):
   1. **automation_id exact match** (confidence 1.0)
   2. **name + type + parent** (0.95)
@@ -224,8 +230,11 @@ The recording system is backed by a standalone perception module (`clawbridge/pe
 
 The web dashboard at `http://127.0.0.1:8765` provides:
 
-- **Chat interface**: Submit tasks, see results in a message-bubble layout
-- **Engine selector**: Dropdown to pick Auto, browser-use, computer-use, or OpenClaw
+- **Chat interface**: Submit tasks, see results in a message-bubble layout with inline cost/duration info
+- **Engine selector**: Chip bar (Auto / Browser / Desktop / Chat) with tooltips
+- **Slash commands**: Type `/` for autocomplete dropdown — `/record`, `/stop`, `/replay <name>`, `/browser`, `/computer`, `/chat`
+- **Stop button**: Send button swaps to red Stop while a task is running — always visible, one-click cancel
+- **Workflow recording from chat**: Click Record, perform actions, click Stop — save card appears with pre-filled name
 - **Live View**: Real-time screenshot stream from browser or desktop
 - **Engine status**: See which engines are available/running/errored
 - **Config panel**: API key management, browser session controls, machine ID
@@ -405,7 +414,7 @@ This enables the **bridge architecture**: local machines provide the "hands" (de
 ## Project Structure
 
 ```
-clawbridge.py                 # Monolith — primary entry point (~6200 lines)
+clawbridge.py                 # Monolith — primary entry point (~7400 lines)
 clawbridge_mcp.py             # MCP server (stdio/HTTP proxy to REST API)
 clawbridge/
   config.py                   # Settings & BYOK key management
@@ -476,19 +485,36 @@ See `.mcp.json` for project-level registration.
 - [x] MCP server mode (13 tools, stdio + HTTP)
 - [x] Supervised/Autonomous automation modes
 - [x] Workflow recording & replay with perception layer (v0.2.0)
+- [x] Security hardening Phase 1 & 2 (CSRF, path traversal, XSS, auth)
+- [x] Slash command autocomplete with workflow name suggestions
+- [x] Always-visible Stop button during task execution
+- [x] Computer-use focus verification (retry + LLM feedback)
+- [x] Ultrawide monitor support (active window crop as primary screenshot)
+- [x] Browser-use extraction-aware prompting (page content fallback)
+- [x] Chat-integrated workflow save (record from chat, save with one click)
+- [x] Recorder space key fix (pynput special key → printable char mapping)
+- [x] E2E test suite (33 tests covering dashboard, cancel, engines, replay)
 
 ### In Progress
 - [ ] macOS support ([porting plan](MACOS_PORTING_PLAN.md) — Phase 1 minimal changes identified)
-- [ ] Refine workflow replay element matching accuracy
 
-### Planned
+### Planned (Phase 1)
+- [ ] Visual-first routing (computer-use for web tasks, browser-use becomes headless scraper)
+- [ ] Smart model routing (Haiku for simple steps, Sonnet for complex — ~50% cost savings)
+- [ ] Economy mode (Gemini Flash + UI-TARS free tier)
+- [ ] Prompt caching for repeated screenshots (90% savings on cache hits)
+- [ ] Workflows as default landing view
+- [ ] Enhanced recording (live action feed, element enrichment, persistent record button)
+
+### Planned (Phase 2+)
+- [ ] Workflow parameterization ({{email}}, {{date}} substituted at replay)
+- [ ] Workflow scheduling and chaining
+- [ ] Auto-record during AI tasks ("Save as workflow?" after success)
 - [ ] Code signing certificate for Windows installer
 - [ ] Auto-update mechanism
 - [ ] Remote Bridge cloud service
-- [ ] Hosted engine backends (cloud browser-use, cloud OpenClaw)
 - [ ] `pip install clawbridge` one-command setup
 - [ ] macOS .dmg packaging via GitHub Actions
-- [ ] Multi-machine fleet management via Remote Bridge
 
 ## Contributing
 
