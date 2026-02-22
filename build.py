@@ -29,7 +29,7 @@ from pathlib import Path
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-VERSION = "0.2.0"
+VERSION = "0.3.5"
 
 ROOT = Path(__file__).parent.resolve()
 DIST_DIR = ROOT / "dist"
@@ -125,8 +125,11 @@ def step_python_embedded():
                 new_lines.append(line)
         if "Lib\\site-packages" not in content:
             new_lines.append("Lib\\site-packages")
+        # Add app root (parent of python/) so `from clawbridge.recorder...` works
+        if ".." not in new_lines:
+            new_lines.append("..")
         pth.write_text("\n".join(new_lines))
-        print(f"    Patched {pth.name} to enable pip/site-packages")
+        print(f"    Patched {pth.name} to enable pip/site-packages + app root")
 
     # Install pip into embedded Python
     print("    Installing pip into embedded Python...")
@@ -241,6 +244,16 @@ def step_project_files():
             print(f"    {fname}")
         else:
             print(f"    [skip] {fname} (not found)")
+
+    # Copy clawbridge package (recorder, etc.)
+    pkg_src = ROOT / "clawbridge"
+    pkg_dst = BUNDLE_DIR / "clawbridge"
+    if pkg_src.exists():
+        shutil.copytree(pkg_src, pkg_dst, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        print("    clawbridge/ (package)")
+    else:
+        print("    [skip] clawbridge/ (not found)")
 
     # Create default workspace structure
     ws = BUNDLE_DIR / "workspace"

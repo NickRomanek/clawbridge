@@ -17,9 +17,14 @@ ClawBridge is a desktop automation agent that controls mouse, keyboard, and brow
 
 ### Built-in safety layers
 - Action whitelist (computer-use engine has no shell/bash tool)
+- Key combo blocklist (Win+R, Ctrl+Alt+Delete, Alt+F4, etc. blocked in engine and replay)
 - Supervised mode with human approval for high-risk actions
 - Safety scanning for credentials, PII, and injection patterns
+- Safety redaction on personality/memory context before LLM injection
 - Policy modes (permissive, guarded, strict)
+- Replay concurrency lock (asyncio.Lock prevents race conditions)
+- Gateway localhost-only binding (127.0.0.1)
+- Minimal subprocess environment (no env variable leakage)
 - Audit logging of all task events
 - Dashboard authentication (token-based)
 
@@ -41,6 +46,7 @@ We aim to acknowledge reports within 48 hours and provide a fix or mitigation pl
 
 | Version | Supported |
 |---------|-----------|
+| 0.3.x   | Yes       |
 | 0.2.x   | Yes       |
 | < 0.2   | No        |
 

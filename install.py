@@ -88,7 +88,7 @@ def err(msg):
     print(f"  {c(C.RED, '✗')} {msg}")
 
 def info(msg):
-    print(f"  {c(C.CYAN, '→')} {msg}")
+    print(f"  {c(C.CYAN, '->')} {msg}")
 
 def step(num, title):
     print()
@@ -118,7 +118,7 @@ def ask_choice(prompt, choices, default=0):
     """Show numbered choices and return selected value."""
     print(f"  {prompt}")
     for i, (label, value) in enumerate(choices):
-        marker = c(C.GREEN, "→") if i == default else " "
+        marker = c(C.GREEN, "->") if i == default else " "
         print(f"    {marker} {i + 1}) {label}")
     while True:
         try:

@@ -6,7 +6,7 @@ ClawBridge is a local-first AI agent platform that unifies multiple automation e
 
 Submit a task, pick an engine (or let Auto choose), and watch it run. Everything stays on your machine — or bridge to the cloud.
 
-**Version:** 0.3.0 | [Website](https://clawbridge.ai) | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
+**Version:** 0.3.5 | [Website](https://clawbridge.ai) | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
 
 ---
 
@@ -111,7 +111,7 @@ ClawBridge has two deployment forms that share the same logic:
 
 | Form | File | Use Case |
 |------|------|----------|
-| **Monolith** | `clawbridge.py` (~7400 lines) | Primary. Single file, easy to share/deploy |
+| **Monolith** | `clawbridge.py` (~10,200 lines) | Primary. Single file, easy to share/deploy |
 | **Package** | `clawbridge/` directory | Modular. For development, testing, extensibility |
 
 ### How It Works
@@ -151,19 +151,19 @@ browser-use  computer-use  OpenClaw
 | **computer-use** | Anthropic API + pyautogui + mss + pywinauto | Full desktop control — any app, any window | Working (accessibility-first navigation) |
 | **OpenClaw** | Node.js + Chrome DevTools Protocol | AI agent with persistent memory & skills | Requires separate install (`npm i -g openclaw`) |
 
-### Engine Selection (Smart Default)
+### Engine Selection (Smart Auto Routing)
 
 ClawBridge uses intelligent engine selection to pick the best engine for each task:
 
-| Task Type | Priority Order | Reason |
-|-----------|---------------|--------|
-| **Desktop tasks** | computer-use → browser-use → OpenClaw | Desktop keywords detected (notepad, excel, app, window, etc.) |
-| **Non-desktop tasks** | OpenClaw → browser-use → computer-use | OpenClaw has memory/skills support for better context |
+| Task Type | Routes To | Detection |
+|-----------|-----------|-----------|
+| **Web tasks** | browser-use | URLs, "search", "browse", "navigate", web domains |
+| **Desktop tasks** | computer-use | App names (notepad, excel, telegram), "click", "open app", "desktop" |
+| **General tasks** | openclaw | Fallback for conversational/research tasks |
 
-- **Auto mode** (default): Smart selection based on task content
+- **Auto mode** (default): Smart selection based on URL patterns and keyword detection
 - **Manual mode**: User picks engine explicitly from dropdown
-
-The engine selector checks availability status before selecting — if the preferred engine isn't available, it falls back to the next option.
+- **Economy mode**: Toggle Performance/Economy to use cheaper models (gpt-4o-mini for browser-use, Haiku for replay steps)
 
 ### Computer-Use Engine Details
 
@@ -175,8 +175,13 @@ The computer-use engine controls the full Windows desktop via screenshots + mous
 - **DPI-aware**: Calls `SetProcessDPIAware()` so all coordinate systems (pyautogui, mss, GetWindowRect) are consistent
 - **Forced reasoning**: Model must follow `[OBSERVE]/[GOAL]/[PLAN]/[ACTION]` protocol before every action
 - **Stale detection**: Perceptual hash comparison warns when screenshots don't change after an action
-- **OpenRouter compatible**: Uses function-tool schema when routing through OpenRouter, native `computer_20241022` for direct Anthropic
-- **Workflow recording & replay**: Record desktop actions via pynput, save as workflows, replay adaptively with element matching and LLM fallback (see [Workflow Recording](#workflow-recording--replay))
+- **Hybrid mechanical + AI execution**: Deterministic actions (app launch, URL navigation, typing) handled programmatically at zero AI cost. AI only invoked when visual reasoning is needed.
+- **Mechanical pre-navigation**: Extracts URLs from prompts and navigates deterministically via `webbrowser.open_new()` or `Ctrl+L` hotkeys before AI engagement — saves an entire round of LLM reasoning.
+- **Vision fallback**: When UIA tree returns < 5 elements (Electron apps, games, custom UIs), a fast vision model identifies UI elements from the screenshot. Results merged with UIA elements via 30-pixel deduplication.
+- **Dual API path**: Direct Anthropic API uses native `computer_20250124`/`computer_20251124` tools; OpenRouter uses function-tool schema. Configurable via `COMPUTER_USE_API` setting.
+- **Smart model routing**: Uses Haiku for routine replay steps, Sonnet for complex ones — ~50% cost savings
+- **Prompt caching**: System prompt cached after first API call in multi-step tasks — 50-90% input token savings
+- **Workflow recording & replay**: Record desktop actions via pynput, save as workflows, replay adaptively with confidence-tiered execution (mechanical/verification/AI), element matching, and LLM fallback (see [Workflow Recording](#workflow-recording--replay))
 
 ### Browser-Use Engine Details
 
@@ -208,14 +213,26 @@ ClawBridge can record your desktop actions and replay them adaptively — even w
 ### Replay
 
 - Click **Replay** on any saved workflow, or type `/replay Workflow Name` in chat
-- ClawBridge replays each action using **element matching** (accessibility tree comparison):
+- **Confidence-tiered execution**: Each action scored automatically:
+  - **>= 0.95**: Pure mechanical replay (free, instant)
+  - **0.7 - 0.95**: Mechanical + visual verification (window title, perceptual hash, LLM check)
+  - **< 0.7**: AI-powered replay via LLM with screenshot context
+- **Element matching** via accessibility tree comparison:
   1. **automation_id exact match** (confidence 1.0)
   2. **name + type + parent** (0.95)
   3. **name + type** (0.85)
   4. **type + proximity** (0.6)
-- If match confidence is below 0.7, an **LLM fallback** describes the intended step to the AI model with a screenshot
-- Auto-detects target app from recorded window titles
-- Handles app launch patterns (Win key → search → Enter)
+- **Adaptive timing**: Polls UIA tree stability instead of fixed delays
+- **Outcome learning**: Tracks success/failure per step. After 3+ mechanical successes, promotes to high confidence. After repeated failures, demotes to AI replay.
+- Auto-detects target app from recorded window titles, process names, and known app signatures
+- Handles app launch patterns (Win key, search, Enter)
+
+### Parameterized Replay
+
+- After recording, ClawBridge can detect typed text that varies between runs (search queries, filenames, etc.)
+- Save parameter defaults and run with custom values each time
+- Dashboard shows parameter input form with Save/Run buttons
+- Safety-scanned per parameter value
 
 ### Perception Layer
 
@@ -223,6 +240,7 @@ The recording system is backed by a standalone perception module (`clawbridge/pe
 
 - **Screenshot utilities**: Async full-screen and window-crop capture, perceptual similarity comparison
 - **Accessibility tree**: Enhanced pywinauto UIA wrapper with `ElementSnapshot` dataclass, multi-strategy element matching
+- **A11y enrichment at record time**: Click events enriched with element metadata from UIA tree while correct window is in focus
 
 ---
 
@@ -268,10 +286,20 @@ ENABLED_ENGINES=browser_use,computer_use    # comma-separated
 DEFAULT_MODEL=openai/gpt-4o                 # for browser-use
 
 # Computer-Use
-COMPUTER_USE_MODEL=anthropic/claude-sonnet-4
+COMPUTER_USE_MODEL=anthropic/claude-sonnet-4.5   # primary model
+COMPUTER_USE_MODEL_FAST=anthropic/claude-haiku-4-5  # cheap model for routine replay
+COMPUTER_USE_API=auto                            # auto | direct | openrouter
 COMPUTER_USE_MAX_SCREEN_WIDTH=1920
 COMPUTER_USE_MAX_SCREEN_HEIGHT=1080
 COMPUTER_USE_ACTION_DELAY_MS=500
+
+# Economy Mode
+ECONOMY_MODEL=                                   # optional: google/gemini-flash-2.0
+
+# Recording
+RECORDING_SCREENSHOTS=true
+RECORDING_INTENT_EXTRACTION=true
+SCREENPIPE_INTEGRATION=true
 
 # Browser
 BROWSER_HEADLESS=true
@@ -378,6 +406,11 @@ AUTOMATION_MODE=supervised   # or: autonomous
 | `POST` | `/api/workflows` | Create workflow from recorded actions |
 | `DELETE` | `/api/workflows/{id}` | Delete workflow |
 | `POST` | `/api/workflows/{id}/replay` | Trigger workflow replay |
+| `POST` | `/api/workflows/{id}/replay-parameterized` | Replay with parameter substitution |
+| `POST` | `/api/workflows/{id}/save-params` | Save parameter defaults |
+| `POST` | `/api/workflows/{id}/extract-intent` | Trigger intent extraction |
+| `POST` | `/api/config/model-tier` | Switch Performance/Economy mode |
+| `POST` | `/api/config/computer-use-api` | Switch API path (Auto/Direct/OpenRouter) |
 | `POST` | `/api/recording/start` | Start desktop recording |
 | `POST` | `/api/recording/stop` | Stop recording, return actions |
 | `POST` | `/api/auth/login` | Authenticate and set HttpOnly session cookie |
@@ -398,6 +431,10 @@ AUTOMATION_MODE=supervised   # or: autonomous
 | `workflow_update` | Server → Client | Workflow list changed |
 | `workflow_saved` | Server → Client | Workflow saved confirmation |
 | `replay_started` | Server → Client | Workflow replay task created |
+| `recording_event` | Server → Client | Live action during recording |
+| `engine_status` | Server → Client | Engine status/model info changed |
+| `config_update` | Server → Client | Configuration setting changed |
+| `safety_warning` | Server → Client | Safety scan flag detected |
 
 ## Remote Bridge (Beta)
 
@@ -414,7 +451,7 @@ This enables the **bridge architecture**: local machines provide the "hands" (de
 ## Project Structure
 
 ```
-clawbridge.py                 # Monolith — primary entry point (~7400 lines)
+clawbridge.py                 # Monolith — primary entry point (~10,200 lines)
 clawbridge_mcp.py             # MCP server (stdio/HTTP proxy to REST API)
 clawbridge/
   config.py                   # Settings & BYOK key management
@@ -462,7 +499,7 @@ claude mcp add clawbridge -- python clawbridge_mcp.py
 python clawbridge_mcp.py --http
 ```
 
-**13 tools** available: `run_task`, `get_task_status`, `list_tasks`, `cancel_task`, `list_engines`, `get_task_steps`, `get_task_audit`, `search_memory`, `get_agent_context`, `append_memory`, `list_schedules`, `create_schedule`, `get_config`
+**15 tools** available: `run_task`, `get_task_status`, `list_tasks`, `cancel_task`, `list_engines`, `get_task_steps`, `get_task_audit`, `search_memory`, `get_agent_context`, `append_memory`, `list_schedules`, `create_schedule`, `get_config`, `get_license_info`, `list_workflows`
 
 See `.mcp.json` for project-level registration.
 
@@ -472,7 +509,7 @@ See `.mcp.json` for project-level registration.
 
 ### Completed
 - [x] Dashboard UI overhaul (chat interface, activity feed, live view)
-- [x] Smart engine selection (auto-detects desktop vs web tasks)
+- [x] Smart engine selection with URL/keyword auto-routing
 - [x] OpenClaw one-click install from dashboard
 - [x] Windows installer via Inno Setup with progress bar
 - [x] Onboarding checklist for first-time users
@@ -482,37 +519,59 @@ See `.mcp.json` for project-level registration.
 - [x] Dashboard authentication (token-based)
 - [x] Real-time cost tracking
 - [x] Error recovery with exponential backoff
-- [x] MCP server mode (13 tools, stdio + HTTP)
+- [x] MCP server mode (15 tools, stdio + HTTP)
 - [x] Supervised/Autonomous automation modes
-- [x] Workflow recording & replay with perception layer (v0.2.0)
-- [x] Security hardening Phase 1 & 2 (CSRF, path traversal, XSS, auth)
+- [x] Workflow recording & replay with perception layer
+- [x] Security hardening Phase 1 & 2 (CSRF, path traversal, XSS, auth, key combo blocklist)
 - [x] Slash command autocomplete with workflow name suggestions
 - [x] Always-visible Stop button during task execution
 - [x] Computer-use focus verification (retry + LLM feedback)
 - [x] Ultrawide monitor support (active window crop as primary screenshot)
 - [x] Browser-use extraction-aware prompting (page content fallback)
 - [x] Chat-integrated workflow save (record from chat, save with one click)
-- [x] Recorder space key fix (pynput special key → printable char mapping)
 - [x] E2E test suite (33 tests covering dashboard, cancel, engines, replay)
+- [x] Smart model routing (Haiku for routine steps, Sonnet for complex)
+- [x] Economy mode (Performance/Economy toggle, gpt-4o-mini for browser-use)
+- [x] Prompt caching (50-90% input token savings on multi-step tasks)
+- [x] Workflows tab in sidebar
+- [x] Enhanced recording (live action feed, a11y enrichment, screenshots, intent extraction)
+- [x] Direct Anthropic API for computer-use (dual API path with tool versioning)
+- [x] AI-powered replay (confidence-tiered execution, visual verification, outcome learning)
+- [x] Workflow parameterization (variable detection, parameter inputs, save defaults)
+- [x] Model details panel and API path toggle in dashboard
+- [x] Licensing & activation system with Stripe integration
+- [x] Apache 2.0 license and Contributor License Agreement
 
-### In Progress
-- [ ] macOS support ([porting plan](MACOS_PORTING_PLAN.md) — Phase 1 minimal changes identified)
+### Phase 2: Reliability (Next)
 
-### Planned (Phase 1)
-- [ ] Visual-first routing (computer-use for web tasks, browser-use becomes headless scraper)
-- [ ] Smart model routing (Haiku for simple steps, Sonnet for complex — ~50% cost savings)
-- [ ] Economy mode (Gemini Flash + UI-TARS free tier)
-- [ ] Prompt caching for repeated screenshots (90% savings on cache hits)
-- [ ] Workflows as default landing view
-- [ ] Enhanced recording (live action feed, element enrichment, persistent record button)
+Goal: >90% success rate on recorded workflow replays
 
-### Planned (Phase 2+)
-- [ ] Workflow parameterization ({{email}}, {{date}} substituted at replay)
-- [ ] Workflow scheduling and chaining
-- [ ] Auto-record during AI tasks ("Save as workflow?" after success)
+- [ ] Self-verification loops for live computer-use tasks (screenshot after each action, verify success, retry on failure)
+- [ ] Set-of-Mark (SoM) visual prompting (overlay numbered markers on screenshots using UIA element positions)
+- [ ] OmniParser V2 visual fallback (when UIA tree returns < 5 elements, use vision-based element detection with IoU dedup)
+- [ ] Increase UIA element limit (40 -> 80, make depth configurable)
+- [ ] Cross-workflow outcome learning (opt-in, share action fingerprints across workflows for same app)
+- [ ] Expand economy mode (Haiku for browser-use, Gemini Flash via ECONOMY_MODEL)
+
+### Phase 3: Distribution
+
+Goal: 1,000 active users
+
+- [ ] macOS full support (AXUIElement accessibility, AppleScript app control)
+- [ ] Auto-update mechanism in installer
+- [ ] Bundled API key option (OpenRouter partnership for zero-config users)
+- [ ] Template/workflow gallery (pre-built automations for common tasks)
+- [ ] ProductHunt + HackerNews launch
 - [ ] Code signing certificate for Windows installer
-- [ ] Auto-update mechanism
-- [ ] Remote Bridge cloud service
+
+### Phase 4: Monetization
+
+Goal: First paying customers
+
+- [ ] Cloud sync service (optional workflow sync + remote replay)
+- [ ] Team workflow sharing
+- [ ] Pro tier launch ($29/mo)
+- [ ] Workflow marketplace (community-shared templates)
 - [ ] `pip install clawbridge` one-command setup
 - [ ] macOS .dmg packaging via GitHub Actions
 
@@ -530,6 +589,6 @@ Please open an issue first for large changes so we can discuss the approach.
 
 ## License
 
-MIT License — see [LICENSE.txt](LICENSE.txt).
+Apache License 2.0 — see [LICENSE](LICENSE).
 
 Copyright (c) 2026 RomaTek AI.

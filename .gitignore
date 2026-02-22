@@ -36,4 +36,16 @@ IMPLEMENTATION_PLAN_READY.txt
 clawbridge-openadapt-integration.md
 MACOS_PORTING_PLAN.md
 CLAUDE.md
+RESEARCH_REPORT.md
+walkthrough.md
 workspace/workflows/
+
+# Stray log artifacts
+*served_html*
+
+# Local dev artifacts
+benchmarks/
+marketing/
+restart_server.ps1
+transparentlogo.png
+backup_project.py

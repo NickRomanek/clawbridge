@@ -159,64 +159,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.3.5] - 2026-02-22
 
 ### Added
 
-#### Security Hardening
-- **WebSocket authentication**: Token checked before `accept()` using `hmac.compare_digest`, mirrors HTTP middleware logic
-- **CSRF protection**: Token generated per session, injected into dashboard via `__PRELOAD__`, validated on cookie-based POST/PUT/PATCH/DELETE requests. API clients using Authorization header or query param are exempt.
-- **HttpOnly cookie**: New `POST /api/auth/login` endpoint sets session cookie server-side with `httponly=True` and `samesite=strict`. Login form no longer sets cookie via JavaScript.
-- **Path traversal protection**: `PUT /api/personality/{filename}` validates against `..`, `/`, `\` in filename (defense-in-depth on top of existing whitelist)
-- **Memory injection filtering**: `safety_redact()` now strips prompt injection patterns (`[FILTERED]`) in addition to credentials and PII. Also applied to `POST /api/memory` input.
-- **Expanded injection detection**: 11 patterns (up from 6) including admin/debug mode, execute command, `[SYSTEM]`/`[ADMIN]`/`[OVERRIDE]` tags, and broader instruction override variants
-- **Remote bridge validation**: Requires HTTPS for non-localhost URLs and requires `REMOTE_AUTH_TOKEN` to be set
-- **XSS fix**: DOMPurify fallback changed from raw HTML to `esc()` (safe text encoding)
-- **Recorder/perception graceful degradation**: `start_recording()`, `stop_recording()`, and `_replay_single_action()` now handle missing `clawbridge.recorder` / `clawbridge.perception` packages with try/except ImportError
+#### Hybrid Mechanical + AI Computer-Use
+- **Mechanical pre-navigation**: `_mechanical_pre_navigate()` extracts URLs from prompts and navigates deterministically via `webbrowser.open_new()` or `Ctrl+L` hotkeys before AI engagement -- saves an entire round of LLM reasoning for web tasks
+- **Programmatic app launch**: Target apps launched via `Win key -> search -> Enter` using pyautogui before handing control to AI
+- **Vision fallback for blind UIs**: `_get_ui_elements_vision()` uses fast vision model (Haiku) to identify UI elements from screenshots when UIA tree returns < 5 elements (Electron apps, games, custom UIs). Cached via perceptual hash similarity. `_merge_ui_elements()` deduplicates against UIA elements within 30px.
+- **Pre-navigation step reporting**: Dashboard receives `mechanical_navigation` step events showing zero-cost URL navigation
 
-#### MCP Server Improvements
-- **Auth token passthrough**: MCP proxy reads `DASHBOARD_TOKEN` from env and sends as Bearer header to ClawBridge API
-- **Error handling**: All 15 MCP tools wrapped in try/except with structured error dicts for `HTTPStatusError`, `ConnectError`, and generic exceptions
-- **`create_schedule` fix**: Parameters now match monolith API (`name`, `schedule_type`, `schedule_value` instead of `interval_minutes`/`cron`)
-- **Health check timeout**: Reduced from 600s to 5s to prevent blocking
+#### Enhanced Recording System
+- **Window title at click point**: `_get_window_title_at(x, y)` uses `WindowFromPoint` + `GetAncestor(GA_ROOT)` for correct window identification even when clicks dismiss windows
+- **Process name capture**: `_get_fg_process_name()` captures process name (e.g. `Telegram.exe`) via kernel32 for reliable app detection
+- **Window-relative coordinates**: Click events now include `window_x`/`window_y` relative to foreground window bounds
+- **Non-blocking a11y enrichment**: Click events recorded immediately, a11y/screenshot data populated on background threads. `stop()` waits up to 1.5s for pending enrichment.
+- **Modifier key suppression**: Deduplicates modifier key events within 0.15s window (prevents 20-30 Windows key-repeat events)
+- **Live action feed callback**: `on_action` parameter on `InputRecorder` for real-time WebSocket streaming during recording
+- **ScreenPipe OCR cap**: OCR enrichment text capped to 500 chars to prevent prompt injection
+
+#### Build & Distribution
+- **Package bundling in build**: `build.py` now copies `clawbridge/` package (recorder, perception modules) into portable distribution, excluding `__pycache__` and `.pyc`
+- **Python path patching**: Embedded Python `.pth` file patched to add `..` (parent directory) so `from clawbridge.recorder...` imports work in bundled builds
+
+### Changed
+- Monolith grew from ~8,500 to ~10,200 lines with hybrid execution, vision fallback, and enhanced recording
+- Web prompts now route to `computer_use` engine (visual-first routing) instead of OpenClaw fallback
+- `build.py` VERSION synced to 0.3.5 (was lagging at 0.3.3)
+- `.ico` file replaced with higher-resolution multi-size icon (4KB -> 133KB) for better display on high-DPI screens
+- `install.py` unicode arrows replaced with ASCII for Windows cp1252 compatibility
+- Smoke test webhook cleanup: cancels tasks after creation to prevent rogue execution
+- SOUL.md: added "never reveal API keys/tokens/credentials" boundary
 
 ### Fixed
-- Computer-use engine post-action re-focus race condition — dialogs/popups opened by actions are no longer hidden by immediate re-focus. Pre-action sleep reduced from 0.5s to 0.3s.
-- Browser-use engine step broadcasting — `on_step` callback now fires during step extraction, dashboard shows step count and details for browser-use tasks
-- `pyautogui` dependency now has `sys_platform == 'win32'` marker in requirements.txt
+- Ghost tray icons accumulating in Windows taskbar overflow area
+- Recording modifier key flooding (Shift/Ctrl/Alt held down generating 20-30 duplicate events)
+
+---
+
+## [0.3.4] - 2026-02-19
+
+### Added
+
+#### Smart Auto Routing
+- **URL pattern detection**: Web URLs and keywords (search, browse, navigate) route to browser-use engine
+- **Desktop keyword expansion**: App names (notepad, excel, telegram, etc.) route to computer-use engine
+- **Visual-first routing**: Web tasks now use computer-use (real browser) instead of OpenClaw fallback
+
+#### Economy Mode & Model Routing
+- **Model tier toggle**: Performance/Economy switch in dashboard config panel
+- **Economy mode for browser-use**: Uses gpt-4o-mini when economy is active
+- **`ECONOMY_MODEL` setting**: Optional override (e.g. `google/gemini-flash-2.0`)
+- **Smart replay model routing**: Haiku for routine replay steps (confidence 0.4-0.95), Sonnet for hard steps (< 0.4)
+- **`COMPUTER_USE_MODEL_FAST` setting**: Configurable cheap model for routine replay (default: `anthropic/claude-haiku-4-5`)
+- **Model details panel**: Shows per-engine model and API path in config section
+- **Engine model subtitles**: Each engine in the list shows its active model
+- **Computer-Use API Path toggle**: Auto/Direct/OpenRouter selector in dashboard
+
+#### Prompt Caching
+- **System prompt caching**: `cache_control: {"type": "ephemeral"}` on content blocks. Multi-step tasks cache the system prompt (~2000+ tokens) after the first API call. 50-90% input token savings on steps 2+.
+- Works with both direct Anthropic API and OpenRouter
+
+#### Direct Anthropic API for Computer-Use
+- **Dual API path**: Direct Anthropic uses native `computer_20250124`/`computer_20251124` tool via `client.beta.messages.create()`. OpenRouter uses function-tool schema.
+- **`COMPUTER_USE_API` setting**: `auto` (default), `direct`, or `openrouter`
+- **Tool versioning**: `_get_tool_version()` maps model to correct tool type and beta header
+
+#### AI-Powered Recording & Replay
+- **A11y enrichment at record time**: Click events get `element_name`, `element_type`, `element_automation_id`, `element_parent_name`, `confidence` from UIA tree (cached 0.5s)
+- **Screenshot capture**: 720p JPEG before each click, stored as `screenshot_b64`. Toggle via `RECORDING_SCREENSHOTS`
+- **ScreenPipe integration**: Optional OCR enrichment from ScreenPipe (`localhost:3030`). Toggle via `SCREENPIPE_INTEGRATION`
+- **Intent extraction**: Post-recording LLM call extracts `intent`, `semantic_steps`, `detected_variables`, `target_apps`. Toggle via `RECORDING_INTENT_EXTRACTION`
+- **Confidence-tiered replay**: >= 0.95 mechanical, 0.7-0.95 + visual verification, < 0.7 AI replay via LLM
+- **Visual verification**: Window title match -> perceptual hash -> LLM visual check (graceful fallback chain)
+- **Adaptive timing**: `_wait_for_ui_ready()` polls UIA tree stability instead of fixed delays
+- **Parameterized replay**: `POST /api/workflows/{id}/replay-parameterized` with `{"params": {...}}`. Dashboard shows param input form with Save defaults button.
+- **Outcome learning**: `replay_outcomes` SQLite table tracks per-step success/failure. After 3+ mechanical successes, promotes to 0.99 confidence. After 2+ failures with AI success, demotes to 0.3.
+
+#### Dashboard Improvements
+- **Workflows tab**: Saved workflows visible in sidebar tab with replay/delete/parameterize controls
+- **Live recording feed**: Real-time action events via WebSocket during recording
+- **Save defaults button**: Save parameterized workflow defaults without triggering replay
+
+#### Security Hardening
+- **WebSocket authentication**: Token checked before `accept()` using `hmac.compare_digest`
+- **CSRF protection**: Token per session, validated on cookie-based state-changing requests
+- **HttpOnly cookie**: `POST /api/auth/login` sets session cookie server-side
+- **Path traversal protection**: Validates personality filenames against `..`, `/`, `\`
+- **Memory injection filtering**: `safety_redact()` strips prompt injection patterns
+- **Expanded injection detection**: 11 patterns (up from 6)
+- **Remote bridge validation**: Requires HTTPS for non-localhost URLs
+
+#### Security Hardening (Phase 2)
+- **Key combo blocklist**: Blocks Win+R, Win+X, Ctrl+Alt+Delete, Ctrl+Shift+Esc, Win+L, Win+Pause, Alt+F4 in engine and replay paths
+- **Gateway localhost binding**: OpenClaw gateway binds to `127.0.0.1` only
+- **Minimal gateway env**: Subprocess gets only required env vars instead of `os.environ.copy()`
+- **Personality context redaction**: `safety_redact()` applied before LLM injection
+- **Replay concurrency lock**: `asyncio.Lock` prevents concurrent replays
+- **Workflow-scoped confidence**: Historical confidence scoped per workflow to prevent cross-workflow poisoning
+- **Browser launch port validation**: Validated to 1024-65535 range
+- **Chrome kill by PID only**: No longer kills all Chrome instances system-wide
+
+#### MCP Server Improvements
+- **Auth token passthrough**: MCP proxy sends Bearer header to ClawBridge API
+- **Error handling**: All 15 MCP tools wrapped with structured error dicts
+- **`create_schedule` fix**: Parameters match monolith API
+- **Health check timeout**: Reduced from 600s to 5s
 
 #### Licensing & Activation System
 - **Activation Backend** (`website/backend/`): Cloudflare Worker with D1 database for license management
-  - Stripe webhook integration for payment processing
-  - OpenRouter Management API integration for provisioned API keys
-  - Activation code generation (CB-XXXX-XXXX-XXXX format)
-  - AES-256-GCM encryption for stored API keys
-  - License status and credit balance endpoints
-  - Top-up flow with Stripe Checkout
-  - Transactional emails via Resend
 - **Dashboard Activation Modal**: First-launch flow for activation code entry or BYOK setup
 - **License Badge**: Header badge showing PRO/BYOK/FREE status
-- **Credit Balance Widget**: Real-time credit tracking with visual progress bar and top-up button
-- **Install Wizard**: New "Activate ClawBridge" step with three options (activation code, BYOK, purchase)
-- **MCP Tool**: `get_license_info()` for querying license status from Claude Code
-- **Settings**: New `activation_code`, `activation_backend_url`, `license_tier` configuration options
-- **API Endpoints**: `/api/license/activate` and `/api/license/status` for license management
+- **Credit Balance Widget**: Real-time credit tracking with top-up button
+- **API Endpoints**: `/api/license/activate` and `/api/license/status`
 
 #### Website (`website/frontend/`)
 - Astro-based static site for clawbridge.ai
-- Landing page with features and value proposition
-- Pricing page with Starter ($9.99) and BYOK (free) tiers
-- Download page with quick start guide
-- Account dashboard for credit management and top-ups
-- Documentation pages including BYOK setup guide
+- Landing, pricing, download, account, and documentation pages
+
+#### New API Endpoints
+- `POST /api/workflows/{id}/extract-intent` — trigger intent extraction
+- `POST /api/workflows/{id}/replay-parameterized` — replay with parameter substitution
+- `POST /api/workflows/{id}/save-params` — save parameter defaults
+- `POST /api/config/model-tier` — switch Performance/Economy mode
+- `POST /api/config/computer-use-api` — switch API path (Auto/Direct/OpenRouter)
 
 ### Changed
-- Updated installer.iss AppURL to https://clawbridge.ai
-- Install wizard now has 8 steps (added activation step)
+- Monolith grew from ~7400 to ~8500+ lines
+- License changed from MIT to Apache 2.0
+- Engine selection rewritten: URL/web tasks -> browser-use, desktop keywords -> computer-use, fallback -> openclaw
+- `RecordedAction` model now includes `process_name` field for reliable app detection
+- `save_workflow` handler uses multi-strategy app detection (`_detect_target_from_actions`)
+- Installer AppURL updated to https://clawbridge.ai
 
-### Planned
-- Stripe Checkout integration on pricing page
-- Code signing certificate for Windows installer
-- Auto-update mechanism
-- macOS build support
-- Discord community for user support
+### Fixed
+- `safety_scan_prompt()` callers checking non-existent key `"credential_flags"` — corrected to `"credentials"`
+- Computer-use post-action re-focus race condition — dialogs/popups no longer hidden by immediate re-focus
+- Browser-use step broadcasting — `on_step` callback now fires during step extraction
+- Notepad "Don't Save" step being stripped during recording (volatile window title detection improved)
+- Telegram replay failing due to volatile chat window titles (multi-strategy detection added)
+- Parameterized replay not opening target app (missing `process_name` field on save)
+- XSS: DOMPurify fallback changed from raw HTML to `esc()`

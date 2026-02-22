@@ -7,10 +7,10 @@ import pytest
 pytestmark = pytest.mark.e2e
 
 
-async def test_auto_routes_web_prompt_to_browser(submit_task, require_browser):
+async def test_auto_routes_web_prompt_to_computer(submit_task, require_computer):
     task = await submit_task("Go to example.com and tell me the page title", engine="auto")
     assert task["status"] == "complete"
-    assert task["result"]["engine_used"] == "browser_use"
+    assert task["result"]["engine_used"] == "computer_use"
 
 
 async def test_auto_routes_desktop_prompt_to_computer(submit_task, require_computer):

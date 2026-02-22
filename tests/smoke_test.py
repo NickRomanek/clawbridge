@@ -248,7 +248,15 @@ def test_webhook():
     # Webhook with prompt
     status, data = req("POST", "/api/webhook/run", {"prompt": "Smoke test webhook", "engine": "auto"})
     if status == 200 and isinstance(data, dict):
-        ok("POST /api/webhook/run", f"task_id={data.get('task_id', '?')[:8]}...")
+        task_id = data.get('task_id')
+        ok("POST /api/webhook/run", f"task_id={str(task_id)[:8]}...")
+        if task_id:
+            # immediately cancel it so we don't start rogue tasks
+            c_status, c_data = req("PATCH", f"/api/tasks/{task_id}", {"action": "cancel"})
+            if c_status == 200:
+                ok("PATCH /api/tasks/:id (cancel webhook task)")
+            else:
+                fail("PATCH /api/tasks/:id (cancel webhook task)", f"status={c_status}")
     else:
         # Webhook might return different status codes
         if status == 200:

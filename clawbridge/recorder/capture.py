@@ -3,10 +3,17 @@
 Captures mouse clicks/scrolls and keyboard events, coalescing rapid keystrokes
 into single "type" events. Each event is tagged with the current foreground
 window title at capture time.
+
+Click events are enriched inline with:
+- Accessibility metadata (element_name, element_type, automation_id, parent_name)
+- Screenshot capture (720p JPEG, base64)
+Both are captured at click time while the correct window is in focus.
 """
 
 from __future__ import annotations
 
+import base64
+import io
 import logging
 import threading
 import time
@@ -16,6 +23,12 @@ logger = logging.getLogger(__name__)
 
 # Delay (seconds) before coalescing buffered keystrokes into a "type" event
 _KEY_COALESCE_DELAY = 0.3
+
+# A11y tree cache — avoids re-enumeration on rapid clicks (0.5s TTL)
+_a11y_cache: list = []
+_a11y_cache_time: float = 0.0
+_A11Y_CACHE_TTL = 0.5
+_a11y_lock = threading.Lock()
 
 
 def _get_fg_window_title() -> str:
@@ -33,17 +46,277 @@ def _get_fg_window_title() -> str:
     return ""
 
 
+def _get_window_title_at(x: int, y: int) -> str:
+    """Get the title of the window at screen coordinates (x, y).
+
+    Uses WindowFromPoint to find the window under the click, then walks up
+    to the top-level owner to get the real window title.  This is more
+    reliable than GetForegroundWindow for clicks that close/dismiss their
+    target window, because the OS may shift focus before pynput's callback
+    fires.
+    """
+    import sys
+    if sys.platform != "win32":
+        return ""
+    try:
+        import ctypes
+        import ctypes.wintypes
+        user32 = ctypes.windll.user32
+
+        pt = ctypes.wintypes.POINT(x, y)
+        hwnd = user32.WindowFromPoint(pt)
+        if not hwnd:
+            return ""
+        # Walk up to the top-level (owned) window
+        GA_ROOT = 2
+        root = user32.GetAncestor(hwnd, GA_ROOT)
+        if root:
+            hwnd = root
+        buf = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(hwnd, buf, 512)
+        return buf.value
+    except Exception:
+        return ""
+
+
+def _get_fg_process_name() -> str:
+    """Get the process name (e.g. 'Telegram.exe') of the foreground window."""
+    import sys
+    if sys.platform != "win32":
+        return ""
+    try:
+        import ctypes
+        import ctypes.wintypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return ""
+        pid = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return ""
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not handle:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            size = ctypes.wintypes.DWORD(260)
+            kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
+            full_path = buf.value
+            if full_path:
+                return full_path.rsplit("\\", 1)[-1]
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+    return ""
+
+
+# Last-known non-dashboard foreground title — fallback when the clicked
+# window has already closed by the time we read it.
+_last_app_title: str = ""
+_DASHBOARD_TITLE_MARKERS = ("clawbridge dashboard", "localhost:8765", "127.0.0.1:8765")
+
+
+def _get_fg_window_rect() -> tuple[int, int, int, int] | None:
+    """Get the foreground window's bounding rect as (left, top, right, bottom).
+
+    Used to compute window-relative click coordinates so replays work
+    even when the target window has been moved to a different position.
+    Calls SetProcessDPIAware() to ensure physical pixel coordinates,
+    matching the DPI context used by ComputerUseEngine at replay time.
+    """
+    import sys
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes
+        user32 = ctypes.windll.user32
+        try:
+            user32.SetProcessDPIAware()
+        except Exception:
+            pass
+        hwnd = user32.GetForegroundWindow()
+        if hwnd:
+            rect = ctypes.wintypes.RECT()
+            if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return (rect.left, rect.top, rect.right, rect.bottom)
+    except Exception:
+        pass
+    return None
+
+
+def _get_a11y_element_at(x: int, y: int) -> dict:
+    """Synchronous a11y lookup at click coordinates. Called from pynput thread.
+    Returns dict with element_type, element_name, element_automation_id,
+    element_parent_name, confidence. All empty strings on failure."""
+    global _a11y_cache, _a11y_cache_time
+    result = {"element_type": "", "element_name": "", "element_automation_id": "",
+              "element_parent_name": "", "confidence": 0.0}
+    try:
+        import sys
+        if sys.platform != "win32":
+            return result
+
+        now = time.monotonic()
+        tree = None
+
+        with _a11y_lock:
+            if _a11y_cache and (now - _a11y_cache_time) < _A11Y_CACHE_TTL:
+                tree = _a11y_cache
+
+        if tree is None:
+            # Enumerate fresh tree
+            try:
+                import ctypes
+                from pywinauto import Desktop
+
+                d = Desktop(backend="uia")
+                user32 = ctypes.windll.user32
+                fg_hwnd = user32.GetForegroundWindow()
+                if not fg_hwnd:
+                    return result
+
+                buf = ctypes.create_unicode_buffer(512)
+                user32.GetWindowTextW(fg_hwnd, buf, 512)
+                fg_title = buf.value
+
+                target_win = None
+                for w in d.windows():
+                    try:
+                        if w.window_text() == fg_title:
+                            target_win = w
+                            break
+                    except Exception:
+                        pass
+                if not target_win:
+                    for w in d.windows():
+                        try:
+                            wt = w.window_text()
+                            if wt and fg_title and fg_title[:20] in wt:
+                                target_win = w
+                                break
+                        except Exception:
+                            pass
+                if not target_win:
+                    return result
+
+                CLICKABLE_TYPES = frozenset({
+                    "Button", "Edit", "MenuItem", "ListItem", "TabItem",
+                    "ComboBox", "CheckBox", "RadioButton", "Hyperlink",
+                    "TreeItem", "DataItem", "Text", "Image",
+                })
+                tree = []
+                for c in target_win.descendants(depth=8):
+                    try:
+                        ct = c.element_info.control_type
+                        if ct not in CLICKABLE_TYPES:
+                            continue
+                        r = c.rectangle()
+                        if r.width() < 10 or r.height() < 10:
+                            continue
+                        name = (c.window_text() or "").strip()[:80]
+                        cx = (r.left + r.right) // 2
+                        cy = (r.top + r.bottom) // 2
+                        if cx <= 0 or cy <= 0:
+                            continue
+                        auto_id = ""
+                        try:
+                            auto_id = c.element_info.automation_id or ""
+                        except Exception:
+                            pass
+                        parent_name = ""
+                        try:
+                            p = c.parent()
+                            if p:
+                                parent_name = (p.window_text() or "").strip()[:60]
+                        except Exception:
+                            pass
+                        tree.append({
+                            "control_type": ct, "name": name,
+                            "automation_id": auto_id, "parent_name": parent_name,
+                            "left": r.left, "top": r.top, "right": r.right, "bottom": r.bottom,
+                            "cx": cx, "cy": cy,
+                        })
+                        if len(tree) >= 80:
+                            break
+                    except Exception:
+                        pass
+
+                with _a11y_lock:
+                    _a11y_cache = tree
+                    _a11y_cache_time = time.monotonic()
+            except Exception as exc:
+                logger.debug("A11y tree enumeration failed during click: %s", exc)
+                return result
+
+        if not tree:
+            return result
+
+        # Find element at (x, y) — smallest bounding rect wins
+        candidates = []
+        for el in tree:
+            if el["left"] <= x <= el["right"] and el["top"] <= y <= el["bottom"]:
+                area = (el["right"] - el["left"]) * (el["bottom"] - el["top"])
+                candidates.append((area, el))
+        if not candidates:
+            return result
+        candidates.sort(key=lambda c: c[0])
+        el = candidates[0][1]
+
+        conf = 0.5
+        if el["automation_id"]:
+            conf = 1.0
+        elif el["name"] and el["control_type"]:
+            conf = 0.8
+
+        return {
+            "element_type": el["control_type"],
+            "element_name": el["name"],
+            "element_automation_id": el["automation_id"],
+            "element_parent_name": el["parent_name"],
+            "confidence": conf,
+        }
+    except Exception as exc:
+        logger.debug("A11y enrichment failed at (%d, %d): %s", x, y, exc)
+        return result
+
+
+def _capture_screenshot_sync(max_dim: int = 720) -> str:
+    """Synchronous screenshot capture. Called from pynput thread.
+    Returns base64-encoded JPEG or empty string."""
+    try:
+        import mss as mss_mod
+        from PIL import Image
+        with mss_mod.mss() as sct:
+            raw = sct.grab(sct.monitors[1])
+            img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+            w, h = img.size
+            if max(w, h) > max_dim:
+                scale = max_dim / max(w, h)
+                img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=75)
+            return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception as exc:
+        logger.debug("Screenshot capture failed: %s", exc)
+        return ""
+
+
 class InputRecorder:
     """Records mouse and keyboard input via pynput listeners.
 
     Usage:
-        recorder = InputRecorder()
+        recorder = InputRecorder(capture_screenshots=True)
         recorder.start()
         # ... user performs actions ...
         events = recorder.stop()  # returns list[dict]
     """
 
-    def __init__(self):
+    def __init__(self, capture_screenshots: bool = True, on_action=None):
         self._events: List[dict] = []
         self._mouse_listener = None
         self._keyboard_listener = None
@@ -52,6 +325,13 @@ class InputRecorder:
         self._key_buffer: List[str] = []
         self._key_buffer_start: float = 0.0
         self._start_time: float = 0.0
+        self._capture_screenshots = capture_screenshots
+        self._on_action = on_action  # callback(dict) for live action feed
+        self._action_count = 0
+        # Key repeat dedup: track last modifier key and timestamp to suppress
+        # Windows key-repeat events (~33ms apart) when user holds a modifier.
+        self._last_modifier_key: str = ""
+        self._last_modifier_time: float = 0.0
 
     @property
     def is_recording(self) -> bool:
@@ -106,6 +386,16 @@ class InputRecorder:
                 pass
             self._keyboard_listener = None
 
+        # Wait briefly for background a11y enrichment threads to finish.
+        # Click events are already recorded; this just gives enrichment
+        # a chance to populate element_name/screenshot fields.
+        _deadline = time.time() + 1.5
+        for t in threading.enumerate():
+            if t.name == "a11y-enrich" and t.is_alive():
+                remaining = _deadline - time.time()
+                if remaining > 0:
+                    t.join(timeout=remaining)
+
         logger.info("InputRecorder stopped, captured %d events", len(self._events))
         return list(self._events)
 
@@ -117,16 +407,89 @@ class InputRecorder:
             return
         # Flush any pending keystrokes before recording a click
         self._flush_key_buffer()
-        window_title = _get_fg_window_title()
+        # Use WindowFromPoint first — more reliable for clicks that
+        # close/dismiss their target window (e.g. "Don't Save" in Notepad),
+        # because GetForegroundWindow may already reflect the next window.
+        global _last_app_title
+        window_title = _get_window_title_at(x, y)
+        if not window_title:
+            window_title = _get_fg_window_title()
+        process_name = _get_fg_process_name()
+        # If the resolved title is a dashboard title but we have a cached app
+        # title, use the cached one — the click likely closed the app window
+        # and focus shifted to the dashboard before we could read it.
+        wt_lower = window_title.lower()
+        if any(m in wt_lower for m in _DASHBOARD_TITLE_MARKERS) and _last_app_title:
+            window_title = _last_app_title
+        elif not any(m in wt_lower for m in _DASHBOARD_TITLE_MARKERS) and window_title:
+            _last_app_title = window_title
+
+        # Capture window rect for window-relative coordinates (survives window moves)
+        window_rect = _get_fg_window_rect()
+        if window_rect is not None:
+            win_x = x - window_rect[0]
+            win_y = y - window_rect[1]
+        else:
+            win_x = win_y = None
+
+        # Record click event IMMEDIATELY so subsequent clicks aren't lost
+        # while a11y enrichment blocks.  A11y + screenshot run in a background
+        # thread and update the event in-place via its index.
         with self._lock:
-            self._events.append({
+            event = {
                 "type": "click",
                 "timestamp": self._elapsed(),
                 "x": x,
                 "y": y,
                 "button": str(button).split(".")[-1],  # "left", "right", "middle"
                 "window_title": window_title,
-            })
+                "element_type": "",
+                "element_name": "",
+                "element_automation_id": "",
+                "element_parent_name": "",
+                "confidence": 0.0,
+                "process_name": process_name,
+                "screenshot_b64": "",
+            }
+            if win_x is not None:
+                event["window_x"] = win_x
+                event["window_y"] = win_y
+            self._events.append(event)
+            event_idx = len(self._events) - 1
+            self._action_count += 1
+            action_count = self._action_count
+
+        # Fire live action callback immediately (outside lock)
+        if self._on_action:
+            try:
+                self._on_action({
+                    "action_type": "click",
+                    "window_title": window_title,
+                    "element_name": "",
+                    "count": action_count,
+                })
+            except Exception:
+                pass
+
+        # Enrich with a11y + screenshot in background thread so the pynput
+        # listener thread is free to capture the next click immediately.
+        capture_ss = self._capture_screenshots
+        def _enrich():
+            a11y = _get_a11y_element_at(x, y)
+            screenshot_b64 = ""
+            if capture_ss:
+                screenshot_b64 = _capture_screenshot_sync()
+            with self._lock:
+                if event_idx < len(self._events):
+                    ev = self._events[event_idx]
+                    ev["element_type"] = a11y.get("element_type", "")
+                    ev["element_name"] = a11y.get("element_name", "")
+                    ev["element_automation_id"] = a11y.get("element_automation_id", "")
+                    ev["element_parent_name"] = a11y.get("element_parent_name", "")
+                    ev["confidence"] = a11y.get("confidence", 0.0)
+                    ev["screenshot_b64"] = screenshot_b64
+
+        threading.Thread(target=_enrich, daemon=True, name="a11y-enrich").start()
 
     def _on_scroll(self, x: int, y: int, dx: int, dy: int) -> None:
         if not self._recording:
@@ -164,6 +527,20 @@ class InputRecorder:
                 if char in ("enter", "return", "tab", "escape", "backspace", "delete",
                             "ctrl_l", "ctrl_r", "alt_l", "alt_r", "shift", "shift_r",
                             "cmd", "cmd_r", "caps_lock"):
+                    # Suppress key-repeat for modifier keys. When a user holds
+                    # Shift/Ctrl/Alt/Win, Windows fires repeats every ~33ms.
+                    # We only want the first press, not 20-30 duplicates.
+                    _MODIFIERS = ("ctrl_l", "ctrl_r", "alt_l", "alt_r",
+                                  "shift", "shift_r", "cmd", "cmd_r")
+                    now = time.time()
+                    if char in _MODIFIERS:
+                        if (char == self._last_modifier_key
+                                and (now - self._last_modifier_time) < 0.15):
+                            return  # suppress key repeat
+                        self._last_modifier_key = char
+                        self._last_modifier_time = now
+                    else:
+                        self._last_modifier_key = ""
                     self._flush_key_buffer()
                     window_title = _get_fg_window_title()
                     with self._lock:
@@ -173,6 +550,17 @@ class InputRecorder:
                             "key": char,
                             "window_title": window_title,
                         })
+                        self._action_count += 1
+                    if self._on_action:
+                        try:
+                            self._on_action({
+                                "action_type": "key",
+                                "window_title": window_title,
+                                "element_name": char,
+                                "count": self._action_count,
+                            })
+                        except Exception:
+                            pass
                     return
                 # Convert printable special keys (e.g. space) to actual characters
                 char = self._PRINTABLE_KEY_MAP.get(char, None)
@@ -180,13 +568,25 @@ class InputRecorder:
                     # Unknown special key — record as "key" event, don't coalesce
                     self._flush_key_buffer()
                     window_title = _get_fg_window_title()
+                    key_name = str(key).replace("Key.", "")
                     with self._lock:
                         self._events.append({
                             "type": "key",
                             "timestamp": self._elapsed(),
-                            "key": str(key).replace("Key.", ""),
+                            "key": key_name,
                             "window_title": window_title,
                         })
+                        self._action_count += 1
+                    if self._on_action:
+                        try:
+                            self._on_action({
+                                "action_type": "key",
+                                "window_title": window_title,
+                                "element_name": key_name,
+                                "count": self._action_count,
+                            })
+                        except Exception:
+                            pass
                     return
 
             # Coalesce printable characters
@@ -218,3 +618,15 @@ class InputRecorder:
                 "window_title": window_title,
             })
             self._key_buffer = []
+            self._action_count += 1
+            # Fire live action callback for typed text
+            if self._on_action:
+                try:
+                    self._on_action({
+                        "action_type": "type",
+                        "window_title": window_title,
+                        "element_name": "",
+                        "count": self._action_count,
+                    })
+                except Exception:
+                    pass
