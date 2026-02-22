@@ -38,6 +38,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 _startup_status: dict = {"stage": "Starting...", "detail": "", "progress": 0}
 _loading_server = None  # type: HTTPServer | None
+_tray_icon = None  # pystray.Icon | None — module-level for cleanup on shutdown
 
 _LOADING_PAGE_HTML = b'''<!DOCTYPE html>
 <html lang="en">
@@ -6453,6 +6454,12 @@ def create_app() -> FastAPI:
         # Start schedule manager loop
         asyncio.create_task(get_schedule_manager().run_loop(get_manager().submit))
         yield
+        # Cleanup tray icon on shutdown so Windows removes it from the notification area
+        if _tray_icon is not None:
+            try:
+                _tray_icon.stop()
+            except Exception:
+                pass
 
     app = FastAPI(title="ClawBridge", version="0.1.0", lifespan=lifespan)
 
@@ -7386,7 +7393,9 @@ def _create_tray_icon(url: str):
 
 
 def main() -> None:
-    global _loading_server
+    global _loading_server, _tray_icon
+    import atexit
+    import signal
     import time as _time
 
     s = get_settings()
@@ -7400,11 +7409,29 @@ def main() -> None:
 
     _startup_status.update({"stage": "Initializing application...", "progress": 80})
 
-    # 1. System tray icon in background thread
-    tray_icon = _create_tray_icon(url)
-    if tray_icon:
-        threading.Thread(target=tray_icon.run, daemon=True).start()
-        print("  System tray icon active")
+    # 1. System tray icon in background thread (skip if port already in use)
+    if _loading_server is not None:
+        _tray_icon = _create_tray_icon(url)
+        if _tray_icon:
+            threading.Thread(target=_tray_icon.run, daemon=True).start()
+            print("  System tray icon active")
+
+    # Register cleanup handlers so Windows removes the tray icon on exit
+    def _cleanup_tray():
+        if _tray_icon is not None:
+            try:
+                _tray_icon.stop()
+            except Exception:
+                pass
+
+    atexit.register(_cleanup_tray)
+
+    def _signal_handler(signum, frame):
+        _cleanup_tray()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
 
     # 2. Create the app
     _startup_status.update({
