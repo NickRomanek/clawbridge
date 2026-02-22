@@ -261,7 +261,16 @@ def step_project_files():
     (ws / "memory").mkdir(exist_ok=True)
     (ws / "templates").mkdir(exist_ok=True)
     (ws / "schedules").mkdir(exist_ok=True)
+    (ws / "workflows").mkdir(exist_ok=True)
     print("    workspace/ (with subdirs)")
+
+    # Copy default personality files if they exist
+    ws_src = ROOT / "workspace"
+    for md_name in ("SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"):
+        md_src = ws_src / md_name
+        if md_src.exists():
+            shutil.copy2(md_src, ws / md_name)
+            print(f"    workspace/{md_name}")
 
     # Create logs directory
     (BUNDLE_DIR / "logs").mkdir(exist_ok=True)
