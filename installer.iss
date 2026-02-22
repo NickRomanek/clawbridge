@@ -7,7 +7,7 @@
 ; Expects dist\ClawBridge\ to exist (run build.py first).
 
 #define MyAppName "ClawBridge"
-#define MyAppVersion "0.3.5"
+#define MyAppVersion "0.3.6"
 #define MyAppPublisher "ClawBridge"
 #define MyAppURL "https://clawbridge.ai"
 #define MyAppExeName "ClawBridge.bat"

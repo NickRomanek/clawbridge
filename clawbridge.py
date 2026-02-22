@@ -192,6 +192,16 @@ try:
     _probe.close()
     _loading_server = HTTPServer(("127.0.0.1", _loading_port), _LoadingHandler)
     threading.Thread(target=_loading_server.serve_forever, daemon=True).start()
+    # Verify the server is accepting connections before we open the browser
+    import time as _time_wait
+    for _attempt in range(10):
+        _test_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        _test_sock.settimeout(0.3)
+        if _test_sock.connect_ex(("127.0.0.1", _loading_port)) == 0:
+            _test_sock.close()
+            break
+        _test_sock.close()
+        _time_wait.sleep(0.1)
     print(f"  Loading page active on http://127.0.0.1:{_loading_port}")
 except OSError:
     _loading_server = None  # Port in use — skip (uvicorn will report the error later)
