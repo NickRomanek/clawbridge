@@ -3734,15 +3734,22 @@ class ComputerUseEngine(EngineBase):
                 kw_lower = app_keyword.lower()
                 target_hwnd = [None]
 
+                _is_browser_search = kw_lower == "browser"
+
                 @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
                 def cb(hwnd, _):
                     length = user32.GetWindowTextLengthW(hwnd)
                     if length > 0:
                         buf = ctypes.create_unicode_buffer(length + 1)
                         user32.GetWindowTextW(hwnd, buf, length + 1)
-                        if kw_lower in buf.value.lower():
+                        title = buf.value.lower()
+                        if kw_lower in title:
                             target_hwnd[0] = hwnd
                             return False  # stop enumerating
+                        # When searching for "Browser", match known browser title suffixes
+                        if _is_browser_search and any(title.endswith(s) for s in self._BROWSER_TITLE_SUFFIXES):
+                            target_hwnd[0] = hwnd
+                            return False
                     return True
                 user32.EnumWindows(cb, 0)
 
@@ -3764,6 +3771,10 @@ class ComputerUseEngine(EngineBase):
         except Exception:
             return False
 
+    # Browser window title suffixes and process names for focus verification
+    _BROWSER_TITLE_SUFFIXES = ("google chrome", "mozilla firefox", "microsoft edge", "brave", "opera", "vivaldi", "chromium", "arc")
+    _BROWSER_PROCESS_NAMES = ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe", "chromium.exe", "arc.exe")
+
     async def _verify_focus(self, app_keyword: str) -> tuple[bool, str]:
         """Verify the foreground window matches app_keyword. Returns (matched, actual_title)."""
         if sys.platform != "win32":
@@ -3776,8 +3787,32 @@ class ComputerUseEngine(EngineBase):
                 buf = ctypes.create_unicode_buffer(256)
                 ctypes.windll.user32.GetWindowTextW(hwnd, buf, 256)
                 actual_title = buf.value
-                matched = app_keyword.lower() in actual_title.lower()
-                return (matched, actual_title)
+                title_lower = actual_title.lower()
+                # Standard check: keyword appears in the title
+                if app_keyword.lower() in title_lower:
+                    return (True, actual_title)
+                # Browser-aware check: when looking for "Browser", accept any
+                # window whose title ends with a known browser name or whose
+                # process is a known browser executable.
+                if app_keyword.lower() == "browser":
+                    if any(title_lower.endswith(s) for s in self._BROWSER_TITLE_SUFFIXES):
+                        return (True, actual_title)
+                    # Fallback: check process name via pid
+                    try:
+                        pid = ctypes.c_ulong()
+                        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                        h = ctypes.windll.kernel32.OpenProcess(0x0400 | 0x0010, False, pid.value)  # PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+                        if h:
+                            name_buf = ctypes.create_unicode_buffer(260)
+                            size = ctypes.c_ulong(260)
+                            ctypes.windll.kernel32.QueryFullProcessImageNameW(h, 0, name_buf, ctypes.byref(size))
+                            ctypes.windll.kernel32.CloseHandle(h)
+                            proc_name = name_buf.value.rsplit("\\", 1)[-1].lower()
+                            if proc_name in self._BROWSER_PROCESS_NAMES:
+                                return (True, actual_title)
+                    except Exception:
+                        pass
+                return (False, actual_title)
             except Exception:
                 return (False, "")
         try:
