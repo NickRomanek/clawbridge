@@ -632,6 +632,7 @@ def _fetch_license_status() -> LicenseInfo:
     req = urllib.request.Request(url, method="GET")
     req.add_header("X-Activation-Code", settings.activation_code)
     req.add_header("X-Machine-ID", machine_id)
+    req.add_header("User-Agent", f"ClawBridge/{__version__}")
 
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -678,6 +679,7 @@ def activate_license(activation_code: str) -> tuple[bool, str]:
 
     req = urllib.request.Request(url, data=payload, method="POST")
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", f"ClawBridge/{__version__}")
 
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -714,6 +716,7 @@ def _reactivate_license(code: str, machine_id: str, settings) -> tuple[bool, str
 
     req = urllib.request.Request(url, data=payload, method="POST")
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", f"ClawBridge/{__version__}")
 
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
