@@ -111,7 +111,7 @@ ClawBridge has two deployment forms that share the same logic:
 
 | Form | File | Use Case |
 |------|------|----------|
-| **Monolith** | `clawbridge.py` (~10,200 lines) | Primary. Single file, easy to share/deploy |
+| **Monolith** | `clawbridge.py` (~10,400 lines) | Primary. Single file, easy to share/deploy |
 | **Package** | `clawbridge/` directory | Modular. For development, testing, extensibility |
 
 ### How It Works
@@ -451,7 +451,7 @@ This enables the **bridge architecture**: local machines provide the "hands" (de
 ## Project Structure
 
 ```
-clawbridge.py                 # Monolith — primary entry point (~10,200 lines)
+clawbridge.py                 # Monolith — primary entry point (~10,400 lines)
 clawbridge_mcp.py             # MCP server (stdio/HTTP proxy to REST API)
 clawbridge/
   config.py                   # Settings & BYOK key management

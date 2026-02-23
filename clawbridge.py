@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.3.7"
+__version__ = "0.4.0"
 
 import hmac
 import os
@@ -368,6 +368,8 @@ class Settings:
     max_actions_per_task = int(_env("MAX_ACTIONS_PER_TASK", "50"))
     max_task_retries = int(_env("MAX_TASK_RETRIES", "2"))  # Auto-retry failed tasks (0=disabled)
     retry_base_delay = float(_env("RETRY_BASE_DELAY", "2.0"))  # Base delay in seconds for exponential backoff
+    task_timeout = int(_env("TASK_TIMEOUT", "300"))  # Max seconds per engine run, 0=disabled
+    max_consecutive_stale = int(_env("MAX_CONSECUTIVE_STALE", "5"))  # Hard-stop after N consecutive stale actions
     log_level = _env("LOG_LEVEL", "INFO")
     db_path = _env("CLAWBRIDGE_DB", "clawbridge.db")
     remote_bridge_url = _env("REMOTE_BRIDGE_URL", "")
@@ -3833,6 +3835,31 @@ class ComputerUseEngine(EngineBase):
             logging.warning("Focus verification failed after retry: wanted '%s', got '%s'", app_keyword, actual2)
         return ok2
 
+    async def _detect_redirect(self, expected_domain: str | None) -> str | None:
+        """Check if the browser navigated to an unexpected domain (ad redirect). Returns warning or None."""
+        if not expected_domain or sys.platform != "win32":
+            return None
+        _, actual_title = await self._verify_focus("browser")
+        if not actual_title:
+            return None
+        actual_lower = actual_title.lower()
+        expected_lower = expected_domain.lower()
+        if expected_lower in actual_lower:
+            return None
+        # Check for common ad-redirect destinations
+        _REDIRECT_INDICATORS = (
+            "amazon", "ebay", "walmart", "target.com", "aliexpress", "wish.com",
+            "sponsored", "doubleclick", "googlesyndication", "taboola", "outbrain",
+        )
+        for indicator in _REDIRECT_INDICATORS:
+            if indicator in actual_lower:
+                return (
+                    f"REDIRECT DETECTED: You were navigating to {expected_domain} but the browser "
+                    f"now shows '{actual_title}'. You likely clicked an advertisement. "
+                    f"Close this tab (Ctrl+W) and navigate back to {expected_domain}."
+                )
+        return None
+
     def _detect_target_app(self, prompt: str) -> str | None:
         """Detect which app the task is targeting from the prompt text."""
         prompt_lower = prompt.lower()
@@ -3952,6 +3979,11 @@ class ComputerUseEngine(EngineBase):
         # a type/key event on the dashboard preceded the final stop-click.
         _DASHBOARD_MARKERS = ("clawbridge dashboard", "clawbridge login",
                                "localhost:8765", "127.0.0.1:8765")
+        # Log all action window titles for debugging dashboard click leaks
+        for _ai, _act in enumerate(actions):
+            logging.info("Recording action %d: type=%s window_title='%s'",
+                         _ai, _act.get("action_type", "?"),
+                         (_act.get("window_title", "") or "")[:80])
         pre_filter = len(actions)
         actions = [
             a for a in actions
@@ -3959,10 +3991,9 @@ class ComputerUseEngine(EngineBase):
         ]
         if pre_filter != len(actions):
             logging.info("Filtered %d dashboard event(s) from recording", pre_filter - len(actions))
-        # Log last action's window title for debugging unfiltered dashboard clicks
         if actions:
-            logging.debug("Recording: last action window_title='%s'",
-                          (actions[-1].get("window_title", "") or "")[:80])
+            logging.info("Recording: last action window_title='%s'",
+                         (actions[-1].get("window_title", "") or "")[:80])
         logging.info("ComputerUseEngine: recording stopped, %d actions captured", len(actions))
         return actions
 
@@ -4531,11 +4562,28 @@ class ComputerUseEngine(EngineBase):
 
             _skip_next_action = False
             _last_executed_win = ""  # tracks foreground window of last executed action
+            # Dashboard markers for filtering stray dashboard actions from replay.
+            # These can leak into saved workflows when capture.py's window-title
+            # remapping masks a dashboard click with the previous app's title.
+            _REPLAY_DASHBOARD_MARKERS = ("clawbridge dashboard", "clawbridge login",
+                                          "localhost:8765", "127.0.0.1:8765")
             for i, action in enumerate(wf.actions):
                 replay.current_step = i + 1
                 action_dict = action.model_dump() if hasattr(action, 'model_dump') else action
                 atype = action_dict.get('action_type', '?')
                 adetail = action_dict.get('element_name') or action_dict.get('text') or action_dict.get('key') or ''
+
+                # Skip dashboard interactions that leaked into saved workflows.
+                # This is defense-in-depth: stop_recording() should filter these,
+                # but older workflows may have them baked in.
+                _action_wt = (action_dict.get("window_title", "") or "").lower()
+                if any(m in _action_wt for m in _REPLAY_DASHBOARD_MARKERS):
+                    logging.info("Replay step %d/%d: skipping dashboard action (%s on '%s')",
+                                 i + 1, len(wf.actions), atype, action_dict.get("window_title", "")[:60])
+                    self._record_replay_outcome(wf.id, task.id, i, action_dict,
+                                                 "skipped_dashboard", True, 1.0, 0)
+                    completed_steps += 1
+                    continue
 
                 # Compute confidence for this step (with historical learning override)
                 confidence = self._compute_step_confidence(action_dict)
@@ -5256,6 +5304,19 @@ class ComputerUseEngine(EngineBase):
                         })
                     except Exception: pass
 
+            # Extract expected domain for redirect detection
+            _nav_domain = None
+            _nav_url = pre_nav_url or _extract_navigation_target(task.prompt)
+            if _nav_url:
+                try:
+                    from urllib.parse import urlparse
+                    _parsed = urlparse(_nav_url if "://" in _nav_url else f"https://{_nav_url}")
+                    _nav_domain = _parsed.hostname
+                    if _nav_domain and _nav_domain.startswith("www."):
+                        _nav_domain = _nav_domain[4:]
+                except Exception:
+                    pass
+
             # Enumerate interactive UI elements FIRST to pass them for overlay
             self._last_ui_elements = await self._get_ui_elements()
             
@@ -5375,6 +5436,12 @@ class ComputerUseEngine(EngineBase):
                             await asyncio.sleep(0.3)
                         await self._execute_action(tb.input)
                         await asyncio.sleep(delay)
+                        # Redirect detection for click actions on web tasks
+                        if _nav_domain and action_name in ("left_click", "double_click", "click_element"):
+                            _redirect_warning = await self._detect_redirect(_nav_domain)
+                            if _redirect_warning:
+                                _focus_warning = (_focus_warning + "\n" + _redirect_warning) if _focus_warning else _redirect_warning
+                                logging.warning("Redirect detected: expected %s, got different domain", _nav_domain)
                     step_desc = await self._describe_screen()
                     # Refresh UI elements after each action (BEFORE taking screenshot so we can overlay markers)
                     self._last_ui_elements = await self._get_ui_elements()
@@ -5435,6 +5502,14 @@ class ComputerUseEngine(EngineBase):
                                     stuck_msg += "\n\nAI DIAGNOSTIC: " + diag
                                     logging.info("Self-verify diagnostic: %s", diag[:200])
                             rc.append({"type": "text", "text": stuck_msg})
+                        # Hard-stop: too many consecutive stale actions
+                        _max_stale = get_settings().max_consecutive_stale
+                        if _max_stale > 0 and _consecutive_stale >= _max_stale:
+                            final_text = f"Task stopped: {_consecutive_stale} consecutive actions had no effect. The automation appears stuck."
+                            logging.warning("Hard-stopping task at step %d: %d consecutive stale actions", step_count, _consecutive_stale)
+                            task.status = TaskStatus.ERROR
+                            task.error = final_text
+                            break
                     else:
                         if not is_ss_only:
                             _consecutive_stale = 0
@@ -5457,7 +5532,9 @@ class ComputerUseEngine(EngineBase):
                 tokens_out=total_out,
                 estimated_cost_usd=round(cost, 4),
             )
-            task.status = TaskStatus.CANCELLED if self._cancel_requested else TaskStatus.COMPLETE
+            # Don't overwrite ERROR status set by stale hard-stop or other mid-loop errors
+            if task.status != TaskStatus.ERROR:
+                task.status = TaskStatus.CANCELLED if self._cancel_requested else TaskStatus.COMPLETE
             # Auto-capture: offer to save successful tasks as workflows
             if task.status == TaskStatus.COMPLETE and step_count > 0 and self._broadcast_fn:
                 try:
@@ -5893,8 +5970,10 @@ class TaskManager:
         return task
 
     async def _run(self, task: Task) -> None:
-        self._running += 1
-        task.status = TaskStatus.RUNNING
+        # _running is already incremented by _promote_pending_task() for promoted tasks
+        if task.status != TaskStatus.RUNNING:
+            self._running += 1
+            task.status = TaskStatus.RUNNING
         task.updated_at = datetime.now(timezone.utc)
         self._save_task_to_db(task)
         if self._broadcast:
@@ -5921,6 +6000,7 @@ class TaskManager:
                     task.status = TaskStatus.ERROR
                     task.error = f"Blocked by safety policy: {reason} detected in prompt. Remove unsafe content and retry, or switch to 'guarded' policy mode."
                     self._running -= 1
+                    self._promote_pending_task()
                     self._save_task_to_db(task)
                     if self._broadcast:
                         await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
@@ -5929,17 +6009,29 @@ class TaskManager:
             logging.warning("Safety scan error: %s", e)
 
         # ── Inject personality + memory context into task ────────────────
-        try:
-            personality_ctx = get_personality().get_system_context()
-            if personality_ctx.strip():
-                # Store context separately so engines can use it as system prompt OR prepend
-                task._personality_context = personality_ctx
-                logging.info("Injected personality/memory context (%d chars) into task %s", len(personality_ctx), task.id[:8])
-            else:
+        # Skip personality context for simple chat tasks (saves 5-20K tokens)
+        _needs_personality = True
+        if task.engine == EngineName.OPENCLAW:
+            _personality_keywords = ("remember", "you are", "your name", "who are you",
+                                     "personality", "identity", "memory", "previous", "last time",
+                                     "earlier", "before", "my name", "yesterday", "conversation",
+                                     "continue", "we were", "you said", "i told you", "recall")
+            if not any(kw in task.prompt.lower() for kw in _personality_keywords):
+                _needs_personality = False
+        if _needs_personality:
+            try:
+                personality_ctx = get_personality().get_system_context()
+                if personality_ctx.strip():
+                    task._personality_context = personality_ctx
+                    logging.info("Injected personality/memory context (%d chars) into task %s", len(personality_ctx), task.id[:8])
+                else:
+                    task._personality_context = ""
+            except Exception as e:
+                logging.warning("Failed to load personality context: %s", e)
                 task._personality_context = ""
-        except Exception as e:
-            logging.warning("Failed to load personality context: %s", e)
+        else:
             task._personality_context = ""
+            logging.debug("Skipped personality context for task %s (simple chat)", task.id[:8])
 
         routing_reason = "keyword match"
         # LLM-based auto-routing: try LLM classification first, fall back to keyword heuristics
@@ -5978,9 +6070,18 @@ class TaskManager:
             base_delay = get_settings().retry_base_delay
             attempt = 0
             tried_engines: list[EngineName] = []  # track engines we've already tried
+            original_engine = engine  # Track original for retry-after-fallback
             while True:
                 try:
-                    task = await engine.run_task(task)
+                    _timeout = get_settings().task_timeout
+                    if _timeout > 0:
+                        task = await asyncio.wait_for(engine.run_task(task), timeout=_timeout)
+                    else:
+                        task = await engine.run_task(task)
+                except asyncio.TimeoutError:
+                    task.status = TaskStatus.ERROR
+                    task.error = f"Task timed out after {_timeout}s"
+                    logging.error("Task %s timed out after %ds on %s", task.id[:8], _timeout, engine.display_name)
                 except asyncio.CancelledError:
                     task.status = TaskStatus.CANCELLED
                     task.error = None
@@ -6027,9 +6128,14 @@ class TaskManager:
                             await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
                         continue
 
-                # ── Standard retry (same engine) ──────────────────────
+                # ── Standard retry (original engine) ─────────────────
                 if task.status == TaskStatus.ERROR and attempt < max_retries:
                     attempt += 1
+                    # Retry the original engine, not whatever fallback we last tried
+                    if engine.name != original_engine.name:
+                        logging.info("Task %s: reverting to original engine %s for retry", task.id[:8], original_engine.display_name)
+                        engine = original_engine
+                        task.engine = engine.name
                     delay = base_delay * (2 ** (attempt - 1))  # exponential backoff: 2s, 4s, 8s...
                     logging.info("Task %s failed (attempt %d/%d), retrying in %.1fs: %s",
                                  task.id[:8], attempt, max_retries + 1, delay, task.error)
@@ -6046,6 +6152,7 @@ class TaskManager:
                     await asyncio.sleep(delay)
                     task.status = TaskStatus.RUNNING
                     task.error = None
+                    tried_engines.clear()  # Reset tried engines for retry pass
                     continue
                 break  # success, cancelled, or max retries exhausted
 
@@ -6067,10 +6174,25 @@ class TaskManager:
                 logging.warning("Failed to auto-log task to memory: %s", e)
 
         self._running -= 1
+        self._promote_pending_task()
         self._futures.pop(task.id, None)
         self._save_task_to_db(task)
         if self._broadcast:
             await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
+
+    def _promote_pending_task(self) -> None:
+        """Promote the first PENDING task if concurrency allows."""
+        if self._running >= get_settings().max_concurrent_tasks:
+            return
+        for t in list(self._tasks.values()):
+            if t.status == TaskStatus.PENDING:
+                logging.info("Promoting pending task %s", t.id[:8])
+                # Reserve the concurrency slot immediately to prevent double-promotion
+                self._running += 1
+                t.status = TaskStatus.RUNNING
+                fut = asyncio.create_task(self._run(t))
+                self._futures[t.id] = fut
+                break
 
     async def remote_bridge_loop(self):
         """Background loop to poll for remote tasks from clawbridge.ai or custom URL."""

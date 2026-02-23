@@ -49,3 +49,6 @@ marketing/
 restart_server.ps1
 transparentlogo.png
 backup_project.py
+
+# Private roadmap (not for public repo)
+ROADMAP.local.md

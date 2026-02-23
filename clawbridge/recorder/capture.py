@@ -117,7 +117,8 @@ def _get_fg_process_name() -> str:
 # Last-known non-dashboard foreground title — fallback when the clicked
 # window has already closed by the time we read it.
 _last_app_title: str = ""
-_DASHBOARD_TITLE_MARKERS = ("clawbridge dashboard", "localhost:8765", "127.0.0.1:8765")
+_DASHBOARD_TITLE_MARKERS = ("clawbridge dashboard", "clawbridge login",
+                            "localhost:8765", "127.0.0.1:8765")
 
 
 def _get_fg_window_rect() -> tuple[int, int, int, int] | None:
@@ -396,6 +397,21 @@ class InputRecorder:
                 if remaining > 0:
                     t.join(timeout=remaining)
 
+        # Strip the final click event if it occurred very close to stop time.
+        # This is the stop-record button click itself — it's ALWAYS the last
+        # event and happens within ~200ms of stop() being called.  Even if
+        # the dashboard window-title filter catches it downstream, this is a
+        # reliable belt-and-suspenders defense because it doesn't depend on
+        # window title matching.
+        _stop_ts = self._elapsed()
+        if (self._events
+                and self._events[-1].get("type") == "click"
+                and (_stop_ts - self._events[-1].get("timestamp", 0)) < 0.5):
+            _removed = self._events.pop()
+            logger.info("InputRecorder: stripped trailing click (%.3fs before stop, title='%s')",
+                        _stop_ts - _removed.get("timestamp", 0),
+                        (_removed.get("window_title", "") or "")[:60])
+
         logger.info("InputRecorder stopped, captured %d events", len(self._events))
         return list(self._events)
 
@@ -415,13 +431,16 @@ class InputRecorder:
         if not window_title:
             window_title = _get_fg_window_title()
         process_name = _get_fg_process_name()
-        # If the resolved title is a dashboard title but we have a cached app
-        # title, use the cached one — the click likely closed the app window
-        # and focus shifted to the dashboard before we could read it.
+        # Track whether this click is on the dashboard UI.
+        # IMPORTANT: Do NOT remap dashboard clicks to _last_app_title.
+        # The old behavior masked dashboard clicks with the previous app's
+        # title, causing them to evade the dashboard filter in
+        # stop_recording() and get saved+replayed in workflows.
+        # Instead, keep the dashboard window_title intact so downstream
+        # filters can properly strip these events.
         wt_lower = window_title.lower()
-        if any(m in wt_lower for m in _DASHBOARD_TITLE_MARKERS) and _last_app_title:
-            window_title = _last_app_title
-        elif not any(m in wt_lower for m in _DASHBOARD_TITLE_MARKERS) and window_title:
+        _is_dashboard_click = any(m in wt_lower for m in _DASHBOARD_TITLE_MARKERS)
+        if not _is_dashboard_click and window_title:
             _last_app_title = window_title
 
         # Capture window rect for window-relative coordinates (survives window moves)
