@@ -6,7 +6,7 @@ ClawBridge is a local-first AI agent platform that unifies multiple automation e
 
 Submit a task, pick an engine (or let Auto choose), and watch it run. Everything stays on your machine — or bridge to the cloud.
 
-**Version:** 0.3.5 | [Website](https://clawbridge.ai) | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
+**Version:** 0.5.0 | [Website](https://clawbridge.ai) | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
 
 ---
 
@@ -33,6 +33,16 @@ Download `ClawBridge-Setup.exe` and run it. The installer:
 - **Install OpenClaw**: Adds memory & skills support (recommended for power users)
 
 After installation, launch ClawBridge from the Start Menu and open **http://127.0.0.1:8765** in your browser.
+
+### macOS Installer
+
+Download the `.dmg` for your architecture (Apple Silicon or Intel) from the [download page](https://clawbridge.ai/download/) or [GitHub Releases](https://github.com/NickRomanek/clawbridge/releases/latest).
+
+1. Open the `.dmg` and drag ClawBridge to Applications
+2. Launch ClawBridge — on first run, grant **Accessibility** and **Screen Recording** permissions when prompted
+3. The dashboard opens automatically at **http://127.0.0.1:8765**
+
+**Note**: macOS requires Accessibility permission (System Settings > Privacy & Security > Accessibility) for desktop automation and Screen Recording permission for screenshot capture. The dashboard shows a banner if permissions are missing.
 
 ### Quick Start (Single File)
 
@@ -111,7 +121,7 @@ ClawBridge has two deployment forms that share the same logic:
 
 | Form | File | Use Case |
 |------|------|----------|
-| **Monolith** | `clawbridge.py` (~10,400 lines) | Primary. Single file, easy to share/deploy |
+| **Monolith** | `clawbridge.py` (~11,300 lines) | Primary. Single file, easy to share/deploy |
 | **Package** | `clawbridge/` directory | Modular. For development, testing, extensibility |
 
 ### How It Works
@@ -167,7 +177,7 @@ ClawBridge uses intelligent engine selection to pick the best engine for each ta
 
 ### Computer-Use Engine Details
 
-The computer-use engine controls the full Windows desktop via screenshots + mouse/keyboard. Key features:
+The computer-use engine controls the full desktop via screenshots + mouse/keyboard. Key features:
 
 - **Accessibility-first navigation**: Uses Windows UIA (via pywinauto) to enumerate interactive elements. Model clicks by element ID instead of guessing pixel coordinates — far more reliable.
 - **Dual screenshot strategy**: Sends full screen (for coordinates) + zoomed crop of foreground window (for reading text)
@@ -451,7 +461,7 @@ This enables the **bridge architecture**: local machines provide the "hands" (de
 ## Project Structure
 
 ```
-clawbridge.py                 # Monolith — primary entry point (~10,400 lines)
+clawbridge.py                 # Monolith — primary entry point (~11,300 lines)
 clawbridge_mcp.py             # MCP server (stdio/HTTP proxy to REST API)
 clawbridge/
   config.py                   # Settings & BYOK key management
@@ -460,12 +470,17 @@ clawbridge/
     browser_use_engine.py     # Playwright-based web automation
     computer_use_engine.py    # Desktop control via Anthropic API
     openclaw_engine.py        # Node.js CDP agent
-  perception/                 # Perception layer (v0.2.0)
+  perception/                 # Perception layer
     screenshot.py             # Async screenshot utilities
-    accessibility.py          # Enhanced UIA wrapper + element matching
-  recorder/                   # Workflow recording (v0.2.0)
+    accessibility.py          # Platform-aware accessibility wrapper
+  recorder/                   # Workflow recording
     capture.py                # pynput mouse/keyboard capture
     processor.py              # Raw event → enriched action processing
+  platform/                   # Platform abstraction layer (v0.5.0)
+    _base.py                  # 14 abstract methods
+    _windows.py               # ctypes/pywinauto backend
+    _macos.py                 # PyObjC/AXUIElement backend
+    _linux.py                 # Stub (placeholder)
   orchestrator/
     manager.py                # Task lifecycle, engine routing
   server/
@@ -482,6 +497,7 @@ clawbridge/
   shared/
     schemas.py                # Pydantic models
 build.py                      # Portable Windows build system
+build_macos.py                # macOS DMG build (arm64/x64)
 installer.iss                 # Inno Setup installer script
 .env.example                  # Configuration template
 .mcp.json                     # MCP server registration for Claude Code
@@ -541,39 +557,18 @@ See `.mcp.json` for project-level registration.
 - [x] Model details panel and API path toggle in dashboard
 - [x] Licensing & activation system with Stripe integration
 - [x] Apache 2.0 license and Contributor License Agreement
+- [x] Task queue promotion, task-level timeouts, redirect detection (v0.4.0)
+- [x] Personality context gating, stale action hard-stop, fallback-before-retry (v0.4.0)
+- [x] macOS support with platform abstraction layer and PyObjC backend (v0.5.0)
+- [x] macOS DMG distribution for arm64 and x64 (v0.5.0)
+- [x] App-mode browser launch (chromeless window) (v0.5.0)
+- [x] Scaffolding profile system (full/standard/minimal/raw) (v0.5.0)
 
-### Phase 2: Reliability (Next)
+### What's Next
 
-Goal: >90% success rate on recorded workflow replays
-
-- [ ] Self-verification loops for live computer-use tasks (screenshot after each action, verify success, retry on failure)
-- [ ] Set-of-Mark (SoM) visual prompting (overlay numbered markers on screenshots using UIA element positions)
-- [ ] OmniParser V2 visual fallback (when UIA tree returns < 5 elements, use vision-based element detection with IoU dedup)
-- [ ] Increase UIA element limit (40 -> 80, make depth configurable)
-- [ ] Cross-workflow outcome learning (opt-in, share action fingerprints across workflows for same app)
-- [ ] Expand economy mode (Haiku for browser-use, Gemini Flash via ECONOMY_MODEL)
-
-### Phase 3: Distribution
-
-Goal: 1,000 active users
-
-- [ ] macOS full support (AXUIElement accessibility, AppleScript app control)
-- [ ] Auto-update mechanism in installer
-- [ ] Bundled API key option (OpenRouter partnership for zero-config users)
-- [ ] Template/workflow gallery (pre-built automations for common tasks)
-- [ ] ProductHunt + HackerNews launch
-- [ ] Code signing certificate for Windows installer
-
-### Phase 4: Monetization
-
-Goal: First paying customers
-
-- [ ] Cloud sync service (optional workflow sync + remote replay)
-- [ ] Team workflow sharing
-- [ ] Pro tier launch ($29/mo)
-- [ ] Workflow marketplace (community-shared templates)
-- [ ] `pip install clawbridge` one-command setup
-- [ ] macOS .dmg packaging via GitHub Actions
+- Reliability improvements: self-verification loops, better element matching, cross-workflow learning
+- Distribution: auto-update, template gallery, community launch
+- Integrations and extensibility
 
 ## Contributing
 

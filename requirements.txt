@@ -28,6 +28,11 @@ Pillow>=10.0.0
 mss>=9.0.0
 pywinauto>=0.6.8; sys_platform == 'win32'
 
+# macOS platform backend (PyObjC frameworks)
+pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'
+pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'
+
 # Input recording for workflow capture
 pynput>=1.7.6
 

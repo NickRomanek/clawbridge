@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 import hmac
 import os
@@ -206,10 +206,57 @@ try:
 except OSError:
     _loading_server = None  # Port in use — skip (uvicorn will report the error later)
 
+# ---------------------------------------------------------------------------
+# App-mode browser launch — opens dashboard in a chromeless window (no tabs,
+# no URL bar) using Chrome/Edge --app flag.  Falls back to regular browser.
+# ---------------------------------------------------------------------------
+def _open_app_mode(url: str) -> None:
+    """Open *url* in a chromeless app-mode window (Chrome/Edge --app=...)."""
+    import platform as _pf
+    candidates: list[str] = []
+    if _pf.system() == "Windows":
+        # Prefer Edge (always present on Win10+), then Chrome
+        local = os.environ.get("LOCALAPPDATA", "")
+        prog = os.environ.get("PROGRAMFILES", "")
+        prog86 = os.environ.get("PROGRAMFILES(X86)", "")
+        candidates = [
+            os.path.join(local, r"Microsoft\Edge\Application\msedge.exe"),
+            os.path.join(prog, r"Microsoft\Edge\Application\msedge.exe"),
+            os.path.join(prog, r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(prog86, r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(local, r"Google\Chrome\Application\chrome.exe"),
+        ]
+    elif _pf.system() == "Darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    else:
+        # Linux — check PATH
+        for name in ("google-chrome", "google-chrome-stable", "microsoft-edge", "chromium-browser", "chromium"):
+            path = shutil.which(name)
+            if path:
+                candidates.append(path)
+
+    for exe in candidates:
+        if os.path.isfile(exe):
+            try:
+                subprocess.Popen([exe, f"--app={url}"],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                return
+            except Exception:
+                continue
+
+    # Fallback: regular browser
+    import webbrowser
+    webbrowser.open(url)
+
+
 # Auto-open browser if requested (set by ClawBridge.bat windowless launcher)
 if os.environ.get("CLAWBRIDGE_OPEN_BROWSER") == "1" and _loading_server is not None:
-    import webbrowser as _wb
-    _wb.open(f"http://127.0.0.1:{_loading_port}")
+    _open_app_mode(f"http://127.0.0.1:{_loading_port}")
 
 # ---------------------------------------------------------------------------
 # Auto-install dependencies if missing (run once, then exit; user runs again)
@@ -349,7 +396,7 @@ class Settings:
     # Computer-use engine settings
     computer_use_model = _env("COMPUTER_USE_MODEL", "anthropic/claude-sonnet-4.5")
     computer_use_model_fast = _env("COMPUTER_USE_MODEL_FAST", "anthropic/claude-haiku-4-5")  # Cheaper model for high-confidence replay steps
-    economy_model = _env("ECONOMY_MODEL", "")  # Optional: override economy model (e.g. google/gemini-flash-2.0)
+    economy_model = _env("ECONOMY_MODEL", "")  # Optional: override economy model (e.g. google/gemini-2.5-flash)
     computer_use_api = _env("COMPUTER_USE_API", "auto")  # "auto" (Anthropic if key exists, else OpenRouter), "direct", "openrouter"
     computer_use_max_screen_width = int(_env("COMPUTER_USE_MAX_SCREEN_WIDTH", "1920"))
     computer_use_max_screen_height = int(_env("COMPUTER_USE_MAX_SCREEN_HEIGHT", "1080"))
@@ -363,6 +410,7 @@ class Settings:
     policy_mode = _env("POLICY_MODE", "guarded")
     automation_mode = _env("AUTOMATION_MODE", "supervised")  # "supervised" (asks approval) | "autonomous" (runs freely)
     model_tier = _env("MODEL_TIER", "performance")  # "performance" (Sonnet for all) | "economy" (Haiku for routine, Sonnet for complex)
+    scaffolding_profile = _env("SCAFFOLDING_PROFILE", "standard")  # "full" | "standard" | "minimal" | "raw" — controls system prompt verbosity and runtime compensations
     dashboard_token = _env("DASHBOARD_TOKEN", "")  # Optional: set to require auth for dashboard access
     max_concurrent_tasks = int(_env("MAX_CONCURRENT_TASKS", "3"))
     max_actions_per_task = int(_env("MAX_ACTIONS_PER_TASK", "50"))
@@ -433,7 +481,8 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
     "openai/gpt-4o":                 (2.50, 10.0),
     "openai/gpt-4o-mini":            (0.15,  0.60),
     # Google
-    "google/gemini-flash-2.0":       (0.10,  0.40),
+    "google/gemini-2.0-flash-001":   (0.10,  0.40),
+    "google/gemini-2.5-flash":       (0.15,  0.60),
     "google/gemini-pro-2.0":         (1.25,  5.0),
 }
 
@@ -770,6 +819,84 @@ def _apply_activation(activation_code: str, data: dict) -> tuple[bool, str]:
     _license_cache["expires"] = 0
 
     return True, f"Activated! Tier: {tier}, Credits: ${data.get('credit_limit_usd', 5):.2f}"
+
+
+# ---------------------------------------------------------------------------
+# Auto-Update Check (GitHub Releases API)
+# ---------------------------------------------------------------------------
+_update_cache: dict = {"info": None, "expires": 0}
+_UPDATE_CACHE_TTL = 3600  # 1 hour
+
+_GITHUB_RELEASES_URL = "https://api.github.com/repos/NickRomanek/clawbridge/releases/latest"
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Parse 'v0.5.1' or '0.5.1' into (0, 5, 1) for comparison."""
+    v = v.lstrip("vV").strip()
+    parts = []
+    for p in v.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            break
+    return tuple(parts) or (0,)
+
+
+async def _check_for_update() -> dict:
+    """Check GitHub for a newer release. Caches result for 1 hour."""
+    import httpx
+
+    now = time.time()
+    if _update_cache["info"] is not None and _update_cache["expires"] > now:
+        return _update_cache["info"]
+
+    result = {
+        "current": __version__,
+        "latest": __version__,
+        "update_available": False,
+        "release_url": "",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                _GITHUB_RELEASES_URL,
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": f"ClawBridge/{__version__}",
+                },
+            )
+            if resp.status_code != 200:
+                _update_cache["info"] = result
+                _update_cache["expires"] = now + 300  # retry sooner on error
+                return result
+
+            data = resp.json()
+            tag = data.get("tag_name", "")
+            latest_version = tag.lstrip("vV").strip()
+            # Only accept well-formed version strings (digits and dots)
+            if not re.match(r"^[0-9]{1,5}(\.[0-9]{1,5}){0,4}$", latest_version):
+                latest_version = __version__
+            result["latest"] = latest_version
+
+            # Only accept release URLs on github.com (exact match, not suffix)
+            import urllib.parse as _up
+            _parsed = _up.urlparse(data.get("html_url", ""))
+            if _parsed.scheme == "https" and _parsed.netloc in ("github.com", "www.github.com"):
+                result["release_url"] = data.get("html_url", "")
+
+            if _parse_version(latest_version) > _parse_version(__version__):
+                result["update_available"] = True
+
+    except Exception:
+        # Network errors, timeouts, JSON parse errors -- all silently ignored
+        _update_cache["info"] = result
+        _update_cache["expires"] = now + 300
+        return result
+
+    _update_cache["info"] = result
+    _update_cache["expires"] = now + _UPDATE_CACHE_TTL
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2090,7 +2217,10 @@ class BrowserUseEngine(EngineBase):
                                    "172.25.", "172.26.", "172.27.", "172.28.",
                                    "172.29.", "172.30.", "172.31.", "metadata.google",
                                    "metadata.aws", "[::1]")
-            _prompt_check = task.prompt.lower()
+            # VULN-102: Decode URL-encoded characters before checking schemes.
+            # Without this, "file%3A%2F%2F" bypasses the "file://" check.
+            import urllib.parse as _urlparse
+            _prompt_check = _urlparse.unquote(_urlparse.unquote(task.prompt)).lower()
             for _scheme in _BLOCKED_URL_SCHEMES:
                 if _scheme in _prompt_check:
                     task.status = TaskStatus.ERROR
@@ -2173,6 +2303,10 @@ class BrowserUseEngine(EngineBase):
                     final = fr()
                 elif fr is not None:
                     final = fr
+                # Strip browser-use's internal judge evaluation from user-facing output
+                if final and isinstance(final, str):
+                    import re as _re
+                    final = _re.sub(r'\n?\[Simple judge:.*$', '', final, flags=_re.DOTALL).strip()
             except Exception:
                 pass
 
@@ -2214,8 +2348,12 @@ class BrowserUseEngine(EngineBase):
                 logging.debug("browser-use step extraction error: %s", e)
 
             # Build final summary — if final_result is None, try extracting page content
+            # Strip internal judge annotations from all summary paths
+            def _strip_judge(s: str) -> str:
+                import re as _re
+                return _re.sub(r'\n?\[Simple judge:.*$', '', s, flags=_re.DOTALL).strip()
             if final and str(final).strip() and str(final).strip() != "None":
-                summary_text = str(final)
+                summary_text = _strip_judge(str(final))
             elif _is_extraction and n_steps > 0:
                 # Extraction task but no final_result — try getting page content directly
                 page_text = None
@@ -2271,7 +2409,11 @@ class OpenClawEngine(EngineBase):
 
     async def get_info(self) -> dict:
         info = await super().get_info()
-        info["model"] = get_settings().openclaw_model or "gateway default"
+        s = get_settings()
+        if s.model_tier == "economy" and s.economy_model:
+            info["model"] = s.economy_model + " (economy)"
+        else:
+            info["model"] = s.openclaw_model or "gateway default"
         info["api_path"] = "openclaw-gateway"
         return info
 
@@ -2372,7 +2514,7 @@ class OpenClawEngine(EngineBase):
             env["OPENROUTER_API_KEY"] = settings.openrouter_api_key
         try:
             logging.info("Starting OpenClaw gateway...")
-            cmd = [self._openclaw_bin, "gateway", "run", "--port", str(settings.openclaw_gateway_port), "--host", "127.0.0.1"]
+            cmd = [self._openclaw_bin, "gateway", "--port", str(settings.openclaw_gateway_port)]
             self._gateway_proc = subprocess.Popen(
                 cmd,
                 env=env,
@@ -2413,7 +2555,11 @@ class OpenClawEngine(EngineBase):
                 messages.append({"role": "system", "content": personality_ctx})
             messages.append({"role": "user", "content": task.prompt})
             # Use OpenAI-compatible chat completions endpoint
-            model = settings.openclaw_model or None  # None = use gateway's configured default model
+            # Economy mode: use cheap model for chat tasks (e.g. gemini-flash)
+            if settings.model_tier == "economy" and settings.economy_model:
+                model = settings.economy_model
+            else:
+                model = settings.openclaw_model or None  # None = use gateway's configured default model
             payload = {
                 "messages": messages,
                 "stream": False,
@@ -2444,7 +2590,7 @@ class OpenClawEngine(EngineBase):
                 content = data.get("content", data.get("message", content))
             duration_ms = int((time.monotonic() - t0) * 1000)
             # Estimate cost based on configured model
-            _oc_model = get_settings().openclaw_model or get_settings().default_model
+            _oc_model = model or get_settings().openclaw_model or get_settings().default_model
             cost = _estimate_cost(_oc_model, total_in, total_out)
             task.result = TaskResult(
                 summary=str(content)[:5000],
@@ -2603,10 +2749,14 @@ def _extract_navigation_target(prompt: str) -> str | None:
 
     return None
 
-SYSTEM_PROMPT_TEMPLATE = """\
+# ── Composable system prompt sections for scaffolding profiles ──────────
+
+_PROMPT_PREAMBLE = """\
 You are a desktop automation agent controlling a {platform_name}.
 The screen is {scaled_width}x{scaled_height} pixels.
+"""
 
+_PROMPT_REASONING = """\
 ================================================================
 MANDATORY REASONING PROTOCOL
 ================================================================
@@ -2615,18 +2765,20 @@ Before choosing ANY action, you MUST write your reasoning in this format:
 [OBSERVE] What I see on screen right now (list visible windows, apps, UI elements)
 [VERIFY] Did my PREVIOUS action succeed? Compare current screenshot to expected outcome. First action = "N/A".
 [GOAL] The specific sub-goal I need to accomplish next
-[PLAN] Which decision path I will follow (reference the trees below)
+[PLAN] My approach for this action
 [ACTION] The exact action I will take and why
 
 Do NOT skip this reasoning. It makes your actions more accurate.
+"""
 
+_PROMPT_DECISION_TREES = """\
 ================================================================
 DECISION TREE 1: FINDING OR SWITCHING TO AN APP
 ================================================================
 For ANY app you need to interact with, follow this EXACT order.
 STOP at the first level that succeeds.
 
-LEVEL 1 — IS THE APP ALREADY VISIBLE ON SCREEN?
+LEVEL 1 -- IS THE APP ALREADY VISIBLE ON SCREEN?
   Scan the entire screenshot for the app window. Visual fingerprints:
 
   Telegram:
@@ -2671,17 +2823,17 @@ LEVEL 1 — IS THE APP ALREADY VISIBLE ON SCREEN?
   -> If the app is VISIBLE: interact with it directly.
      DO NOT search for it, re-open it, or navigate to it.
 
-LEVEL 2 — IS IT ON THE TASKBAR?
-  Look at the BOTTOM of the screen. The Windows taskbar shows:
+LEVEL 2 -- IS IT ON THE TASKBAR?
+  Look at the BOTTOM of the screen. The {app_bar} shows:
   - Pinned app icons (always visible)
   - Running app icons (have a thin line/underline beneath them)
-  -> If ON TASKBAR: single-click the icon to bring app to foreground.
+  -> If ON {app_bar_upper}: single-click the icon to bring app to foreground.
      Then WAIT for the next screenshot to confirm it appeared.
 
-LEVEL 3 — USE WINDOWS SEARCH (LAST RESORT ONLY)
-  -> Click the search icon on the taskbar or press the Windows key.
+LEVEL 3 -- USE SEARCH (LAST RESORT ONLY)
+  -> Click the search icon on the {app_bar} or press the {search_key} key.
   -> Type the app name, wait for results, click the matching result.
-  -> Only use this if the app is NOT visible AND NOT on the taskbar.
+  -> Only use this if the app is NOT visible AND NOT on the {app_bar}.
 
 ================================================================
 DECISION TREE 2: MESSAGING APPS (Telegram, Discord, Slack, etc.)
@@ -2691,15 +2843,11 @@ Once the messaging app is in the foreground:
 Step 1: Is the correct conversation/chat already open?
   HOW TO CHECK: Read the FOREGROUND WINDOW line in the SYSTEM INFO section.
   The window title typically contains the chat/channel name.
-  Examples:
-    - "Agent intelligence – (351553)" means Telegram has "Agent intelligence" open
-    - "$BOOTS Community – (351556)" means a DIFFERENT chat is open
-    - "#general - Discord" means Discord has the #general channel open
   -> If the correct chat IS open in the window title: skip to Step 3
   -> If a DIFFERENT chat is open or you're unsure: go to Step 2
 
 Step 2: Navigate to the correct conversation using SEARCH
-  CRITICAL: NEVER click on chat items in the sidebar list — they are NOT in
+  CRITICAL: NEVER click on chat items in the sidebar list -- they are NOT in
   the INTERACTIVE ELEMENTS list and coordinate clicks WILL miss. You MUST
   use the search bar (look for the "Search" element in INTERACTIVE ELEMENTS):
   1. Use click_element on the "Search" Edit field
@@ -2707,28 +2855,12 @@ Step 2: Navigate to the correct conversation using SEARCH
   3. Wait for search results
   4. Click the first matching result
 
-  For Telegram:
-    1. Click the search bar at the top of Telegram (or press Escape first
-       to clear any current state, then click the search field)
-    2. Type the chat/group name
-    3. Wait for search results to appear
-    4. Click the FIRST matching result
-    5. Wait for the conversation to load and verify via SYSTEM INFO
-
-  For Discord:
-    1. Press Ctrl+K to open Quick Switcher
-    2. Type the channel name
-    3. Click the matching result
-
-  For Slack:
-    1. Press Ctrl+K to open Quick Switcher
-    2. Type the channel/person name
-    3. Click the matching result
+  For Telegram: Click search bar (or press Escape first), type name, click result.
+  For Discord: Press {mod_key}+K to open Quick Switcher, type name, click result.
+  For Slack: Press {mod_key}+K to open Quick Switcher, type name, click result.
 
 Step 3: Type and send the message
   - Click the message input field at the BOTTOM of the conversation
-    (look for placeholder text like "Write a message...", "Type a message...",
-     "Message #channel", etc.)
   - Type the message text
   - Press Enter to send (unless the task says NOT to send)
 
@@ -2736,139 +2868,169 @@ Step 3: Type and send the message
 DECISION TREE 3: BROWSER TASKS
 ================================================================
 IMPORTANT: ALWAYS open a NEW browser window for web tasks. Never type URLs in
-an existing window — the user may have important pages open (including this app).
+an existing window -- the user may have important pages open (including this app).
 
 Step 1: Open a new browser window
-  -> Press Ctrl+N to open a new window (works in Chrome, Edge, Firefox)
-  -> If no browser is open: follow Decision Tree 1 to open one first,
-     then the new window IS your workspace
+  -> Press {mod_key}+N to open a new window (works in Chrome, Edge, Firefox)
+  -> If no browser is open: follow Decision Tree 1 to open one first
   -> Wait for the new window to appear before proceeding
 
 Step 2: Navigate to the target URL
-  -> In the NEW window, press Ctrl+L (focuses the address bar)
+  -> In the NEW window, press {mod_key}+L (focuses the address bar)
   -> Type the URL and press Enter
 
 Step 3: Interact with the loaded page
-  -> For SEARCH ENGINES (Google, Bing, DuckDuckGo):
-     The search input auto-focuses on page load. Just TYPE your query directly
-     without clicking anything. The text will go into the search box.
-     Then press Enter to search. Do NOT click refresh, scroll, or try to find
-     the search field in INTERACTIVE ELEMENTS — it may not appear there.
-  -> For OTHER SITES: look at the INTERACTIVE ELEMENTS list to find input fields,
-     buttons, and links. Use click_element for reliable interaction.
-  -> GENERAL RULE: If INTERACTIVE ELEMENTS does not show the field you need,
-     try typing directly — many pages auto-focus their primary input field.
+  -> For SEARCH ENGINES: The search input auto-focuses. Just TYPE your query.
+  -> For OTHER SITES: use the INTERACTIVE ELEMENTS list and click_element.
+  -> If INTERACTIVE ELEMENTS does not show the field you need, try typing directly.
 
 Step 4: Do NOT close or rearrange existing browser windows or tabs.
+"""
 
+_PROMPT_SYSTEM_INFO = """\
 ================================================================
 HOW TO USE SYSTEM INFO
 ================================================================
-Each tool result includes SYSTEM INFO from Windows accessibility APIs.
+Each tool result includes SYSTEM INFO from accessibility APIs.
 This is MORE RELIABLE than trying to read text from the screenshot.
 
-- FOREGROUND WINDOW: Tells you the title of the currently focused window.
-  Use this to determine WHICH app and WHICH chat/document is active.
-- VISIBLE WINDOWS: Lists all open windows. Use this to determine what's available.
-- RUNNING APPS: Lists running processes. Use this to know what's installed/running.
+- FOREGROUND WINDOW: the title of the currently focused window.
+- VISIBLE WINDOWS: all open windows.
+- RUNNING APPS: running processes.
 
 ALWAYS check SYSTEM INFO before deciding your next action.
+"""
 
+_PROMPT_ANTI_PATTERNS = """\
 ================================================================
-ANTI-PATTERNS — NEVER DO THESE
+ANTI-PATTERNS -- NEVER DO THESE
 ================================================================
 - NEVER click on chat names in messaging app sidebars (Telegram, Discord, Slack).
   Sidebar chat items are NOT accessible UI elements and clicking by coordinates
-  WILL hit the wrong chat. ALWAYS use the Search field instead (click_element on
-  the "Search" element, then type the chat name).
+  WILL hit the wrong chat. ALWAYS use the Search field instead.
 - NEVER search for an app that is already visible on screen
 - NEVER re-open an app that is already in the foreground
 - NEVER type text without first clicking the target input field
-- NEVER use the Start menu / search if the app icon is on the taskbar
+- NEVER use the Start menu / search if the app icon is on the {app_bar}
 - NEVER close, minimize, or move windows you don't need to touch
 - NEVER take more than 3 actions to reach an input field already visible on screen
-- NEVER repeat the same failed action — try a different approach
-- NEVER request a "screenshot" action — you already receive a fresh screenshot
-  after every action automatically
+- NEVER repeat the same failed action -- try a different approach
+- NEVER request a "screenshot" action -- you receive one automatically after every action
+"""
 
+_PROMPT_SOM = """\
 ================================================================
-CLICKING UI ELEMENTS — ACCESSIBILITY-FIRST (SET-OF-MARK)
+CLICKING UI ELEMENTS -- ACCESSIBILITY-FIRST (SET-OF-MARK)
 ================================================================
 Each tool result includes an INTERACTIVE ELEMENTS list showing clickable
-UI elements discovered via the Windows accessibility API. Each element has:
+UI elements discovered via accessibility APIs. Each element has:
   [id] Type: "Name" at (x,y)
 
-CRITICAL: The screenshot you receive has been dynamically overlaid with
-Set-of-Mark visual labels. You will see semi-transparent black boxes with
-white numbers drawn directly over interactive elements on the screen.
-These numbers correspond EXACTLY to the [id] in the INTERACTIVE ELEMENTS list!
+The screenshot has Set-of-Mark visual labels overlaid -- semi-transparent black
+boxes with white numbers drawn over interactive elements. These numbers correspond
+EXACTLY to the [id] in the INTERACTIVE ELEMENTS list.
 
 ALWAYS PREFER using click_element over coordinate-based clicks:
   action="click_element", element_id=<id>
 
-By matching the numbers you see visually on the screenshot with the IDs in
-the list, you can click with 100% precision. This is FAR MORE RELIABLE than
-guessing pixel coordinates.
-
 Use coordinate-based clicks (left_click) ONLY when:
   - The target is NOT in the INTERACTIVE ELEMENTS list
-  - The visual label is missing or placed incorrectly
   - You need to click a specific pixel location (e.g., inside a canvas)
+"""
 
-Example workflow for Telegram:
-  1. See a visual label [5] over the search bar in the screenshot.
-  2. Verify in the text: [5] Edit: "Search" at (556,83)
-  3. Use action="click_element", element_id=5
-  4. Then action="type", text="Agent Intelligence"
-  5. Wait for results, find the matching element visual label, click_element again
-
+_PROMPT_FINISHING = """\
 ================================================================
 FINISHING THE TASK
 ================================================================
-When you have successfully completed the user's explicit objective, you MUST STOP immediately.
-Do NOT attempt to "clean up" the workspace, close tabs, return to a home page, or look for secondary tasks unless explicitly instructed by the user.
-To finish the task, simply provide your final text response to the user and DO NOT output any tool calls. As soon as you reply with plain text and NO tool execution blocks, the task will be marked complete.
+When you have completed the user's objective, STOP immediately.
+Do NOT clean up, close tabs, or look for secondary tasks.
+Reply with a text summary and NO tool calls to finish.
 
 INFORMATION EXTRACTION TASKS:
-If the user asks you to summarize, extract, read, look up, or find information from a website or application, you MUST:
-1. Navigate to the content (click the right article, page, or section)
-2. READ the content from the screen — use the INTERACTIVE ELEMENTS text and the screenshot
+If asked to summarize, extract, or find information, you MUST:
+1. Navigate to the content
+2. READ the content from the screen
 3. Provide a detailed text summary as your final response
-Do NOT stop after just navigating to the site. You must click through to the specific content and read it before finishing.
+Do NOT stop after just navigating -- read the content first.
+"""
 
+_PROMPT_CORE_RULES = """\
 ================================================================
 CORE RULES
 ================================================================
 1. ONE action per turn. Examine the result screenshot before the next action.
 2. PREFER click_element over coordinate clicks for ALL named UI elements.
-3. Be efficient — take the FEWEST actions possible to complete the task.
-4. In [VERIFY], if the screenshot looks the same or expected change didn't happen, your action FAILED. Do NOT repeat it. Try a DIFFERENT approach immediately.
+3. Be efficient -- take the FEWEST actions possible to complete the task.
+4. If the screenshot looks the same after your action, it FAILED. Try a DIFFERENT approach.
 5. When the task is complete, respond with a text summary (no tool call).
 6. TRUST the SYSTEM INFO and INTERACTIVE ELEMENTS over what you see in screenshots.
+"""
 
+_PROMPT_SCREENSHOT = """\
 ================================================================
 SCREENSHOT
 ================================================================
 Each turn you receive ONE full-screen screenshot at {scaled_width}x{scaled_height}.
 The screenshot is ENRICHED with Set-of-Mark visual labels (numbered boxes).
-ALL coordinate-based actions (clicks, drags) use coordinates from this image,
-but you should prefer using `click_element` with the visual label IDs whenever possible!
+ALL coordinate-based actions use coordinates from this image,
+but prefer using `click_element` with the visual label IDs whenever possible!
 """
+
+# Profile -> sections mapping. Each profile includes the sections appropriate
+# for that level of model guidance. All profiles include preamble and screenshot.
+_SCAFFOLDING_PROFILES = {
+    "full": [
+        _PROMPT_PREAMBLE,
+        _PROMPT_REASONING,
+        _PROMPT_DECISION_TREES,
+        _PROMPT_SYSTEM_INFO,
+        _PROMPT_ANTI_PATTERNS,
+        _PROMPT_SOM,
+        _PROMPT_FINISHING,
+        _PROMPT_CORE_RULES,
+        _PROMPT_SCREENSHOT,
+    ],
+    "standard": [
+        _PROMPT_PREAMBLE,
+        _PROMPT_REASONING,
+        _PROMPT_SYSTEM_INFO,
+        _PROMPT_SOM,
+        _PROMPT_FINISHING,
+        _PROMPT_CORE_RULES,
+        _PROMPT_SCREENSHOT,
+    ],
+    "minimal": [
+        _PROMPT_PREAMBLE,
+        _PROMPT_SOM,
+        _PROMPT_CORE_RULES,
+        _PROMPT_SCREENSHOT,
+    ],
+    "raw": [
+        _PROMPT_PREAMBLE,
+        _PROMPT_SCREENSHOT,
+    ],
+}
+
+
+def _build_system_prompt(profile: str, **fmt_kwargs) -> str:
+    """Assemble system prompt from profile sections."""
+    sections = _SCAFFOLDING_PROFILES.get(profile, _SCAFFOLDING_PROFILES["standard"])
+    parts = []
+    for section in sections:
+        try:
+            parts.append(section.format(**fmt_kwargs))
+        except KeyError:
+            # Section uses format keys not relevant to this profile — include as-is
+            parts.append(section)
+    return "\n".join(parts)
+
+# Platform abstraction — auto-selects Windows/macOS/Linux backend
+from clawbridge.platform import platform as _plat
 
 # Key combos that can open shells, lock the machine, or cause system-level damage.
 # Checked in both computer-use engine and replay paths.
-# Values are pre-sorted alphabetically so _is_blocked_key_combo() can match
-# regardless of input order (e.g. "Win+R" and "r+win" both match).
-_BLOCKED_KEY_COMBOS = frozenset({
-    "r+win",              # Run dialog -> arbitrary commands
-    "win+x",              # Power user menu -> terminal access
-    "alt+ctrl+delete",    # Security screen
-    "alt+ctrl+del",       # Security screen (short form)
-    "ctrl+esc+shift",     # Task Manager
-    "l+win",              # Lock workstation
-    "pause+win",          # System properties
-    "alt+f4",             # Close window (can close critical apps)
-})
+# Platform-specific: Windows blocks Win+R etc., macOS blocks Cmd+Q etc.
+_BLOCKED_KEY_COMBOS = _plat.get_blocked_key_combos()
 
 def _is_blocked_key_combo(keys_str: str) -> bool:
     """Check if a key combo string (e.g. 'win+r', 'ctrl+alt+delete') is blocked.
@@ -2952,14 +3114,9 @@ class ComputerUseEngine(EngineBase):
             self._status = EngineStatus.NOT_INSTALLED
             logging.warning(f"computer-use deps not installed: {e}")
             return
-        if sys.platform == "win32":
-            try:
-                import ctypes as _ct
-                _ct.windll.user32.SetProcessDPIAware()
-            except Exception:
-                pass
-        elif sys.platform == "darwin":
-            logging.info("computer-use engine: macOS mode — Accessibility and Screen Recording permissions required")
+        _plat.set_dpi_aware()
+        if sys.platform == "darwin":
+            logging.info("computer-use engine: macOS mode -- Accessibility and Screen Recording permissions required")
         try:
             self._screen_width, self._screen_height = pyautogui.size()
         except Exception as e:
@@ -3144,21 +3301,13 @@ class ComputerUseEngine(EngineBase):
 
     async def _get_foreground_window_rect(self) -> tuple[int, int, int, int] | None:
         """Get the foreground window bounding box in raw screen pixels."""
-        if sys.platform != "win32":
-            return None  # Window crop only available on Windows
         loop = asyncio.get_event_loop()
         def _get():
-            import ctypes
-            class RECT(ctypes.Structure):
-                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
             try:
-                user32 = ctypes.windll.user32
-                hwnd = user32.GetForegroundWindow()
-                if not hwnd: return None
-                rect = RECT()
-                if not user32.GetWindowRect(hwnd, ctypes.byref(rect)): return None
-                left, top = max(0, rect.left), max(0, rect.top)
-                right, bottom = min(self._screen_width, rect.right), min(self._screen_height, rect.bottom)
+                raw = _plat.get_foreground_window_rect()
+                if not raw: return None
+                left, top = max(0, raw[0]), max(0, raw[1])
+                right, bottom = min(self._screen_width, raw[2]), min(self._screen_height, raw[3])
                 w, h = right - left, bottom - top
                 if w <= 0 or h <= 0: return None
                 if w >= self._screen_width * 0.95 and h >= self._screen_height * 0.95: return None
@@ -3198,83 +3347,35 @@ class ComputerUseEngine(EngineBase):
         except Exception: return None
 
     async def _get_ui_elements(self) -> list[dict]:
-        """Enumerate interactive UI elements from the foreground window using Windows UIA."""
-        if sys.platform != "win32":
-            return []  # Accessibility tree only available on Windows via pywinauto
+        """Enumerate interactive UI elements from the foreground window via platform abstraction."""
         loop = asyncio.get_event_loop()
         def _enumerate():
             try:
-                import ctypes
-                from pywinauto import Desktop
-                d = Desktop(backend='uia')
-                user32 = ctypes.windll.user32
-                fg_hwnd = user32.GetForegroundWindow()
-                if not fg_hwnd:
-                    return []
-                buf = ctypes.create_unicode_buffer(512)
-                user32.GetWindowTextW(fg_hwnd, buf, 512)
-                fg_title = buf.value
-                # Find matching pywinauto window
-                target_win = None
-                for w in d.windows():
-                    try:
-                        if w.window_text() == fg_title:
-                            target_win = w
-                            break
-                    except Exception:
-                        pass
-                if not target_win:
-                    # Fallback: try partial match
-                    for w in d.windows():
-                        try:
-                            wt = w.window_text()
-                            if wt and fg_title and fg_title[:20] in wt:
-                                target_win = w
-                                break
-                        except Exception:
-                            pass
-                if not target_win:
-                    return []
-                elements = []
-                clickable_types = {'Button', 'Edit', 'MenuItem', 'ListItem', 'TabItem',
-                                   'ComboBox', 'CheckBox', 'RadioButton', 'Hyperlink',
-                                   'TreeItem', 'DataItem'}
                 _s = get_settings()
-                _max_depth = _s.computer_use_max_ui_depth
-                _max_elems = _s.computer_use_max_ui_elements
-                for c in target_win.descendants(depth=_max_depth):
-                    try:
-                        ct = c.element_info.control_type
-                        if ct not in clickable_types:
-                            continue
-                        r = c.rectangle()
-                        if r.width() < 10 or r.height() < 10:
-                            continue
-                        name = (c.window_text() or '').strip()[:80]
-                        if not name:
-                            continue
-                        # Convert to scaled coordinates
-                        cx = (r.left + r.right) // 2
-                        cy = (r.top + r.bottom) // 2
-                        # Skip elements with invalid/offscreen coordinates
-                        if cx <= 0 or cy <= 0 or cx >= self._screen_width or cy >= self._screen_height:
-                            continue
-                        # Scale if needed
-                        sx = int(cx * self._scaled_width / self._screen_width) if self._screen_width != self._scaled_width else cx
-                        sy = int(cy * self._scaled_height / self._screen_height) if self._screen_height != self._scaled_height else cy
-                        elements.append({
-                            'id': len(elements),
-                            'type': ct,
-                            'name': name,
-                            'center_x': sx,
-                            'center_y': sy,
-                            'raw_x': cx,
-                            'raw_y': cy,
-                        })
-                        if len(elements) >= _max_elems:
-                            break
-                    except Exception:
-                        pass
+                raw_tree = _plat.get_accessibility_tree(
+                    max_depth=_s.computer_use_max_ui_depth,
+                    max_elements=_s.computer_use_max_ui_elements,
+                )
+                elements = []
+                for el in raw_tree:
+                    name = el.get("name", "")
+                    if not name:
+                        continue
+                    cx = el.get("cx", 0)
+                    cy = el.get("cy", 0)
+                    if cx <= 0 or cy <= 0 or cx >= self._screen_width or cy >= self._screen_height:
+                        continue
+                    sx = int(cx * self._scaled_width / self._screen_width) if self._screen_width != self._scaled_width else cx
+                    sy = int(cy * self._scaled_height / self._screen_height) if self._screen_height != self._scaled_height else cy
+                    elements.append({
+                        'id': len(elements),
+                        'type': el.get("control_type", ""),
+                        'name': name,
+                        'center_x': sx,
+                        'center_y': sy,
+                        'raw_x': cx,
+                        'raw_y': cy,
+                    })
                 return elements
             except Exception as exc:
                 logging.debug("UI element enumeration failed: %s", exc)
@@ -3460,27 +3561,28 @@ class ComputerUseEngine(EngineBase):
             return f"dragged_{start}_to_{end}"
         elif action == "type":
             text = tool_input.get("text", "")
-            # VULN-054: Detect terminal/shell windows before typing
+            # VULN-054/VULN-106: Detect terminal/shell windows before typing
             _terminal_patterns = (
                 "cmd.exe", "powershell", "pwsh", "command prompt",
                 "windows terminal", "wt.exe", "bash", "mintty",
                 "windows powershell", "administrator:",
+                # VULN-106: Additional terminal emulators
+                "hyper", "tabby", "alacritty", "kitty", "wezterm",
+                "cmder", "conemu", "mobaxterm", "putty", "securecrt",
+                "git bash", "msys2", "cygwin", "nu shell", "nushell",
             )
             try:
-                _u32 = ctypes.windll.user32
-                _hwnd = _u32.GetForegroundWindow()
-                _buf = ctypes.create_unicode_buffer(512)
-                _u32.GetWindowTextW(_hwnd, _buf, 512)
-                _fg_title = _buf.value.lower()
-                if any(p in _fg_title for p in _terminal_patterns):
-                    logging.warning("Blocked type action in terminal window: %s", _buf.value)
-                    return f"error: typing into a terminal/shell window ('{_buf.value}') is blocked for safety. Use click_element or key actions to interact with the target application instead."
+                _fg_title = _plat.get_foreground_window_title().lower()
+                if _fg_title and any(p in _fg_title for p in _terminal_patterns):
+                    logging.warning("Blocked type action in terminal window: %s", _fg_title)
+                    return f"error: typing into a terminal/shell window ('{_fg_title}') is blocked for safety. Use click_element or key actions to interact with the target application instead."
             except Exception:
                 pass
+            _paste_mod = "command" if sys.platform == "darwin" else "ctrl"
             def _t():
                 if text.isascii(): pyautogui.write(text, interval=0.02)
                 else:
-                    import pyperclip; pyperclip.copy(text); pyautogui.hotkey("ctrl", "v")
+                    import pyperclip; pyperclip.copy(text); pyautogui.hotkey(_paste_mod, "v")
             await loop.run_in_executor(None, _t)
             return f"typed_{len(text)}_chars"
         elif action == "key":
@@ -3623,13 +3725,9 @@ class ComputerUseEngine(EngineBase):
                             lines.append(f"  - {w}")
                 except Exception: pass
                 try:
-                    import ctypes
-                    user32 = ctypes.windll.user32
-                    hwnd = user32.GetForegroundWindow()
-                    buf = ctypes.create_unicode_buffer(512)
-                    user32.GetWindowTextW(hwnd, buf, 512)
-                    if buf.value:
-                        lines.append(f"\nFOREGROUND WINDOW: {buf.value}")
+                    fg_title = _plat.get_foreground_window_title()
+                    if fg_title:
+                        lines.append(f"\nFOREGROUND WINDOW: {fg_title}")
                 except Exception: pass
                 try:
                     ps2 = "Get-Process -Name Telegram,Discord,Slack,Spotify,chrome,msedge,firefox,Code,Telegram.Desktop -ErrorAction SilentlyContinue | Select-Object ProcessName -Unique | Format-Table -HideTableHeaders"
@@ -3639,23 +3737,18 @@ class ComputerUseEngine(EngineBase):
                         lines.append(f"\nRUNNING APPS: {', '.join(apps)}")
                 except Exception: pass
             elif sys.platform == "darwin":
-                # macOS: use AppleScript and ps for screen description
+                # macOS: use platform abstraction + ps
                 try:
-                    out = _sp.check_output(["osascript", "-e",
-                        'tell application "System Events" to get name of every process whose visible is true'],
-                        timeout=3, text=True)
-                    apps = [a.strip() for a in out.strip().split(", ") if a.strip()]
-                    if apps:
-                        lines.append("VISIBLE APPS:")
-                        for a in apps[:15]:
-                            lines.append(f"  - {a}")
+                    windows = _plat.enumerate_visible_windows()
+                    if windows:
+                        lines.append("VISIBLE WINDOWS:")
+                        for w in windows[:15]:
+                            lines.append(f"  - {w.get('process_name', '')} - {w.get('title', '')}")
                 except Exception: pass
                 try:
-                    out = _sp.check_output(["osascript", "-e",
-                        'tell application "System Events" to get name of first application process whose frontmost is true'],
-                        timeout=3, text=True).strip()
-                    if out:
-                        lines.append(f"\nFRONTMOST APP: {out}")
+                    fg_name = _plat.get_foreground_process_name()
+                    if fg_name:
+                        lines.append(f"\nFRONTMOST APP: {fg_name}")
                 except Exception: pass
                 try:
                     out = _sp.check_output(["ps", "aux"], timeout=3, text=True)
@@ -3681,93 +3774,16 @@ class ComputerUseEngine(EngineBase):
     @staticmethod
     def _get_fg_window_rect() -> tuple[int, int, int, int] | None:
         """Get the foreground window's bounding rect as (left, top, right, bottom)."""
-        try:
-            import ctypes
-            import ctypes.wintypes
-            user32 = ctypes.windll.user32
-            hwnd = user32.GetForegroundWindow()
-            if hwnd:
-                rect = ctypes.wintypes.RECT()
-                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                    return (rect.left, rect.top, rect.right, rect.bottom)
-        except Exception:
-            pass
-        return None
+        return _plat.get_foreground_window_rect()
 
     async def _bring_app_to_foreground(self, app_keyword: str) -> bool:
         """Try to bring a window matching app_keyword to the foreground. Returns True if successful."""
         loop = asyncio.get_event_loop()
         def _focus():
-            if sys.platform == "darwin":
-                # macOS: use AppleScript to activate app
-                import subprocess as _sp
-                def _sanitize_as(s):
-                    """Strip chars dangerous in AppleScript string literals."""
-                    return s.replace('\\', '').replace('"', '').replace("'", "")
-                safe_kw = _sanitize_as(app_keyword)
-                if not safe_kw:
-                    return False
-                try:
-                    _sp.check_call(["osascript", "-e",
-                        f'tell application "{safe_kw}" to activate'], timeout=3)
-                    import time as _t; _t.sleep(0.5)
-                    return True
-                except Exception:
-                    # Try matching by process name
-                    try:
-                        out = _sp.check_output(["osascript", "-e",
-                            'tell application "System Events" to get name of every process whose visible is true'],
-                            timeout=3, text=True)
-                        for name in out.strip().split(", "):
-                            if safe_kw.lower() in name.strip().lower():
-                                safe_name = _sanitize_as(name.strip())
-                                _sp.check_call(["osascript", "-e",
-                                    f'tell application "{safe_name}" to activate'], timeout=3)
-                                import time as _t; _t.sleep(0.5)
-                                return True
-                    except Exception:
-                        pass
-                    return False
-            # Windows: ctypes EnumWindows (fast) with robust activation
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
-                SW_RESTORE = 9
-                kw_lower = app_keyword.lower()
-                target_hwnd = [None]
-
-                _is_browser_search = kw_lower == "browser"
-
-                @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-                def cb(hwnd, _):
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buf = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buf, length + 1)
-                        title = buf.value.lower()
-                        if kw_lower in title:
-                            target_hwnd[0] = hwnd
-                            return False  # stop enumerating
-                        # When searching for "Browser", match known browser title suffixes
-                        if _is_browser_search and any(title.endswith(s) for s in self._BROWSER_TITLE_SUFFIXES):
-                            target_hwnd[0] = hwnd
-                            return False
-                    return True
-                user32.EnumWindows(cb, 0)
-
-                if target_hwnd[0]:
-                    hwnd = target_hwnd[0]
-                    user32.ShowWindow(hwnd, SW_RESTORE)
-                    user32.BringWindowToTop(hwnd)
-                    user32.SetForegroundWindow(hwnd)
-                    # Alt key triggers Windows activation flow for UWP apps
-                    import pyautogui as _pag
-                    _pag.press('alt')
-                    import time as _t; _t.sleep(0.5)
-                    return True
-            except Exception as exc:
-                logging.debug("Failed to bring %s to foreground: %s", app_keyword, exc)
-            return False
+            result = _plat.bring_app_to_foreground(app_keyword)
+            if result:
+                import time as _t; _t.sleep(0.5)
+            return result
         try:
             return await loop.run_in_executor(None, _focus)
         except Exception:
@@ -3779,44 +3795,22 @@ class ComputerUseEngine(EngineBase):
 
     async def _verify_focus(self, app_keyword: str) -> tuple[bool, str]:
         """Verify the foreground window matches app_keyword. Returns (matched, actual_title)."""
-        if sys.platform != "win32":
-            return (True, "")  # Skip verification on non-Windows
         loop = asyncio.get_event_loop()
         def _check():
-            try:
-                import ctypes
-                hwnd = ctypes.windll.user32.GetForegroundWindow()
-                buf = ctypes.create_unicode_buffer(256)
-                ctypes.windll.user32.GetWindowTextW(hwnd, buf, 256)
-                actual_title = buf.value
+            matched, actual_title = _plat.verify_focus(app_keyword)
+            if matched:
+                return (True, actual_title)
+            # Browser-aware check: when looking for "Browser", also accept
+            # known browser title suffixes / process names
+            if app_keyword.lower() == "browser" and actual_title:
                 title_lower = actual_title.lower()
-                # Standard check: keyword appears in the title
-                if app_keyword.lower() in title_lower:
+                if any(title_lower.endswith(s) for s in self._BROWSER_TITLE_SUFFIXES):
                     return (True, actual_title)
-                # Browser-aware check: when looking for "Browser", accept any
-                # window whose title ends with a known browser name or whose
-                # process is a known browser executable.
-                if app_keyword.lower() == "browser":
-                    if any(title_lower.endswith(s) for s in self._BROWSER_TITLE_SUFFIXES):
-                        return (True, actual_title)
-                    # Fallback: check process name via pid
-                    try:
-                        pid = ctypes.c_ulong()
-                        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                        h = ctypes.windll.kernel32.OpenProcess(0x0400 | 0x0010, False, pid.value)  # PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
-                        if h:
-                            name_buf = ctypes.create_unicode_buffer(260)
-                            size = ctypes.c_ulong(260)
-                            ctypes.windll.kernel32.QueryFullProcessImageNameW(h, 0, name_buf, ctypes.byref(size))
-                            ctypes.windll.kernel32.CloseHandle(h)
-                            proc_name = name_buf.value.rsplit("\\", 1)[-1].lower()
-                            if proc_name in self._BROWSER_PROCESS_NAMES:
-                                return (True, actual_title)
-                    except Exception:
-                        pass
-                return (False, actual_title)
-            except Exception:
-                return (False, "")
+                # Check process name
+                proc = _plat.get_foreground_process_name().lower()
+                if proc and any(b in proc for b in self._BROWSER_PROCESS_NAMES):
+                    return (True, actual_title)
+            return (False, actual_title)
         try:
             return await loop.run_in_executor(None, _check)
         except Exception:
@@ -3837,7 +3831,7 @@ class ComputerUseEngine(EngineBase):
 
     async def _detect_redirect(self, expected_domain: str | None) -> str | None:
         """Check if the browser navigated to an unexpected domain (ad redirect). Returns warning or None."""
-        if not expected_domain or sys.platform != "win32":
+        if not expected_domain:
             return None
         _, actual_title = await self._verify_focus("browser")
         if not actual_title:
@@ -3882,43 +3876,90 @@ class ComputerUseEngine(EngineBase):
 
     async def _mechanical_pre_navigate(self, prompt: str, target_app: str | None, focused: bool) -> tuple[bool, str, str | None]:
         """Attempt deterministic zero-AI web navigation.
-        
+
+        When browser_mode is 'cdp', navigates via the CDP Chrome instance
+        (the one launched with user logins) instead of the system default browser.
+
         Returns:
             (success, url_navigated, search_query_used)
         """
         import pyautogui as _pag
         import webbrowser
-        
+
         url = _extract_navigation_target(prompt)
         if not url:
             return False, "", None
-            
+
         # Verify it's a browser intent
         _browser_names = ("chrome", "msedge", "firefox", "brave", "browser")
         if target_app and target_app.lower() not in _browser_names:
             logging.debug("Pre-navigation skipped: target_app %s is not a browser", target_app)
             return False, "", None
-            
+
+        nav_url = url if url.startswith("http") else f"https://{url}"
+        _s = get_settings()
+
         try:
+            _mod = "command" if sys.platform == "darwin" else "ctrl"
             if focused:
                 # Browser is already open and focused, just use hotkeys
-                logging.info("Pre-navigation: Browser active, using Ctrl+N macro to %s", url)
-                _pag.hotkey("ctrl", "n")
+                logging.info("Pre-navigation: Browser active, using %s+N macro to %s", _mod.title(), url)
+                _pag.hotkey(_mod, "n")
                 await asyncio.sleep(1.0)
-                _pag.hotkey("ctrl", "l")
+                _pag.hotkey(_mod, "l")
                 await asyncio.sleep(0.3)
                 _pag.write(url, interval=0.01)
                 await asyncio.sleep(0.2)
                 _pag.press("enter")
+            elif _s.browser_mode == "cdp":
+                # Navigate via CDP Chrome (the instance launched with user logins)
+                cdp_base = _s.browser_cdp_url or "http://localhost:9222"
+                logging.info("Pre-navigation: Opening %s via CDP (%s)", nav_url, cdp_base)
+                try:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=5) as _http:
+                        from urllib.parse import quote
+                        r = await _http.put(f"{cdp_base}/json/new?{quote(nav_url, safe='')}")
+                        if r.status_code != 200:
+                            logging.warning("Pre-navigation: CDP /json/new returned %d, falling back", r.status_code)
+                            webbrowser.open_new(nav_url)
+                except Exception as e:
+                    logging.warning("Pre-navigation: CDP unreachable (%s), falling back to webbrowser", e)
+                    webbrowser.open_new(nav_url)
+                # Bring CDP Chrome window to foreground
+                await asyncio.sleep(1.5)
+                focused_ok = await self._bring_app_to_foreground("chrome")
+                if not focused_ok:
+                    _pag.hotkey("alt", "tab")
+                    await asyncio.sleep(0.5)
             else:
-                # Let the OS gracefully handle finding the default browser and opening a new tab
+                # Default / user_data_dir: let the OS open the default browser
                 logging.info("Pre-navigation: Calling OS webbrowser.open_new(%s)", url)
-                webbrowser.open_new(url)
-                
+                webbrowser.open_new(nav_url)
+                # Wait for browser to open, then force the correct window to foreground
+                await asyncio.sleep(2.0)
+                # Focus by domain name so we get the target window, not the dashboard
+                try:
+                    from urllib.parse import urlparse
+                    _parsed = urlparse(nav_url)
+                    domain = _parsed.hostname or ""
+                    if domain.startswith("www."):
+                        domain = domain[4:]
+                    # Use the short domain name (e.g., "espn" from "espn.com")
+                    focus_keyword = domain.split(".")[0] if domain else "browser"
+                    focused_ok = await self._bring_app_to_foreground(focus_keyword)
+                    if not focused_ok:
+                        # Fallback: try Alt+Tab to get to the most recent window
+                        logging.info("Pre-navigation: domain focus failed for '%s', trying Alt+Tab", focus_keyword)
+                        _pag.hotkey("alt", "tab")
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    logging.debug("Pre-navigation focus failed: %s", e)
+
             # Allow time for page to load
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(1.5)
             return True, url, None
-            
+
         except Exception as e:
             logging.error("Pre-navigation failed: %s", e)
             return False, "", None
@@ -4111,95 +4152,17 @@ class ComputerUseEngine(EngineBase):
         """Focus a window by its (partial) title."""
         loop = asyncio.get_running_loop()
         def _focus():
-            if sys.platform == "darwin":
-                import subprocess as _sp
-                try:
-                    app_name = title.split(" - ")[0].strip() if " - " in title else title
-                    safe_name = app_name.replace('\\', '').replace('"', '').replace("'", "")
-                    if not safe_name:
-                        return False
-                    _sp.check_call(["osascript", "-e",
-                        f'tell application "{safe_name}" to activate'], timeout=3)
-                    return True
-                except Exception:
-                    return False
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
-                title_lower = title.lower()
-                prefix = title.split(" - ")[0].lower()
-                target_hwnd = [None]
-                @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-                def cb(hwnd, _):
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buf = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buf, length + 1)
-                        wt = buf.value.lower()
-                        if wt and (title_lower in wt or wt in title_lower or prefix in wt):
-                            target_hwnd[0] = hwnd
-                            return False  # stop enumerating
-                    return True
-                user32.EnumWindows(cb, 0)
-                if target_hwnd[0]:
-                    hwnd = target_hwnd[0]
-                    # Skip if already the foreground window (avoids flicker
-                    # and breaking ephemeral overlays like Windows Search).
-                    if user32.GetForegroundWindow() == hwnd:
-                        return True
-                    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-                    user32.BringWindowToTop(hwnd)
-                    user32.SetForegroundWindow(hwnd)
-                    # WaitForInputIdle: block until the target process
-                    # finishes processing input — the pywinauto pattern.
-                    # Ensures the UI is truly ready before we interact.
-                    try:
-                        kernel32 = ctypes.windll.kernel32
-                        pid = ctypes.c_ulong(0)
-                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                        hProc = kernel32.OpenProcess(0x00100000, 0, pid.value)  # SYNCHRONIZE
-                        if hProc:
-                            user32.WaitForInputIdle(hProc, 2000)
-                            kernel32.CloseHandle(hProc)
-                    except Exception:
-                        pass
-                    return True
-            except Exception:
-                pass
-            return False
+            return _plat.focus_window_by_title(title)
         try:
             return await loop.run_in_executor(None, _focus)
         except Exception:
             return False
 
     async def _check_window_exists(self, title: str) -> bool:
-        """Check if a window with the given title exists WITHOUT stealing focus.
-        Uses native ctypes EnumWindows (~15ms) instead of pywinauto UIA (can take minutes)."""
+        """Check if a window with the given title exists WITHOUT stealing focus."""
         loop = asyncio.get_running_loop()
         def _check():
-            if sys.platform == "darwin":
-                return False
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
-                found = [False]
-                title_lower = title.lower()
-                prefix = title.split(" - ")[0].lower()
-                @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-                def cb(hwnd, _):
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buf = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buf, length + 1)
-                        wt = buf.value.lower()
-                        if wt and (title_lower in wt or wt in title_lower or prefix in wt):
-                            found[0] = True
-                            return False  # stop enumerating
-                    return True
-                user32.EnumWindows(cb, 0)
-                return found[0]
-            except Exception:
-                return False
+            return _plat.check_window_exists(title)
         try:
             return await loop.run_in_executor(None, _check)
         except Exception:
@@ -4209,14 +4172,7 @@ class ComputerUseEngine(EngineBase):
         """Get the foreground window title (fast, ~1ms)."""
         loop = asyncio.get_running_loop()
         def _get():
-            try:
-                import ctypes
-                buf = ctypes.create_unicode_buffer(512)
-                ctypes.windll.user32.GetWindowTextW(
-                    ctypes.windll.user32.GetForegroundWindow(), buf, 512)
-                return buf.value
-            except Exception:
-                return ""
+            return _plat.get_foreground_window_title()
         try:
             return await loop.run_in_executor(None, _get)
         except Exception:
@@ -4325,17 +4281,8 @@ class ComputerUseEngine(EngineBase):
             if expected_title and expected_title != curr_title:
                 # Window should change — verify it did
                 try:
-                    import ctypes
                     loop = asyncio.get_running_loop()
-                    def _get_title():
-                        user32 = ctypes.windll.user32
-                        buf = ctypes.create_unicode_buffer(512)
-                        hwnd = user32.GetForegroundWindow()
-                        if hwnd:
-                            user32.GetWindowTextW(hwnd, buf, 512)
-                            return buf.value
-                        return ""
-                    actual_title = await loop.run_in_executor(None, _get_title)
+                    actual_title = await loop.run_in_executor(None, _plat.get_foreground_window_title)
                     if expected_title in actual_title or actual_title in expected_title:
                         return True
                     # Title mismatch — step might have failed
@@ -4719,11 +4666,7 @@ class ComputerUseEngine(EngineBase):
                                             _dialog_appeared = False
                                             for _ in range(20):  # 4s max
                                                 try:
-                                                    import ctypes as _ct
-                                                    _buf = _ct.create_unicode_buffer(512)
-                                                    _ct.windll.user32.GetWindowTextW(
-                                                        _ct.windll.user32.GetForegroundWindow(), _buf, 512)
-                                                    _fg = _buf.value.lower()
+                                                    _fg = _plat.get_foreground_window_title().lower()
                                                     if _fg and _aw_norm in _fg and _hw_norm not in _fg:
                                                         _dialog_appeared = True
                                                         break
@@ -4821,14 +4764,8 @@ class ComputerUseEngine(EngineBase):
                 _skip_drift = atype == "key" and action_dict.get("key", "") in _focus_changing_keys
                 if success and atype in ("type", "key") and not _skip_drift and action_dict.get("window_title"):
                     recorded_win = action_dict["window_title"]
-                    def _check_fg_title():
-                        import ctypes
-                        buf = ctypes.create_unicode_buffer(512)
-                        hwnd = ctypes.windll.user32.GetForegroundWindow()
-                        ctypes.windll.user32.GetWindowTextW(hwnd, buf, 512)
-                        return buf.value
                     loop = asyncio.get_event_loop()
-                    fg_title = await loop.run_in_executor(None, _check_fg_title)
+                    fg_title = await loop.run_in_executor(None, _plat.get_foreground_window_title)
                     if fg_title and recorded_win.lower() not in fg_title.lower() and fg_title.lower() not in recorded_win.lower():
                         logging.warning("Replay step %d: focus drift after %s (expected '%s', got '%s') - continuing mechanically",
                                         i + 1, atype, recorded_win[:40], fg_title[:40])
@@ -5056,11 +4993,7 @@ class ComputerUseEngine(EngineBase):
                     recorded_title = action.get("window_title", "")
                     if recorded_title:
                         try:
-                            import ctypes
-                            buf = ctypes.create_unicode_buffer(512)
-                            ctypes.windll.user32.GetWindowTextW(
-                                ctypes.windll.user32.GetForegroundWindow(), buf, 512)
-                            fg_title = buf.value
+                            fg_title = _plat.get_foreground_window_title()
                         except Exception:
                             fg_title = ""
                         if fg_title and recorded_title.lower() not in fg_title.lower() and fg_title.lower() not in recorded_title.lower():
@@ -5285,24 +5218,37 @@ class ComputerUseEngine(EngineBase):
                             logging.warning("Pre-action: programmatic launch failed or window title didn't match")
                             
             # ── Mechanical pre-navigation for web tasks (zero AI cost) ──
+            # Always run — it's free and prevents wasted AI steps on navigation
+            _profile = settings.scaffolding_profile
             pre_nav_success, pre_nav_url, pre_nav_query = False, "", None
             if not self._cancel_requested:
                 pre_nav_success, pre_nav_url, pre_nav_query = await self._mechanical_pre_navigate(
                     task.prompt, target_app, focused
                 )
-                if pre_nav_success and self.on_step:
-                    # Update active app to generic browser for context
-                    target_app = "Browser" 
+                if pre_nav_success:
+                    # Use domain-based keyword for focus management
+                    # "youtube.com" -> "youtube" matches "YouTube - Google Chrome" title
+                    # Generic "Browser" keyword can't recover focus because no window
+                    # title or process name contains "browser"
+                    try:
+                        from urllib.parse import urlparse as _pnparse
+                        _pnh = _pnparse(pre_nav_url if "://" in pre_nav_url else f"https://{pre_nav_url}").hostname or ""
+                        if _pnh.startswith("www."):
+                            _pnh = _pnh[4:]
+                        target_app = _pnh.split(".")[0] if _pnh else "Browser"
+                    except Exception:
+                        target_app = "Browser"
                     focused = True
                     # Let the dashboard know we saved them time
-                    try:
-                        self.on_step({
-                            "action": "mechanical_navigation",
-                            "input": {"url": pre_nav_url},
-                            "timestamp": time.time(),
-                            "success": True
-                        })
-                    except Exception: pass
+                    if self.on_step:
+                        try:
+                            self.on_step({
+                                "action": "mechanical_navigation",
+                                "input": {"url": pre_nav_url},
+                                "timestamp": time.time(),
+                                "success": True
+                            })
+                        except Exception: pass
 
             # Extract expected domain for redirect detection
             _nav_domain = None
@@ -5321,11 +5267,14 @@ class ComputerUseEngine(EngineBase):
             self._last_ui_elements = await self._get_ui_elements()
             
             # Vision Fallback for blind applications
-            if len(self._last_ui_elements) < 5:
+            # Threshold varies by profile: full/standard=5, minimal=3, raw=disabled
+            _vision_thresholds = {"full": 5, "standard": 5, "minimal": 3, "raw": 0}
+            _vt = _vision_thresholds.get(_profile, 5)
+            if _vt > 0 and len(self._last_ui_elements) < _vt:
                 raw_ss = await self._take_screenshot(force_full=True)
                 vision_elems = await self._get_ui_elements_vision(raw_ss)
                 self._last_ui_elements = self._merge_ui_elements(self._last_ui_elements, vision_elems)
-            
+
             ui_text = self._format_ui_elements(self._last_ui_elements)
 
             init_ss = await self._take_screenshot(force_full=True, draw_elements=self._last_ui_elements)  # Full screen for initial overview
@@ -5347,7 +5296,18 @@ class ComputerUseEngine(EngineBase):
             func_tool = [{"name": "computer", "description": f"Control the computer screen ({self._scaled_width}x{self._scaled_height}). Returns a screenshot and a list of interactive UI elements after every action. PREFER click_element over coordinate-based clicks for buttons, fields, and other named UI elements.", "input_schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["screenshot", "mouse_move", "left_click", "right_click", "double_click", "middle_click", "triple_click", "left_click_drag", "left_mouse_down", "left_mouse_up", "type", "key", "hold_key", "cursor_position", "scroll", "wait", "click_element"], "description": "The action to perform. Use 'click_element' with 'element_id' to click a UI element by its ID from the INTERACTIVE ELEMENTS list — this is MORE RELIABLE than coordinate-based clicks."}, "coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] pixel coordinates for mouse actions (not needed for click_element)"}, "start_coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] start coordinates for drag"}, "text": {"type": "string", "description": "Text to type, key combo like 'ctrl+c', or modifier key for click (shift/ctrl/alt)"}, "scroll_direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"}, "scroll_amount": {"type": "integer", "description": "Number of scroll clicks (default 3)"}, "amount": {"type": "integer", "description": "Legacy scroll amount (prefer scroll_direction+scroll_amount)"}, "duration": {"type": "number", "description": "Duration in seconds for hold_key or wait"}, "element_id": {"type": "integer", "description": "ID of the UI element to click (from the INTERACTIVE ELEMENTS list). Use with action='click_element'."}}, "required": ["action"]}}]
             tools = native_tool if not self._is_openrouter else func_tool
             _pname = "Windows PC" if sys.platform == "win32" else "macOS computer" if sys.platform == "darwin" else "Linux computer"
-            sys_prompt_text = SYSTEM_PROMPT_TEMPLATE.format(scaled_width=self._scaled_width, scaled_height=self._scaled_height, platform_name=_pname)
+            _mod_key = "Cmd" if sys.platform == "darwin" else "Ctrl"
+            _app_bar = "Dock" if sys.platform == "darwin" else "taskbar"
+            sys_prompt_text = _build_system_prompt(
+                _profile,
+                scaled_width=self._scaled_width,
+                scaled_height=self._scaled_height,
+                platform_name=_pname,
+                mod_key=_mod_key,
+                app_bar=_app_bar,
+                app_bar_upper=_app_bar.upper(),
+                search_key="Cmd+Space" if sys.platform == "darwin" else "Windows",
+            )
             # ── Inject personality/memory context into system prompt ─────
             personality_ctx = getattr(task, '_personality_context', '')
             if personality_ctx:
@@ -5360,13 +5320,13 @@ class ComputerUseEngine(EngineBase):
                 sys_prompt = sys_prompt_text
             ctx = ""
             if target_app and focused:
-                ctx += f"IMPORTANT: {target_app} has ALREADY been brought to the foreground for you. It is the active window. Do NOT click the taskbar or try to switch to it — just interact with its UI elements directly.\n\n"
+                ctx += f"IMPORTANT: {target_app} has ALREADY been brought to the foreground for you. It is the active window. Do NOT click the {_app_bar} or try to switch to it -- just interact with its UI elements directly.\n\n"
             if pre_nav_success:
                 ctx += f"PRE-NAVIGATION COMPLETE: The browser has ALREADY been opened and navigated to {pre_nav_url}.\n"
-                ctx += "Do NOT open a new browser window. Do NOT type a URL. Do NOT press Ctrl+N or Ctrl+L.\n"
-                ctx += "The page is loaded — interact with the page content directly.\n\n"
+                ctx += f"Do NOT open a new browser window. Do NOT type a URL. Do NOT press {_mod_key}+N or {_mod_key}+L.\n"
+                ctx += "The page is loaded -- interact with the page content directly.\n\n"
             if screen_desc:
-                ctx += f"SYSTEM INFO (from Windows accessibility APIs):\n{screen_desc}\n\nUse this info to understand what is ALREADY open. If the target app is listed in VISIBLE WINDOWS or FOREGROUND WINDOW, it is already on screen — interact with it directly."
+                ctx += f"SYSTEM INFO (from accessibility APIs):\n{screen_desc}\n\nUse this info to understand what is ALREADY open. If the target app is listed in VISIBLE WINDOWS or FOREGROUND WINDOW, it is already on screen -- interact with it directly."
             # Enumerate interactive UI elements (already done before init_ss to draw bounding boxes)
             if ui_text:
                 ctx += f"\n\n{ui_text}"
@@ -5428,16 +5388,25 @@ class ComputerUseEngine(EngineBase):
                     logging.info("computer-use step %d/%d: %s%s", step_count, max_steps, action_name or "?", " (free)" if is_ss_only else "")
                     _focus_warning = ""
                     if not is_ss_only:
-                        # Re-focus target app before every action to prevent wrong-window clicks
-                        if target_app and action_name in ("left_click", "right_click", "double_click", "triple_click", "middle_click", "left_mouse_down", "left_mouse_up", "click_element", "type", "key", "hold_key"):
-                            focus_ok = await self._ensure_focus(target_app)
-                            if not focus_ok:
-                                _focus_warning = f"WARNING: Focus verification failed — the active window may NOT be {target_app}. Your action might land on the wrong window. Consider clicking on the {target_app} window first."
-                            await asyncio.sleep(0.3)
+                        # Re-focus target app before actions (profile-gated)
+                        # full/standard: every action, minimal: click actions only, raw: disabled
+                        _click_actions = ("left_click", "right_click", "double_click", "triple_click", "middle_click", "left_mouse_down", "left_mouse_up", "click_element")
+                        _all_input_actions = _click_actions + ("type", "key", "hold_key")
+                        if _profile in ("full", "standard"):
+                            if target_app and action_name in _all_input_actions:
+                                focus_ok = await self._ensure_focus(target_app)
+                                if not focus_ok:
+                                    _focus_warning = f"WARNING: Focus verification failed -- the active window may NOT be {target_app}. Your action might land on the wrong window. Consider clicking on the {target_app} window first."
+                                await asyncio.sleep(0.3)
+                        elif _profile == "minimal":
+                            if target_app and action_name in _click_actions:
+                                await self._ensure_focus(target_app)
+                                await asyncio.sleep(0.2)
+                        # raw: no focus management
                         await self._execute_action(tb.input)
                         await asyncio.sleep(delay)
-                        # Redirect detection for click actions on web tasks
-                        if _nav_domain and action_name in ("left_click", "double_click", "click_element"):
+                        # Redirect detection for click actions on web tasks (full/standard only)
+                        if _profile in ("full", "standard") and _nav_domain and action_name in ("left_click", "double_click", "click_element"):
                             _redirect_warning = await self._detect_redirect(_nav_domain)
                             if _redirect_warning:
                                 _focus_warning = (_focus_warning + "\n" + _redirect_warning) if _focus_warning else _redirect_warning
@@ -5446,12 +5415,12 @@ class ComputerUseEngine(EngineBase):
                     # Refresh UI elements after each action (BEFORE taking screenshot so we can overlay markers)
                     self._last_ui_elements = await self._get_ui_elements()
                     
-                    # Vision Fallback for blind applications
-                    if len(self._last_ui_elements) < 5:
+                    # Vision Fallback for blind applications (profile-gated threshold)
+                    if _vt > 0 and len(self._last_ui_elements) < _vt:
                         raw_ss = await self._take_screenshot()
                         vision_elems = await self._get_ui_elements_vision(raw_ss)
                         self._last_ui_elements = self._merge_ui_elements(self._last_ui_elements, vision_elems)
-                        
+
                     ui_text = self._format_ui_elements(self._last_ui_elements)
 
                     # Zoom action: crop screenshot to requested region at full resolution
@@ -5490,19 +5459,28 @@ class ComputerUseEngine(EngineBase):
                     if not is_ss_only and prev_ss and self._screenshots_similar(prev_ss, ss):
                         _consecutive_stale += 1
                         logging.warning("Stale screenshot detected at step %d (consecutive: %d)", step_count, _consecutive_stale)
-                        if _consecutive_stale == 1:
-                            rc.append({"type": "text", "text": "WARNING: The screenshot appears unchanged after your last action. The action likely had no effect. Try a DIFFERENT approach — do not repeat the same action."})
-                        elif _consecutive_stale == 2:
-                            rc.append({"type": "text", "text": "CRITICAL: Two consecutive actions had no visible effect. Your current approach is NOT working. You MUST try a fundamentally different strategy — different element, different method, or different path to the goal."})
-                        else:
-                            stuck_msg = "STUCK: %d consecutive actions with no effect. Troubleshooting checklist:\n- Is the target element actually interactable? Try a different element.\n- Is a dialog or overlay blocking? Look for popups, tooltips, or modal windows.\n- Is the app in the expected state? Maybe a previous step failed silently.\n- Try keyboard shortcuts instead of clicking.\n- Try clicking a DIFFERENT area of the same element (edges vs center)." % _consecutive_stale
-                            if _consecutive_stale == 3 and get_settings().computer_use_self_verify:
-                                diag = await self._verify_stale_action(ss, self._format_ui_elements(self._last_ui_elements), messages)
-                                if diag:
-                                    stuck_msg += "\n\nAI DIAGNOSTIC: " + diag
-                                    logging.info("Self-verify diagnostic: %s", diag[:200])
-                            rc.append({"type": "text", "text": stuck_msg})
-                        # Hard-stop: too many consecutive stale actions
+                        # Stale escalation is profile-gated:
+                        # full: full escalation (warning at 1, critical at 2, diagnostic at 3)
+                        # standard: warning at 2 only
+                        # minimal/raw: no warnings injected (hard-stop still applies)
+                        if _profile == "full":
+                            if _consecutive_stale == 1:
+                                rc.append({"type": "text", "text": "WARNING: The screenshot appears unchanged after your last action. The action likely had no effect. Try a DIFFERENT approach -- do not repeat the same action."})
+                            elif _consecutive_stale == 2:
+                                rc.append({"type": "text", "text": "CRITICAL: Two consecutive actions had no visible effect. Your current approach is NOT working. You MUST try a fundamentally different strategy -- different element, different method, or different path to the goal."})
+                            else:
+                                stuck_msg = "STUCK: %d consecutive actions with no effect. Troubleshooting checklist:\n- Is the target element actually interactable? Try a different element.\n- Is a dialog or overlay blocking? Look for popups, tooltips, or modal windows.\n- Is the app in the expected state? Maybe a previous step failed silently.\n- Try keyboard shortcuts instead of clicking.\n- Try clicking a DIFFERENT area of the same element (edges vs center)." % _consecutive_stale
+                                if _consecutive_stale == 3 and get_settings().computer_use_self_verify:
+                                    diag = await self._verify_stale_action(ss, self._format_ui_elements(self._last_ui_elements), messages)
+                                    if diag:
+                                        stuck_msg += "\n\nAI DIAGNOSTIC: " + diag
+                                        logging.info("Self-verify diagnostic: %s", diag[:200])
+                                rc.append({"type": "text", "text": stuck_msg})
+                        elif _profile == "standard":
+                            if _consecutive_stale >= 2:
+                                rc.append({"type": "text", "text": "WARNING: %d consecutive actions had no visible effect. Try a different approach." % _consecutive_stale})
+                        # minimal/raw: no stale warnings — model handles it on its own
+                        # Hard-stop always applies regardless of profile (safety)
                         _max_stale = get_settings().max_consecutive_stale
                         if _max_stale > 0 and _consecutive_stale >= _max_stale:
                             final_text = f"Task stopped: {_consecutive_stale} consecutive actions had no effect. The automation appears stuck."
@@ -5576,6 +5554,7 @@ class TaskManager:
         self._futures: dict[str, asyncio.Task] = {}
         self._broadcast: Callable | None = None
         self._counted_task_ids: set[str] = set()
+        self._emergency_stop = False
         self._load_tasks_from_db()
 
     def _load_tasks_from_db(self):
@@ -5923,9 +5902,18 @@ class TaskManager:
         if not is_web_search and prompt_lower and _URL_PATTERN.search(prompt_lower):
             is_web_search = True
 
-        if is_web_search and not is_desktop:
-            # Web tasks: prefer computer-use (controls real browser with logins/extensions)
-            # browser-use only used when explicitly selected
+        # Detect extraction intent (reading/scraping content from a page)
+        _extraction_kws = ("tell me", "what is", "what are", "get me", "show me",
+                           "find me", "list", "extract", "scrape", "read", "headline",
+                           "first", "latest", "price", "summary", "title")
+        is_extraction = prompt_lower and any(kw in prompt_lower for kw in _extraction_kws)
+
+        if is_web_search and is_extraction and not is_desktop:
+            # Web extraction: prefer browser-use (has DOM access for reading content)
+            priority = [EngineName.BROWSER_USE, EngineName.COMPUTER_USE, EngineName.OPENCLAW]
+            reason = "web extraction -> browser-use (DOM access)"
+        elif is_web_search and not is_desktop:
+            # Web interaction: prefer computer-use (controls real browser with logins/extensions)
             priority = [EngineName.COMPUTER_USE, EngineName.OPENCLAW, EngineName.BROWSER_USE]
             reason = "web task -> real browser (computer-use)"
         elif is_desktop:
@@ -6046,6 +6034,24 @@ class TaskManager:
                         pass
             except Exception as e:
                 logging.debug("LLM routing attempt failed: %s", e)
+
+            # Override LLM routing for web extraction tasks -> prefer browser-use
+            if task.engine == EngineName.COMPUTER_USE:
+                _prompt_lower = task.prompt.lower()
+                _extraction_kws = ("tell me", "what is", "what are", "get me", "show me",
+                                   "find me", "list", "extract", "scrape", "read", "headline",
+                                   "first", "latest", "price", "summary", "title")
+                _has_url = _URL_PATTERN.search(_prompt_lower)
+                _is_extraction = any(kw in _prompt_lower for kw in _extraction_kws)
+                _interactive_kws = ("log in", "login", "sign in", "signin", "sign up",
+                                    "register", "fill", "submit", "click", "type in",
+                                    "enter my", "my account", "my profile", "authenticate")
+                _is_interactive = any(kw in _prompt_lower for kw in _interactive_kws)
+                if _has_url and _is_extraction and not _is_interactive and EngineName.BROWSER_USE in self._engines:
+                    task.engine = EngineName.BROWSER_USE
+                    routing_reason = "LLM routing + extraction override -> browser-use"
+                    logging.info("Extraction override: computer_use -> browser_use for web content task")
+
         engine = self._engine_for(task.engine, prompt=task.prompt)
         if not engine:
             task.status = TaskStatus.ERROR
@@ -6173,7 +6179,8 @@ class TaskManager:
             except Exception as e:
                 logging.warning("Failed to auto-log task to memory: %s", e)
 
-        self._running -= 1
+        if self._running > 0:
+            self._running -= 1
         self._promote_pending_task()
         self._futures.pop(task.id, None)
         self._save_task_to_db(task)
@@ -6182,6 +6189,8 @@ class TaskManager:
 
     def _promote_pending_task(self) -> None:
         """Promote the first PENDING task if concurrency allows."""
+        if self._emergency_stop:
+            return
         if self._running >= get_settings().max_concurrent_tasks:
             return
         for t in list(self._tasks.values()):
@@ -6295,6 +6304,51 @@ class TaskManager:
             t.updated_at = datetime.now(timezone.utc)
         return t
 
+    async def emergency_stop_all(self) -> int:
+        """Emergency stop: block promotion, cancel ALL futures, force all tasks to CANCELLED."""
+        self._emergency_stop = True
+        cancelled = 0
+        # Cancel all asyncio futures first
+        for tid, fut in list(self._futures.items()):
+            if not fut.done():
+                fut.cancel()
+        # Force-set all active tasks to CANCELLED
+        cancelled_tasks: list[Task] = []
+        for t in list(self._tasks.values()):
+            if t.status in (TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.PAUSED):
+                # Signal engine to stop gracefully
+                if t.engine in self._engines:
+                    eng = self._engines[t.engine]
+                    if hasattr(eng, 'request_cancel'):
+                        eng.request_cancel()
+                t.status = TaskStatus.CANCELLED
+                t.updated_at = datetime.now(timezone.utc)
+                self._save_task_to_db(t)
+                cancelled_tasks.append(t)
+                cancelled += 1
+        # Reset all engines
+        for eng in self._engines.values():
+            if hasattr(eng, '_cancel_requested'):
+                eng._cancel_requested = True
+            eng._status = EngineStatus.AVAILABLE
+        # Reset running counter and futures
+        self._running = 0
+        self._futures.clear()
+        logging.warning("EMERGENCY STOP: cancelled %d tasks", cancelled)
+        get_audit().log(AuditEvent(task_id="system", event_type="emergency_stop", detail=f"Cancelled {cancelled} tasks"))
+        # Broadcast to dashboard — send individual task_updates so button state resets
+        if self._broadcast:
+            await self._broadcast({"type": "emergency_stop", "payload": {"cancelled": cancelled}})
+            for t in cancelled_tasks:
+                await self._broadcast({"type": "task_update", "payload": t.model_dump(mode="json")})
+        # Unblock promotion after cooldown (prevents immediate re-promotion)
+        async def _unblock():
+            await asyncio.sleep(2)
+            self._emergency_stop = False
+            logging.info("Emergency stop cooldown expired, promotion re-enabled")
+        asyncio.create_task(_unblock())
+        return cancelled
+
 _manager: TaskManager | None = None
 
 def get_manager() -> TaskManager:
@@ -6318,7 +6372,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 *::-webkit-scrollbar-track{background:transparent;}
 *::-webkit-scrollbar-thumb{background:rgba(88,101,242,0.15);border-radius:3px;}
 *::-webkit-scrollbar-thumb:hover{background:rgba(88,101,242,0.3);}
-.header{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.header{display:flex;justify-content:space-between;align-items:center;padding:6px 24px;border-bottom:1px solid var(--border);flex-shrink:0;}
 .logo{font-weight:700;color:var(--accent);font-size:1.2rem;display:flex;align-items:center;gap:8px;}
 .logo-svg{width:28px;height:28px;flex-shrink:0;}
 /* Layout & Sidebars */
@@ -6527,14 +6581,41 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .onboarding-progress-bar{flex:1;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;}
 .onboarding-progress-fill{height:100%;background:var(--ok);transition:width 0.3s;border-radius:2px;}
 
-/* Live View in Sidebar */
-.live-view-img-wrap{background:#111214;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:80px;}
-#liveImage{max-width:100%;display:block;border-radius:8px;}
-#livePlaceholder{color:var(--muted);font-size:11px;text-align:center;padding:16px;}
-#liveImage[src=""]{display:none;}
-#liveImage:not([src=""])~#livePlaceholder{display:none;}
-@keyframes monitor-pulse{0%,100%{color:var(--ok);}50%{color:rgba(87,168,109,0.3);}}
-.monitor-active{animation:monitor-pulse 2s ease-in-out infinite;}
+/* PiP Floating Panel */
+#pipPanel{position:fixed;z-index:900;background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5);display:flex;flex-direction:column;min-width:200px;min-height:150px;overflow:hidden;}
+#pipPanel.pip-hidden{display:none;}
+.pip-titlebar{display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,0.3);cursor:grab;user-select:none;-webkit-user-select:none;flex-shrink:0;border-bottom:1px solid var(--border);}
+.pip-titlebar:active{cursor:grabbing;}
+.pip-titlebar svg{width:14px;height:14px;color:var(--muted);flex-shrink:0;}
+.pip-title{font-size:11px;font-weight:600;color:var(--text);white-space:nowrap;}
+#pipStatus{font-size:9px;color:var(--muted);margin-left:auto;white-space:nowrap;}
+.pip-minimize{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;display:flex;align-items:center;transition:color 0.15s;flex-shrink:0;}
+.pip-minimize:hover{color:var(--text);}
+.pip-body{flex:1;background:#111214;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;min-height:0;}
+.pip-body #liveImage{width:100%;height:100%;object-fit:contain;display:block;cursor:pointer;}
+.pip-body #liveImage[src=""]{display:none;}
+.pip-body #liveImage:not([src=""])~#livePlaceholder{display:none;}
+.pip-body #livePlaceholder{color:var(--muted);font-size:11px;text-align:center;padding:16px;display:flex;flex-direction:column;align-items:center;gap:8px;}
+/* PiP resize handles */
+.pip-resize-n,.pip-resize-s{position:absolute;left:8px;right:8px;height:5px;z-index:2;}
+.pip-resize-n{top:-2px;cursor:n-resize;}
+.pip-resize-s{bottom:-2px;cursor:s-resize;}
+.pip-resize-e,.pip-resize-w{position:absolute;top:8px;bottom:8px;width:5px;z-index:2;}
+.pip-resize-e{right:-2px;cursor:e-resize;}
+.pip-resize-w{left:-2px;cursor:w-resize;}
+.pip-resize-ne,.pip-resize-nw,.pip-resize-se,.pip-resize-sw{position:absolute;width:16px;height:16px;z-index:3;}
+.pip-resize-ne{top:-2px;right:-2px;cursor:ne-resize;}
+.pip-resize-nw{top:-2px;left:-2px;cursor:nw-resize;}
+.pip-resize-se{bottom:-2px;right:-2px;cursor:se-resize;}
+.pip-resize-sw{bottom:-2px;left:-2px;cursor:sw-resize;}
+.pip-resize-se::after{content:'';position:absolute;bottom:4px;right:4px;width:8px;height:8px;border-right:2px solid rgba(255,255,255,0.15);border-bottom:2px solid rgba(255,255,255,0.15);border-radius:0 0 2px 0;}
+/* PiP minimized indicator (header icon) */
+#pipMinimizedHeader:hover{color:var(--text);}
+#pipMinimizedHeader.pip-indicator-active svg{color:var(--ok)!important;}
+/* PiP animations */
+@keyframes pipIn{from{opacity:0;transform:scale(0.9)}to{opacity:1;transform:scale(1)}}
+@keyframes pipOut{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(0.8)}}
+.pip-dragging{box-shadow:0 12px 48px rgba(0,0,0,0.6)!important;user-select:none;-webkit-user-select:none;}
 
 /* View Tabs */
 /* view-tab styles removed — views now in sidebar nav */
@@ -6556,8 +6637,15 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 @keyframes modalIn{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
 .activation-option{box-sizing:border-box;overflow:hidden;}.activation-option:hover{border-color:var(--accent)!important;background:#2b2d31!important;}
 #chromeBtnWrap:hover #chromeBtnHint{max-height:60px;opacity:1;}
-.tier-hint,.mode-hint{overflow:hidden;max-height:0;opacity:0;transition:max-height .2s ease,opacity .2s ease;margin-top:4px;}
-#tierBtnWrap:hover .tier-hint,#automationModeWrap:hover .mode-hint{max-height:120px;opacity:1;}
+.tier-hint,.mode-hint,.api-hint,.scaffolding-hint{overflow:hidden;max-height:0;opacity:0;transition:max-height .2s ease .0s,opacity .2s ease .0s;margin-top:4px;}
+#tierBtnWrap:hover .tier-hint,#automationModeWrap:hover .mode-hint,#apiPathWrap:hover .api-hint,#scaffoldingWrap:hover .scaffolding-hint{max-height:120px;opacity:1;transition-delay:.8s;}
+/* Update banner */
+.update-banner{display:none;align-items:center;justify-content:center;gap:12px;padding:8px 24px;background:rgba(88,101,242,0.12);border-bottom:1px solid rgba(88,101,242,0.25);font-size:13px;flex-shrink:0;color:var(--text);}
+.update-banner.visible{display:flex;}
+.update-banner a{color:var(--accent);text-decoration:none;font-weight:600;}
+.update-banner a:hover{text-decoration:underline;}
+.update-banner .dismiss{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px 6px;font-size:16px;line-height:1;border-radius:4px;}
+.update-banner .dismiss:hover{color:var(--text);background:rgba(255,255,255,0.1);}
 """
     # Inline JS
     js = """
@@ -6600,6 +6688,8 @@ function connect(){
     console.log("[ClawBridge] WebSocket connected");
     state.connected=true;state.wsRetryCount=0;
     updateSystemHealth();
+    // Refresh task list on reconnect to catch missed cancel/complete messages
+    api("GET","/api/tasks").then(tasks=>{if(tasks&&Array.isArray(tasks)){state.tasks=tasks;settleAll(tasks);const anyRunning=tasks.some(t=>t.status==="running");if(!anyRunning&&state.runningTaskId){state.runningTaskId=null;updateSubmitBtn();}render();}}).catch(()=>{});
   };
   state.ws.onclose=(ev)=>{
     console.log("[ClawBridge] WebSocket closed, code:",ev.code,"reason:",ev.reason);
@@ -6629,9 +6719,9 @@ function connect(){
       else if(m.type==="install_progress")addActivity({timestamp:new Date().toISOString(),event_type:"install",detail:m.payload.engine+": "+m.payload.message});
       else if(m.type==="tasks_cleared"){state.tasks=[];render();}
       else if(m.type==="schedule_update"){state.schedules=m.payload;renderSchedules();updateTabBadges();}
-      else if(m.type==="template_update"){state.templates=m.payload;renderTemplates();}
+      else if(m.type==="template_update"){state.templates=m.payload;renderTemplatesMain();}
       else if(m.type==="approval_request"){showApprovalModal(m.payload);}
-      else if(m.type==="config_update"){if(m.payload.automation_mode){state.automationMode=m.payload.automation_mode;updateAutomationModeUI();}if(m.payload.model_tier){_modelTier=m.payload.model_tier;updateModelTierUI();}if(m.payload.computer_use_api){_computerUseApi=m.payload.computer_use_api;updateApiPathUI();}}
+      else if(m.type==="config_update"){if(m.payload.automation_mode){state.automationMode=m.payload.automation_mode;updateAutomationModeUI();}if(m.payload.model_tier){_modelTier=m.payload.model_tier;updateModelTierUI();}if(m.payload.computer_use_api){_computerUseApi=m.payload.computer_use_api;updateApiPathUI();}if(m.payload.scaffolding_profile){_scaffoldingProfile=m.payload.scaffolding_profile;updateScaffoldingUI();}}
       else if(m.type==="workflow_update"){state.workflows=m.payload;renderWorkflows();updateTabBadges();}
       else if(m.type==="routing_info"){state.routingInfo[m.payload.task_id]={engine:m.payload.engine_display,reason:m.payload.reason};render();}
       else if(m.type==="recording_action"){handleRecordingAction(m.payload);}
@@ -6639,43 +6729,210 @@ function connect(){
       else if(m.type==="recording_result"){handleRecordingResult(m.payload);handleChatRecordingResult(m.payload);}
       else if(m.type==="workflow_saved"){addActivity({timestamp:new Date().toISOString(),event_type:"workflow",detail:"Saved workflow: "+(m.payload.name||"")});}
       else if(m.type==="replay_started"){addActivity({timestamp:new Date().toISOString(),event_type:"replay",detail:"Replaying workflow: "+(m.payload.workflow||"")});}
+      else if(m.type==="emergency_stop"){handleEmergencyStop(m.payload);}
+      else if(m.type==="stop_all"){handleEmergencyStop(m.payload);}
     }catch(err){console.error("[ClawBridge] WS message parse error:",err);}
   };
 }
+/* ── PiP floating panel logic ──────────────────────────────────────── */
+const PIP_DEFAULTS={width:320,height:240};
+const PIP_MIN_W=200,PIP_MIN_H=150;
+let _pipState={minimized:false,hasSession:false,streaming:false,dragging:false,resizing:false,resizeDir:'',dragOffsetX:0,dragOffsetY:0,resizeStartX:0,resizeStartY:0,resizeStartW:0,resizeStartH:0,resizeStartL:0,resizeStartT:0};
 let _liveTimer=null;
+function clampPipGeometry(g){
+  const vw=window.innerWidth,vh=window.innerHeight;
+  g.width=Math.max(PIP_MIN_W,Math.min(g.width,vw-20));
+  g.height=Math.max(PIP_MIN_H,Math.min(g.height,vh-20));
+  g.left=Math.max(0,Math.min(g.left,vw-g.width));
+  g.top=Math.max(0,Math.min(g.top,vh-g.height));
+  return g;
+}
+function savePipGeometry(){
+  const p=document.getElementById('pipPanel');
+  if(!p)return;
+  const g={width:p.offsetWidth,height:p.offsetHeight,left:parseInt(p.style.left)||0,top:parseInt(p.style.top)||0,minimized:_pipState.minimized};
+  localStorage.setItem('pip_geometry',JSON.stringify(g));
+}
+function pipClampToViewport(){
+  const p=document.getElementById('pipPanel');
+  if(!p||p.classList.contains('pip-hidden'))return;
+  const g=clampPipGeometry({width:p.offsetWidth,height:p.offsetHeight,left:parseInt(p.style.left)||0,top:parseInt(p.style.top)||0});
+  p.style.left=g.left+'px';p.style.top=g.top+'px';p.style.width=g.width+'px';p.style.height=g.height+'px';
+}
+function initPip(){
+  const panel=document.getElementById('pipPanel');
+  const indicator=document.getElementById('pipMinimizedHeader');
+  if(!panel||!indicator)return;
+  const titlebar=panel.querySelector('.pip-titlebar');
+  if(!titlebar)return;
+  // Restore geometry
+  try{
+    const saved=JSON.parse(localStorage.getItem('pip_geometry'));
+    if(saved){
+      const g=clampPipGeometry({width:saved.width||PIP_DEFAULTS.width,height:saved.height||PIP_DEFAULTS.height,left:saved.left!=null?saved.left:(window.innerWidth-PIP_DEFAULTS.width-24),top:saved.top!=null?saved.top:(window.innerHeight-PIP_DEFAULTS.height-24)});
+      panel.style.width=g.width+'px';panel.style.height=g.height+'px';panel.style.left=g.left+'px';panel.style.top=g.top+'px';
+      if(saved.minimized)_pipState.minimized=true;
+    }else{
+      panel.style.width=PIP_DEFAULTS.width+'px';panel.style.height=PIP_DEFAULTS.height+'px';
+      panel.style.left=(window.innerWidth-PIP_DEFAULTS.width-24)+'px';
+      panel.style.top=(window.innerHeight-PIP_DEFAULTS.height-24)+'px';
+    }
+  }catch(e){
+    panel.style.width=PIP_DEFAULTS.width+'px';panel.style.height=PIP_DEFAULTS.height+'px';
+    panel.style.left=(window.innerWidth-PIP_DEFAULTS.width-24)+'px';
+    panel.style.top=(window.innerHeight-PIP_DEFAULTS.height-24)+'px';
+  }
+  // Drag
+  titlebar.addEventListener('mousedown',pipDragStart);
+  titlebar.addEventListener('touchstart',pipDragStart,{passive:false});
+  // Resize handles
+  panel.querySelectorAll('[data-dir]').forEach(h=>{
+    h.addEventListener('mousedown',pipResizeStart);
+    h.addEventListener('touchstart',pipResizeStart,{passive:false});
+  });
+  // Global move/up
+  document.addEventListener('mousemove',pipMouseMove);
+  document.addEventListener('mouseup',pipMouseUp);
+  document.addEventListener('touchmove',pipMouseMove,{passive:false});
+  document.addEventListener('touchend',pipMouseUp);
+  // Viewport resize
+  window.addEventListener('resize',pipClampToViewport);
+  // Click image for fullscreen
+  const img=document.getElementById('liveImage');
+  if(img)img.addEventListener('click',pipImageFullscreen);
+}
+function pipDragStart(e){
+  if(e.target.closest('.pip-minimize'))return;
+  e.preventDefault();
+  const p=document.getElementById('pipPanel');
+  const cx=e.touches?e.touches[0].clientX:e.clientX;
+  const cy=e.touches?e.touches[0].clientY:e.clientY;
+  _pipState.dragging=true;
+  _pipState.dragOffsetX=cx-parseInt(p.style.left);
+  _pipState.dragOffsetY=cy-parseInt(p.style.top);
+  p.classList.add('pip-dragging');
+}
+function pipResizeStart(e){
+  e.preventDefault();e.stopPropagation();
+  const p=document.getElementById('pipPanel');
+  const cx=e.touches?e.touches[0].clientX:e.clientX;
+  const cy=e.touches?e.touches[0].clientY:e.clientY;
+  _pipState.resizing=true;
+  _pipState.resizeDir=e.currentTarget.dataset.dir;
+  _pipState.resizeStartX=cx;_pipState.resizeStartY=cy;
+  _pipState.resizeStartW=p.offsetWidth;_pipState.resizeStartH=p.offsetHeight;
+  _pipState.resizeStartL=parseInt(p.style.left);_pipState.resizeStartT=parseInt(p.style.top);
+  p.classList.add('pip-dragging');
+}
+function pipMouseMove(e){
+  if(!_pipState.dragging&&!_pipState.resizing)return;
+  e.preventDefault();
+  const cx=e.touches?e.touches[0].clientX:e.clientX;
+  const cy=e.touches?e.touches[0].clientY:e.clientY;
+  const p=document.getElementById('pipPanel');
+  const vw=window.innerWidth,vh=window.innerHeight;
+  if(_pipState.dragging){
+    let l=cx-_pipState.dragOffsetX,t=cy-_pipState.dragOffsetY;
+    l=Math.max(0,Math.min(l,vw-p.offsetWidth));
+    t=Math.max(0,Math.min(t,vh-p.offsetHeight));
+    p.style.left=l+'px';p.style.top=t+'px';
+  }
+  if(_pipState.resizing){
+    const dx=cx-_pipState.resizeStartX,dy=cy-_pipState.resizeStartY;
+    const d=_pipState.resizeDir;
+    let w=_pipState.resizeStartW,h=_pipState.resizeStartH,l=_pipState.resizeStartL,t=_pipState.resizeStartT;
+    if(d.includes('e'))w=Math.max(PIP_MIN_W,_pipState.resizeStartW+dx);
+    if(d.includes('w')){w=Math.max(PIP_MIN_W,_pipState.resizeStartW-dx);l=_pipState.resizeStartL+(_pipState.resizeStartW-w);}
+    if(d.includes('s'))h=Math.max(PIP_MIN_H,_pipState.resizeStartH+dy);
+    if(d.includes('n')){h=Math.max(PIP_MIN_H,_pipState.resizeStartH-dy);t=_pipState.resizeStartT+(_pipState.resizeStartH-h);}
+    l=Math.max(0,Math.min(l,vw-w));t=Math.max(0,Math.min(t,vh-h));
+    p.style.width=w+'px';p.style.height=h+'px';p.style.left=l+'px';p.style.top=t+'px';
+  }
+}
+function pipMouseUp(){
+  if(!_pipState.dragging&&!_pipState.resizing)return;
+  const p=document.getElementById('pipPanel');
+  p.classList.remove('pip-dragging');
+  _pipState.dragging=false;_pipState.resizing=false;
+  savePipGeometry();
+}
+function minimizePip(){
+  const p=document.getElementById('pipPanel');
+  const ind=document.getElementById('pipMinimizedHeader');
+  p.style.animation='pipOut 0.15s ease forwards';
+  setTimeout(()=>{
+    p.classList.add('pip-hidden');p.style.animation='';
+    if(_pipState.streaming)ind.classList.add('pip-indicator-active');
+    _pipState.minimized=true;savePipGeometry();
+  },150);
+}
+function restorePip(){
+  const p=document.getElementById('pipPanel');
+  const ind=document.getElementById('pipMinimizedHeader');
+  ind.classList.remove('pip-indicator-active');
+  pipClampToViewport();
+  p.classList.remove('pip-hidden');
+  p.style.animation='pipIn 0.2s ease forwards';
+  setTimeout(()=>{p.style.animation='';},200);
+  _pipState.minimized=false;savePipGeometry();
+}
+function togglePip(){
+  const p=document.getElementById('pipPanel');
+  if(p.classList.contains('pip-hidden')){restorePip();}else{minimizePip();}
+}
+function showPip(){
+  const p=document.getElementById('pipPanel');
+  const ind=document.getElementById('pipMinimizedHeader');
+  if(_pipState.minimized){
+    if(_pipState.streaming)ind.classList.add('pip-indicator-active');
+    return;
+  }
+  if(!p.classList.contains('pip-hidden'))return;
+  pipClampToViewport();
+  p.classList.remove('pip-hidden');
+  p.style.animation='pipIn 0.2s ease forwards';
+  setTimeout(()=>{p.style.animation='';},200);
+}
+function pipImageFullscreen(){
+  const img=document.getElementById('liveImage');
+  if(!img||!img.src||img.src.endsWith('""'))return;
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(4px);';
+  const im=document.createElement('img');
+  im.src=img.src;im.style.cssText='max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px;';
+  ov.appendChild(im);ov.onclick=()=>ov.remove();
+  document.body.appendChild(ov);
+}
 function clearLiveView(p){
   const i=document.getElementById("liveImage");
   const ph=document.getElementById("livePlaceholder");
-  const st=document.getElementById("liveStatus");
-  const icon=document.getElementById("monitorIcon");
+  const st=document.getElementById("pipStatus");
   if(i){i.src="";i.style.display="none";}
   if(ph)ph.style.display="flex";
   if(st){st.textContent="Starting "+(p&&p.engine||"task")+"...";st.style.color="var(--accent)";}
-  if(icon)icon.classList.remove("monitor-active");
+  _pipState.streaming=false;_pipState.hasSession=true;
   clearTimeout(_liveTimer);
+  showPip();
 }
 function updateLiveView(p){
   if(!p||!p.image)return;
   const i=document.getElementById("liveImage");
   const ph=document.getElementById("livePlaceholder");
-  const st=document.getElementById("liveStatus");
-  const icon=document.getElementById("monitorIcon");
+  const st=document.getElementById("pipStatus");
+  const ind=document.getElementById("pipMinimizedHeader");
   i.src="data:image/png;base64,"+p.image;
   i.style.display="block";
   if(ph)ph.style.display="none";
   if(st){st.textContent="Streaming";st.style.color="var(--ok)";}
-  if(icon)icon.classList.add("monitor-active");
+  _pipState.streaming=true;_pipState.hasSession=true;
   localStorage.setItem("last_browser_session",new Date().toISOString());
-  // Auto-expand the liveview section if collapsed
-  const content=document.getElementById("liveviewContent");
-  if(content&&content.classList.contains("collapsed")){
-    toggleSection("liveview");
-  }
-  // Reset idle timer - collapse after 10s of no frames
+  showPip();
+  if(_pipState.minimized&&ind)ind.classList.add('pip-indicator-active');
   clearTimeout(_liveTimer);
   _liveTimer=setTimeout(()=>{
+    _pipState.streaming=false;
     if(st){st.textContent="Idle";st.style.color="var(--muted)";}
-    if(icon)icon.classList.remove("monitor-active");
+    if(ind)ind.classList.remove('pip-indicator-active');
     showLastSession();
   },10000);
 }
@@ -6691,14 +6948,14 @@ function handleStepUpdate(p){
   const el=document.getElementById("steps-"+p.task_id);
   if(el){
     el.innerHTML='<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(88,101,242,0.08);border-radius:8px;font-size:12px;margin-top:8px">'
-      +'<span style="color:var(--accent);font-weight:600">Step '+p.step+'/'+p.max_steps+'</span>'
+      +'<span style="color:var(--accent);font-weight:600">Step '+p.step+'</span>'
       +'<span style="color:var(--muted)">'+esc(p.action||"")+'</span>'
       +(p.reasoning?'<span style="color:var(--muted);font-style:italic;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.reasoning.substring(0,120))+'</span>':'')
       +'<span style="color:var(--muted);margin-left:auto;font-size:10px">'+(p.tokens_in+p.tokens_out)+' tokens</span>'
       +'</div>';
   }
   // Also add to activity feed
-  addActivity({timestamp:new Date().toISOString(),event_type:"step",detail:"Step "+p.step+"/"+p.max_steps+": "+p.action});
+  addActivity({timestamp:new Date().toISOString(),event_type:"step",detail:"Step "+p.step+": "+p.action});
 }
 // ── Task Replay Viewer ────────────────────────────────────────────
 async function showReplay(taskId){
@@ -6746,6 +7003,20 @@ function handleSafetyWarning(p){
   if(!p)return;
   const flags=(p.flags||[]).join(", ");
   addActivity({timestamp:new Date().toISOString(),event_type:"safety",detail:"⚠ Safety: "+flags+" (policy: "+p.policy+")"});
+}
+function handleEmergencyStop(p){
+  const n=p&&p.cancelled||0;
+  addActivity({timestamp:new Date().toISOString(),event_type:"emergency",detail:"EMERGENCY STOP: "+n+" task(s) cancelled"});
+  // Force all tasks in state to cancelled
+  state.tasks.forEach(t=>{if(t.status==="running"||t.status==="pending")t.status="cancelled";});
+  state.runningTaskId=null;
+  updateSubmitBtn();
+  render();
+  // Flash the header red briefly
+  const hdr=document.querySelector(".header");
+  if(hdr){hdr.style.borderBottomColor="#d9534f";setTimeout(()=>{hdr.style.borderBottomColor="";},2000);}
+  // Refresh from server to ensure consistency
+  api("GET","/api/tasks").then(tasks=>{if(tasks&&Array.isArray(tasks)){state.tasks=tasks;settleAll(tasks);render();}}).catch(()=>{});
 }
 // ── Approval Modal (Supervised Mode) ──────────────────────────────────
 function showApprovalModal(p){
@@ -7175,6 +7446,23 @@ async function stopChrome(){
   try{await api("POST","/api/browser/stop");}catch(e){}
   checkBrowserStatus();
 }
+async function checkMacPermissions(){
+  // Only relevant on macOS — check /api/permissions and show banner if needed
+  try{
+    const p=await api("GET","/api/permissions");
+    if(!p||p.platform!=="darwin")return;
+    if(p.accessibility&&p.screen_recording)return;
+    const missing=[];
+    if(!p.accessibility)missing.push("Accessibility");
+    if(!p.screen_recording)missing.push("Screen Recording");
+    const banner=document.createElement("div");
+    banner.id="mac-perm-banner";
+    banner.style.cssText="background:#c49a3a22;border:1px solid #c49a3a55;color:#c49a3a;padding:12px 20px;font-size:0.9rem;display:flex;align-items:center;gap:10px;flex-shrink:0;";
+    banner.innerHTML='<span style="font-size:1.2rem">&#9888;</span><span><b>macOS Permissions Required:</b> '+esc(missing.join(" and "))+' not granted. Open <b>System Settings > Privacy & Security</b> and enable for ClawBridge, then restart.</span>';
+    const header=document.querySelector(".header");
+    if(header&&header.parentNode)header.parentNode.insertBefore(banner,header.nextSibling);
+  }catch(e){}
+}
 async function checkBrowserStatus(){
   try{
     const s=await api("GET","/api/browser/status");
@@ -7258,6 +7546,11 @@ function refreshConfig(){
       _computerUseApi=c.computer_use_api;
       updateApiPathUI();
     }
+    // Update scaffolding profile UI
+    if(c.scaffolding_profile){
+      _scaffoldingProfile=c.scaffolding_profile;
+      updateScaffoldingUI();
+    }
     checkBrowserStatus();
   }).catch(e=>{console.error("refreshConfig error:",e);document.getElementById("configSummary").innerHTML='<p class="muted" style="color:var(--err)">Failed to load config</p>';});
 }
@@ -7304,7 +7597,20 @@ function updateModelTierUI(){
   const desc=document.getElementById("tierDesc");
   if(pBtn){pBtn.style.background=_modelTier==="performance"?"rgba(196,154,58,0.15)":"";pBtn.style.color=_modelTier==="performance"?"#c49a3a":"";pBtn.style.borderColor=_modelTier==="performance"?"#c49a3a":"";}
   if(eBtn){eBtn.style.background=_modelTier==="economy"?"rgba(46,204,113,0.3)":"";eBtn.style.color=_modelTier==="economy"?"#2ecc71":"";eBtn.style.borderColor=_modelTier==="economy"?"#2ecc71":"";}
-  if(desc)desc.textContent=_modelTier==="performance"?"Sonnet for all tasks":"Cheaper models for browser/chat, Sonnet for visual";
+  if(desc){
+    if(_modelTier==="performance"){desc.textContent="Sonnet for all tasks";}
+    else{
+      // Build description from actual engine models when available
+      const cu=state.engines.find(e=>e.name==="computer_use");
+      const bu=state.engines.find(e=>e.name==="browser_use");
+      const oc=state.engines.find(e=>e.name==="openclaw");
+      const parts=[];
+      if(oc&&oc.model)parts.push("Chat: "+_shortModel(oc.model).replace(/ \\(economy\\)/,""));
+      if(bu&&bu.model)parts.push("Browser: "+_shortModel(bu.model));
+      if(cu&&cu.model)parts.push("Visual: "+_shortModel(cu.model));
+      desc.textContent=parts.length?parts.join(" | "):"Cheaper models for browser/chat, Sonnet for visual";
+    }
+  }
   updateModelDetailsUI();
 }
 let _computerUseApi="auto";
@@ -7334,7 +7640,11 @@ async function setComputerUseApi(apiPath){
     _computerUseApi=apiPath;
     updateApiPathUI();
     addActivity({timestamp:new Date().toISOString(),event_type:"config",detail:"Computer API path set to "+apiPath});
-  }catch(e){console.error("Failed to set API path:",e);alert(e.message||"Failed to set API path");}
+  }catch(e){
+    console.error("Failed to set API path:",e);
+    const desc=document.getElementById("apiPathDesc");
+    if(desc){desc.textContent=e.message||"Failed to set API path";desc.style.color="var(--err)";setTimeout(()=>{desc.style.color="";updateApiPathUI();},3000);}
+  }
 }
 function updateApiPathUI(){
   const aBtn=document.getElementById("apiAuto");
@@ -7342,11 +7652,68 @@ function updateApiPathUI(){
   const oBtn=document.getElementById("apiOpenRouter");
   const desc=document.getElementById("apiPathDesc");
   [aBtn,dBtn,oBtn].forEach(b=>{if(b){b.style.background="";b.style.color="";}});
-  if(_computerUseApi==="auto"&&aBtn){aBtn.style.background="rgba(88,101,242,0.3)";aBtn.style.color="var(--accent)";}
+  if(_computerUseApi==="auto"&&aBtn){aBtn.style.background="rgba(87,168,109,0.3)";aBtn.style.color="var(--ok)";}
   if(_computerUseApi==="direct"&&dBtn){dBtn.style.background="rgba(88,101,242,0.3)";dBtn.style.color="var(--accent)";}
   if(_computerUseApi==="openrouter"&&oBtn){oBtn.style.background="rgba(88,101,242,0.3)";oBtn.style.color="var(--accent)";}
   const descs={"auto":"Auto: uses direct Anthropic when key is set","direct":"Direct: native computer-use tool + prompt caching","openrouter":"OpenRouter: unified billing, wider model selection"};
-  if(desc)desc.textContent=descs[_computerUseApi]||"";
+  if(desc){desc.textContent=descs[_computerUseApi]||"";desc.style.color="";}
+  updateApiPathDetails();
+}
+function updateApiPathDetails(){
+  const panel=document.getElementById("apiPathDetails");
+  if(!panel)return;
+  const eng=state.engines.find(e=>e.name==="computer_use");
+  if(!eng||!eng.model){panel.innerHTML="";return;}
+  const sm=_shortModel(eng.model);
+  const ap=eng.api_path?_apiLabel(eng.api_path):"";
+  let html='<div style="display:flex;align-items:baseline;gap:6px;padding:1px 0">'
+    +'<span style="color:var(--muted);min-width:42px">Model</span>'
+    +'<span style="color:var(--fg);font-family:monospace">'+esc(sm)+'</span></div>';
+  if(ap){html+='<div style="display:flex;align-items:baseline;gap:6px;padding:1px 0">'
+    +'<span style="color:var(--muted);min-width:42px">API</span>'
+    +'<span style="color:var(--fg);font-family:monospace">'+esc(ap)+'</span></div>';}
+  if(eng.status&&eng.status!=="available"){html+='<div style="display:flex;align-items:baseline;gap:6px;padding:1px 0">'
+    +'<span style="color:var(--muted);min-width:42px">Status</span>'
+    +'<span style="color:'+(eng.status==="running"?"var(--ok)":"var(--err)")+'">'+esc(eng.status)+'</span></div>';}
+  panel.innerHTML=html;
+}
+let _scaffoldingProfile="standard";
+async function setScaffoldingProfile(profile){
+  try{
+    await api("POST","/api/config/scaffolding",{profile});
+    _scaffoldingProfile=profile;
+    updateScaffoldingUI();
+    addActivity({timestamp:new Date().toISOString(),event_type:"config",detail:"Scaffolding profile set to "+profile});
+  }catch(e){
+    console.error("Failed to set scaffolding profile:",e);
+    const desc=document.getElementById("scaffoldingDesc");
+    if(desc){desc.textContent=e.message||"Failed to set profile";desc.style.color="var(--err)";setTimeout(()=>{desc.style.color="";updateScaffoldingUI();},3000);}
+  }
+}
+function updateScaffoldingUI(){
+  const ids=["scaffFull","scaffStandard","scaffMinimal","scaffRaw"];
+  const keys=["full","standard","minimal","raw"];
+  const colors={"full":"#2ecc71","standard":"rgba(88,101,242,1)","minimal":"#c49a3a","raw":"#e74c3c"};
+  const bgs={"full":"rgba(46,204,113,0.15)","standard":"rgba(88,101,242,0.15)","minimal":"rgba(196,154,58,0.15)","raw":"rgba(231,76,60,0.15)"};
+  const descs={"full":"Maximum guidance for older or weaker models","standard":"Balanced guidance for current models","minimal":"Lean mode -- AI navigates and reasons on its own","raw":"Zero scaffolding -- pure model capability test"};
+  const details={
+    "full":'<div style="color:var(--muted)">Decision trees, reasoning protocol, anti-patterns, pre-navigation, focus every action, stale warnings + AI diagnostic, vision fallback, redirect detection. ~3,000 token system prompt.</div>',
+    "standard":'<div style="color:var(--muted)">Reasoning protocol, core rules, SoM. Pre-navigation and focus management active. Stale warning at 2+ only. No decision trees or anti-patterns. ~1,500 token system prompt.</div>',
+    "minimal":'<div style="color:#c49a3a">Core rules and SoM only. No pre-navigation -- AI opens browsers itself. Focus on clicks only. Hard-stop only (no stale warnings). Vision fallback at &lt;3 elements. ~800 token prompt.</div>',
+    "raw":'<div style="color:#e74c3c">Screen resolution and screenshot description only. No pre-nav, no focus management, no stale warnings, no vision fallback, no redirect detection. ~300 token prompt. Best for benchmarking.</div>'
+  };
+  for(let i=0;i<ids.length;i++){
+    const btn=document.getElementById(ids[i]);
+    if(!btn)continue;
+    const active=keys[i]===_scaffoldingProfile;
+    btn.style.background=active?bgs[keys[i]]:"";
+    btn.style.color=active?colors[keys[i]]:"";
+    btn.style.borderColor=active?colors[keys[i]]:"";
+  }
+  const desc=document.getElementById("scaffoldingDesc");
+  if(desc){desc.textContent=descs[_scaffoldingProfile]||"";desc.style.color="";}
+  const panel=document.getElementById("scaffoldingDetailsPanel");
+  if(panel){panel.innerHTML=details[_scaffoldingProfile]||"";}
 }
 function activityIcon(t){const m={"task_completed":"\\u2713","complete":"\\u2713","task_failed":"\\u2715","error":"\\u2715","safety_flag":"\\u26A0","safety":"\\u26A0","warning":"\\u26A0","task_retry":"\\u21BB","install":"\\u2B07","task_created":"\\u2192","task_started":"\\u25B6","step":"\\u2022"};return m[t]||"\\u00B7";}
 function addActivity(ev){
@@ -7432,50 +7799,49 @@ async function createSchedule(){
 }
 
 // ── Template Management ──
-function renderTemplates(){
-  const c=document.getElementById("templateList");
+function renderTemplatesMain(){
+  const c=document.getElementById("templateListMain");
   if(!c)return;
-  if(!state.templates.length){c.innerHTML='<p style="color:var(--muted);font-size:11px">No templates yet. Save a task as a template to reuse it.</p>';return;}
+  if(!state.templates.length){c.innerHTML='<p style="color:var(--muted);font-size:13px;text-align:center;padding:40px;">No templates yet. Save a task as a template to reuse it.</p>';return;}
   c.innerHTML=state.templates.map(t=>{
-    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)">'
-      +'<div style="display:flex;justify-content:space-between;align-items:center">'
-      +'<span style="font-size:12px;font-weight:600">'+esc(t.name)+'</span>'
+    return '<div class="card" style="margin-bottom:12px;cursor:pointer;" onclick="runTemplateMain(\\''+t.id+'\\')">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+      +'<span style="font-size:14px;font-weight:600">'+esc(t.name)+'</span>'
       +'<div style="display:flex;gap:4px">'
-      +'<button onclick="runTemplate(\\''+t.id+'\\')" style="background:var(--accent);border:none;cursor:pointer;color:#fff;font-size:10px;padding:3px 8px;border-radius:4px">Run</button>'
-      +'<button onclick="deleteTemplate(\\''+t.id+'\\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:10px;padding:2px 4px" title="Delete">✕</button>'
+      +'<button onclick="event.stopPropagation(); deleteTemplateMain(\\''+t.id+'\\')" style="background:none;border:none;cursor:pointer;color:var(--err);font-size:12px;padding:4px 8px" title="Delete">✕</button>'
       +'</div></div>'
-      +'<div style="font-size:10px;color:var(--muted)">Used '+t.use_count+'x · '+esc(t.engine)+'</div>'
-      +'<div style="font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(t.prompt)+'</div>'
+      +'<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Used '+t.use_count+'x · '+esc(t.engine)+'</div>'
+      +'<div style="font-size:12px;color:var(--muted);white-space:pre-wrap;line-height:1.4;">'+esc(t.prompt)+'</div>'
       +'</div>';
   }).join("");
 }
-async function runTemplate(id){
-  try{await api("POST","/api/templates/"+id+"/use");scrollToBottom();}catch(e){alert("Error: "+e.message);}
+async function runTemplateMain(id){
+  try{
+    await api("POST","/api/templates/"+id+"/use");
+    switchView("chat");
+    scrollToBottom();
+  }catch(e){alert("Error: "+e.message);}
 }
-async function deleteTemplate(id){
+async function deleteTemplateMain(id){
   if(!confirm("Delete this template?"))return;
   try{
     await api("DELETE","/api/templates/"+id);
     state.templates=state.templates.filter(t=>t.id!==id);
-    renderTemplates();
+    renderTemplatesMain();
   }catch(e){console.error(e);}
 }
-function showNewTemplateForm(){
-  const d=document.getElementById("newTemplateForm");
-  d.style.display=d.style.display==="none"?"block":"none";
-}
-async function createTemplate(){
-  const name=document.getElementById("tmplName").value.trim();
-  const prompt=document.getElementById("tmplPrompt").value.trim();
-  const engine=document.getElementById("tmplEngine").value;
+async function createTemplateMain(){
+  const name=document.getElementById("tmplNameMain").value.trim();
+  const prompt=document.getElementById("tmplPromptMain").value.trim();
+  const engine=document.getElementById("tmplEngineMain").value;
   if(!name||!prompt){alert("Fill in name and prompt");return;}
   try{
     const t=await api("POST","/api/templates",{name,prompt,engine});
     state.templates.push(t);
-    renderTemplates();
-    document.getElementById("tmplName").value="";
-    document.getElementById("tmplPrompt").value="";
-    document.getElementById("newTemplateForm").style.display="none";
+    renderTemplatesMain();
+    document.getElementById("tmplNameMain").value="";
+    document.getElementById("tmplPromptMain").value="";
+    document.getElementById("newTemplateFormMain").style.display="none";
   }catch(e){alert("Error: "+e.message);}
 }
 async function saveTaskAsTemplate(taskId){
@@ -7486,7 +7852,7 @@ async function saveTaskAsTemplate(taskId){
   try{
     const tmpl=await api("POST","/api/templates",{name,prompt:t.prompt,engine:t.engine});
     state.templates.push(tmpl);
-    renderTemplates();
+    renderTemplatesMain();
     addActivity({timestamp:new Date().toISOString(),event_type:"template",detail:"Saved template: "+name});
   }catch(e){alert("Error: "+e.message);}
 }
@@ -7527,6 +7893,8 @@ async function switchView(view){
   document.getElementById("scheduleView").style.display=view==="schedules"?"flex":"none";
   const hv=document.getElementById("historyView");if(hv)hv.style.display=view==="history"?"flex":"none";
   const wv=document.getElementById("workflowsView");if(wv)wv.style.display=view==="workflows"?"flex":"none";
+  const tv=document.getElementById("templatesView");if(tv)tv.style.display=view==="templates"?"flex":"none";
+  const cv=document.getElementById("configView");if(cv)cv.style.display=view==="config"?"flex":"none";
   // Update sidebar nav items
   document.querySelectorAll(".sidebar-nav-item").forEach(el=>{
     el.classList.toggle("active",el.id==="nav-"+view);
@@ -7534,8 +7902,37 @@ async function switchView(view){
   if(view==="soul"){if(!_currentSoulFile)loadSoulFile("SOUL.md");localStorage.setItem("onboarding_soul_customized","true");checkOnboarding();}
   if(view==="memory"){loadMemory();const mb=document.getElementById("memoryBadge");if(mb)mb.style.display="none";}
   if(view==="schedules")loadScheduleView();
-  if(view==="history")renderHistory();
+  if(view==="history"){toggleHistoryTab('tasks');renderHistory();}
   if(view==="workflows")renderWorkflows();
+  if(view==="templates")renderTemplatesMain();
+  if(view==="config"){refreshConfig();renderEngines();}
+}
+function toggleHistoryTab(tab){
+  const btnTasks=document.getElementById("historyTabTasks");
+  const btnAct=document.getElementById("historyTabActivity");
+  const contentTasks=document.getElementById("historyTabContentTasks");
+  const contentAct=document.getElementById("historyTabContentActivity");
+  if(!btnTasks||!btnAct||!contentTasks||!contentAct)return;
+  
+  if(tab==="tasks"){
+    btnTasks.classList.add("active");
+    btnTasks.style.borderBottomColor="var(--accent)";
+    btnTasks.style.color="var(--text)";
+    btnAct.classList.remove("active");
+    btnAct.style.borderBottomColor="transparent";
+    btnAct.style.color="var(--muted)";
+    contentTasks.style.display="block";
+    contentAct.style.display="none";
+  }else{
+    btnAct.classList.add("active");
+    btnAct.style.borderBottomColor="var(--accent)";
+    btnAct.style.color="var(--text)";
+    btnTasks.classList.remove("active");
+    btnTasks.style.borderBottomColor="transparent";
+    btnTasks.style.color="var(--muted)";
+    contentAct.style.display="block";
+    contentTasks.style.display="none";
+  }
 }
 function updateTabBadges(){
   // Schedule badge
@@ -7708,6 +8105,7 @@ function renderWorkflows(){
     html+='<input id="modifyInput-'+wf.id+'" placeholder="Describe what to change..." style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;margin-bottom:6px;">';
     html+='<div style="display:flex;gap:6px;">';
     html+='<button class="btn" onclick="executeModifyReplay(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;">Replay Modified</button>';
+    html+='<button class="btn" onclick="saveModifiedWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;background:rgba(46,204,113,0.15);border:1px solid #2ecc71;color:#2ecc71;">Save as New</button>';
     html+='<button class="btn" onclick="document.getElementById(\\\'modify-'+wf.id+'\\\').style.display=\\\'none\\\'" style="font-size:11px;padding:4px 8px;background:#232428;">Cancel</button>';
     html+='</div></div>';
     // Params expand panel
@@ -7720,9 +8118,8 @@ function renderWorkflows(){
         html+='<input data-param="'+esc(v.name)+'" data-wf-id="'+wf.id+'" type="'+inputType+'" value="'+esc(v.default_value)+'" style="width:100%;padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;"></div>';
       }
       html+='<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">';
-      html+='<button class="btn" onclick="executeParamReplay(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;">Run with params</button>';
-      html+='<button class="btn" onclick="saveWorkflowParams(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;background:rgba(46,204,113,0.15);border:1px solid #2ecc71;color:#2ecc71;">Save defaults</button>';
-      html+='<button class="btn" onclick="replayWorkflow(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;background:#232428;">Run original</button>';
+      html+='<button class="btn" onclick="executeParamReplay(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;">Run</button>';
+      html+='<button class="btn" onclick="saveWorkflowParams(\\\''+wf.id+'\\\')" style="font-size:11px;padding:4px 12px;background:rgba(46,204,113,0.15);border:1px solid #2ecc71;color:#2ecc71;">Save</button>';
       html+='<button class="btn" onclick="document.getElementById(\\\'params-'+wf.id+'\\\').style.display=\\\'none\\\'" style="font-size:11px;padding:4px 8px;background:#232428;">Cancel</button>';
       html+='</div></div>';
     }
@@ -7935,6 +8332,17 @@ async function executeModifyReplay(id){
     const el=document.getElementById("modify-"+id);if(el)el.style.display="none";
   }catch(e){addActivity({timestamp:new Date().toISOString(),event_type:"error",detail:"Modified replay failed: "+e.message});}
 }
+async function saveModifiedWorkflow(id){
+  const inp=document.getElementById("modifyInput-"+id);
+  const modifications=inp?inp.value.trim():"";
+  if(!modifications){alert("Describe what to change first.");return;}
+  try{
+    const resp=await api("POST","/api/workflows/"+id+"/save-modified",{modifications});
+    addActivity({timestamp:new Date().toISOString(),event_type:"info",detail:"Saved modified workflow"+(resp.name?" as \\'"+resp.name+"\\'":"")});
+    const el=document.getElementById("modify-"+id);if(el)el.style.display="none";
+    refreshWorkflows();
+  }catch(e){addActivity({timestamp:new Date().toISOString(),event_type:"error",detail:"Failed to save modified workflow: "+e.message});}
+}
 // ── Onboarding ──
 function checkOnboarding(){
   if(localStorage.getItem("onboarding_dismissed")==="true"){
@@ -7985,8 +8393,7 @@ function onboardAction(action){
     if(_licenseStatus&&_licenseStatus.status==="not_activated"&&_licenseStatus.tier==="starter"){
       showActivationModal(true);
     }else{
-      const cc=document.getElementById("configContent");
-      if(cc&&cc.classList.contains("collapsed"))toggleSection("config");
+      switchView("config");
       toggleInlineKey("openrouter");
     }
   }else if(action==="soul"){switchView("soul");}
@@ -8225,18 +8632,14 @@ document.addEventListener("DOMContentLoaded",()=>{
   });
   
   if(localStorage.getItem('sidebar_left')==='true') toggleSidebar('left');
-  ['engines','config','activity','liveview','schedules','templates'].forEach(id=>{
-    const c=document.getElementById(id+'Content');
-    const card=document.getElementById('card-'+id);
-    if(c&&card&&localStorage.getItem('section_'+id)==='1'){c.classList.add('collapsed');card.querySelector('.chevron')?.classList.add('collapsed');}
-  });
+  initPip();
   // Use server-preloaded data for instant render (no fetch needed)
   if(window.__PRELOAD__){
     const p=window.__PRELOAD__;
     if(p.engines&&p.engines.length){state.engines=p.engines;renderEngines();}
     if(p.tasks&&p.tasks.length){state.tasks=p.tasks;settleAll(p.tasks);render();}
     if(p.schedules){state.schedules=p.schedules;renderSchedules();updateTabBadges();}
-    if(p.templates){state.templates=p.templates;renderTemplates();}
+    if(p.templates){state.templates=p.templates;renderTemplatesMain();}
     if(p.workflows){state.workflows=p.workflows;renderWorkflows();updateTabBadges();}
     if(p.config&&p.config.keys){
       try{
@@ -8255,6 +8658,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   connect();
   showLastSession();
   checkOnboarding();
+  checkMacPermissions();
   // HTTP fallback — load engine/task data if WebSocket is slow or blocked
   loadInitialData();
   // Poll browser status every 10s (pause when tab hidden)
@@ -8282,7 +8686,7 @@ async function loadInitialData(){
     }
     if(!state.templates.length){
       const tmpls=await api("GET","/api/templates");
-      if(tmpls){state.templates=tmpls;renderTemplates();}
+      if(tmpls){state.templates=tmpls;renderTemplatesMain();}
     }
     if(!state.allTimeStats.total_tasks||state.allTimeStats.balance_usd==null)await refreshStats();
   }catch(e){console.warn("loadInitialData fallback error:",e);}
@@ -8427,11 +8831,40 @@ async function activateCode() {
   }
 }
 
+// ── Auto-Update Banner ──
+function _isSafeReleaseUrl(url){
+  try{const p=new URL(url);return p.protocol==='https:'&&(p.hostname==='github.com'||p.hostname==='www.github.com');}catch(e){return false;}
+}
+async function checkForUpdate(){
+  if(sessionStorage.getItem('update_dismissed'))return;
+  try{
+    const r=await fetch('/api/updates/check');
+    if(!r.ok)return;
+    const d=await r.json();
+    if(!d.update_available)return;
+    const banner=document.getElementById('updateBanner');
+    const txt=document.getElementById('updateText');
+    const link=document.getElementById('updateLink');
+    if(!banner||!txt||!link){console.warn('ClawBridge: update banner DOM elements missing');return;}
+    txt.textContent='Update available: v'+esc(d.latest);
+    const safeUrl=d.release_url&&_isSafeReleaseUrl(d.release_url)?d.release_url:'https://github.com/NickRomanek/clawbridge/releases/latest';
+    link.href=safeUrl;
+    banner.classList.add('visible');
+  }catch(e){}
+}
+function dismissUpdate(){
+  const b=document.getElementById('updateBanner');
+  if(b)b.classList.remove('visible');
+  sessionStorage.setItem('update_dismissed','1');
+}
+
 // Check license status on page load
 document.addEventListener('DOMContentLoaded', () => {
   setTimeout(checkLicenseStatus, 1000);
   // Refresh every 5 minutes
   setInterval(checkLicenseStatus, 300000);
+  // Check for updates (2s after load)
+  setTimeout(checkForUpdate, 2000);
 });
 """
     html = """<!DOCTYPE html>
@@ -8439,7 +8872,7 @@ document.addEventListener('DOMContentLoaded', () => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ClawBridge Dashboard</title>
+  <title>ClawBridge</title>
   <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEuUlEQVR4nO1Wa0xTZxj+vsOhRdrCWstVLrZcS4EOKSow5DqyONymWROzxF0cmzOZDnQzmVtyWrf9MM4L29wwG/7gJyUDSUQMmchmGMx1AdIBMhBEoKU3W0tp6eV8yykwi6MtaJwu8UnOj/Od9zzP817Odz4AnuL/DAIhjCAI7D8VRQhBHw/hQxMiHySez9KIBlrToDrjR8WYoII4F9yAUMCDGMchhMhz4f57DwY3wYHWYXouy1nJYjONc/NW+qzdzs5LiFW3fVFnRAi1uoNW4PDGiy858yrsAalUCtV31uU4thcmdM2Y8i2zloBJjT7IiWN95MRkS1bFe4ng4rm/wBqArUYYUIMGIWpR6jYFOhxB9b+P8Hq6rhvi1jNGDXrj98quP2Jwgahkc3rKG3HZO6OWkl6VAbAaSKWUSSiIiNTqjKYtxhnVevPsXJcuOHIos7goPSUmLN5m0Lw5b7EkTTANWolEQs2D/8QAALjbqr8qSKVUNuTt6cmI8MTkOGWP0hbLYb49MzJoZVhnGeO9/TEkl9NE50Voy8JF0XL5VxMAUK31X13cv0cEgQySZWWSUDugpYOt5SmpM2Y4rTdFD1xutVMjFMzm6jbmZDIsPEEC7D0rkjRIptL+lCKZbIHgIVsAKQLMTGPtFL5fLTY2N124Na16NiEtLlD82uvohQN78cTM1DBF02U+Z0p1aePBw9vHarBymUxGAuS/C7g/9fj4Qjqd7nwJ40a/S6qnOiYY7D3sJFYIZ+bGkTktbwfUzRvUPT9fYz5XfqJfZ95SEmZEGJt7UJT9orUPws7FYfTqBPoSp15MyijlM7kRL9+dUo852FEnowpK+EKnuur8mU9qEJFGC5AN2EkAgOTwqZM38fBDd69cuEbDyNPBDJqANA2fVigUc0tc1Cd//7xhPtOHEISxGLbCrSKytuZjI0QYP8Zp+a7u9NFLV7WzX7d/2P9Lm8n+U6/J+lnDl9V1cVb98LydjFR2N44LU5PwsLA81+I+g7wNO+5Dn3IMng/M0vRPTNvYz5RakzdlaW0MblTlmeZaZnZOQYZ4A+5CAeDir7fzbcPKbSy+ABParOpe5SBXr9er2trOzkMpB/PVAmxRyVsrMFmnzHlz+IZGnCtWqJTdQ2DesI2WnFVclL3BnLIOXMlkgU6RmEc3MKNyTarx2JHe679VHfumf2hgcNBXdZcZgF72AYlE4jbGZgRrPjj2baMwU+SgR6dzdpXFj74SDDYXQFiaC2HRWxz4TvGOnEAdDCFLSvMEvKiIo/zo0BE3icy9ifk2sASEUABC6J81uVzuov73HR27u3VTt1zaaVWqy2HW5NPApxDCkQaEaBKEAiCEP/CCQCM0G52q0VFhILKq2tubVQtnheXJeVb7X5WnxD0N3AsiMISUtD37jrRU7Pv8Tkh5NWchjsAIogOnDib7T8h37a46jvZW7j+EUQwL27FfYJ43EEKSujydUe1BSIogTLfX1x5/NSbEJS+NCYqm4giCirhKyiAk1aN9zlBs7qP687WnSBJAIJdTX+eDAa0wlMtMrZTJvcW1n4pWC7eJhdKuJAILCQJf1dHtUQGtQfSxGASP2h163FkhhOCTXdqneBLxNxgGLw4/MHD9AAAAAElFTkSuQmCC">
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js" integrity="sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js" integrity="sha384-eEu5CTj3qGvu9PdJuS+YlkNi7d2XxQROAFYOr59zgObtlcux1ae1Il3u7jvdCSWu" crossorigin="anonymous"></script>
@@ -8447,7 +8880,13 @@ document.addEventListener('DOMContentLoaded', () => {
 </head>
 <body>
   <header class="header">
-    <h1 class="logo"><img class="logo-svg" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAD0ElEQVR4nO1WbWxTVRg+57SlXyt169b6Ae0ttEDvZJtzFWQCQoLBxP0QcwsBoskSnBqj4i9c1Nur4Ych/lDUZfyA8MOv3QxDIHHBOMAYsiybZpTdbQTb2c1+jNu629uWffT2mNtlWkzbrcbpH57knpx7z3ve93nP855zLgD3UAAYYyg/YKVB0zSiMUb572UHxsuckG93jhNMXQO/GPNGlx1UCSHESxnRNEYQwuzpKz63xVRpkZQp9QyCFe90dvN8fHqk4y3olwktx5dykXkJY+j1AjwYpquT4dCTETG9NxJL6CMxQSFJs1eF68MZcucrU16vN72YbqmAMnOZWgkjDJra2pSpWLyxdyKmu9jbp7ZUaLhwhD8/OjbZbN++fZ/LWdnCMEyWorr+1LdowKUMKMqDBjs7MxXSbEXQd6MxfXtqTDTbo807tjWZlHOu0OjY0yg5zS9Ys0u5A8rSwxiyLMiugVAD2zseNWYQDF65+ozv3FcqSUyqA0McX9d6sE9QoFoagO8ZkpRXSpYI/8MM5aWGuP7IsT3qDQ26ufBv+hrXpiqo1yurNq0Hm7e6q5I3/SrD5q1rfjp09DHAMFmAS9dNqYCIoiiF3fEEBde6XjWoQCQoZtyrYYoj6mpjhNMa/D0eC94KJRo2ks6YZCaOE8SWLQDCkn6L7R95QtbRsJdUa3V7AFaszTgbnyeslmjP8dZ6L0WZwyyb4ABQ47c/54SJ4B2Nf+iLeYAFUYif9V//bqrY0hZhQudanVaBjr58OGTUadM6UdC//5y7tS+Vean5bNfH+xPzn53B+KkWV027RhDsLsLie7ZlV7qm2gQXkiyraJis3M5lZsKc78Y6R+3GcAjfFz9xYehN6/TqA027rCCLleCbC5wnGU33Wwgb73xIgUORaNJqkvj+heRw2VW64xFPoveHi3eM5gcCwCDqTbt3H9jWZL1lB6BbAYE25Xa8eDmW2pn6uX/82q+3A/7ghPrmYI8EaBrlCqgAioorF8ypU23z65yEhiTXfzK7yjztrrPx+wzg8UYIj9VD+PqR+1e9YKt1gExWM0M4bB9tsFXyfwlSGHcFxBirFvssy0rybdD+xsM9iehktxGJ9vHhYQZCyJ+5HNB0DgyolAh2ocDIJa0kPAjEaMe3578elefIp06ez7sULShv3kGcG1cgiFtfe/f0eEQcvfTlhyc8HhaR5DBmAAAtk9KnRDXiTn7w3kkAaLSof1n4Gyu5DxEEYGTkR0M+0dxFHLymzX2RdfuXUbTY6RUItoACl/V/9rvxvwKXkSFaWSr3AFYefwD41qY87JgeZAAAAABJRU5ErkJggg==">ClawBridge <span class="beta-badge">Beta</span><span id="licenseBadge" class="license-badge" style="display:none"></span></h1>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="beta-badge">Beta</span>
+      <span id="licenseBadge" class="license-badge" style="display:none"></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;">
+    <div id="pipMinimizedHeader" style="cursor:pointer;padding:4px;display:flex;align-items:center;color:var(--muted);transition:color 0.2s;" onclick="togglePip()" title="Live View"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg></div>
+    <button onclick="location.reload()" title="Refresh dashboard" style="background:none;border:none;cursor:pointer;color:var(--muted);padding:4px;display:flex;align-items:center;transition:color 0.2s;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg></button>
     <div class="system-health" tabindex="0" title="System Health">
       <span id="healthDot" class="system-health-dot sh-err"></span>
       <span id="healthText">Connecting...</span>
@@ -8458,28 +8897,17 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="health-row"><span class="health-label">Machine ID</span><span id="healthMachineId" class="health-value" style="color:var(--accent);font-size:9px;font-family:monospace;word-break:break-all;max-width:120px;text-align:right"></span></div>
       </div>
     </div>
+    </div>
   </header>
+  <div id="updateBanner" class="update-banner"><span id="updateText"></span><a id="updateLink" href="#" target="_blank" rel="noopener">View Release</a><button class="dismiss" onclick="dismissUpdate()" title="Dismiss">&times;</button></div>
   <div class="layout" id="mainLayout">
     <aside id="leftSidebar">
       <div class="collapsed-icons">
-        <div onclick="toggleSidebar('left')" title="Engines">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
-        </div>
-        <div onclick="toggleSidebar('left')" title="Config">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        </div>
-        <div onclick="toggleSidebar('left')" title="Activity">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-        </div>
-        <div onclick="toggleSidebar('left')" title="Browser View">
-          <svg id="monitorIconCollapsed" class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-        </div>
-        <div onclick="toggleSidebar('left')" title="Templates">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-        </div>
-        <div style="border-top:1px solid rgba(255,255,255,0.06);margin:4px 0"></div>
         <div onclick="switchView('chat')" title="Chat">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        </div>
+        <div onclick="switchView('config')" title="Config">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </div>
         <div onclick="switchView('soul')" title="Soul">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
@@ -8499,145 +8927,13 @@ document.addEventListener('DOMContentLoaded', () => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
         </button>
       </div>
-      <div class="card expandable" id="card-engines">
-        <h2 class="expandable-header" onclick="toggleSection('engines')">
-          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>Engines</span>
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-        </h2>
-        <div class="expandable-content" id="enginesContent"><div id="engineList"><p class="muted">Loading...</p></div></div>
-      </div>
-      <div class="card expandable" id="card-config">
-        <h2 class="expandable-header" onclick="toggleSection('config')">
-          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>Config</span>
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-        </h2>
-        <div class="expandable-content" id="configContent">
-          <div id="configSummary"><p class="muted">Loading...</p></div>
-          <div id="creditBalanceWidget" style="display:none;margin-top:16px;padding:12px;background:rgba(88,101,242,0.08);border-radius:8px;border:1px solid rgba(88,101,242,0.2)">
-            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Credit Balance</div>
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-              <span id="creditAmount" style="font-size:18px;font-weight:600;color:#5865f2">$0.00</span>
-              <span style="color:var(--muted);font-size:12px">/</span>
-              <span id="creditLimit" style="font-size:14px;color:var(--muted)">$0.00</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.1);border-radius:4px;height:6px;overflow:hidden;margin-bottom:8px">
-              <div id="creditBar" style="height:100%;background:#5865f2;transition:width 0.3s;width:0%"></div>
-            </div>
-            <button class="btn" onclick="window.open(window._topupUrl||'https://clawbridge.ai/account','_blank')" style="width:100%;font-size:11px;background:#5865f2">Buy More Credits</button>
-          </div>
-          <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05)">
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Automation Mode</div>
-            <div id="automationModeWrap" style="position:relative">
-              <div style="display:flex;gap:4px">
-                <button id="modeSupervised" class="btn mode-btn" onclick="setAutomationMode('supervised')" title="Pauses before high-risk actions (purchases, form submissions, sensitive sites). Recommended for learning the system." style="flex:1;min-width:0;font-size:10px;padding:6px 4px;overflow:hidden;box-sizing:border-box">
-                  <span style="font-weight:600;white-space:nowrap">Supervised</span>
-                </button>
-                <button id="modeAutonomous" class="btn mode-btn" onclick="setAutomationMode('autonomous')" title="Runs without interruption. Monitor the Live View! You are responsible for any actions taken." style="flex:1;min-width:0;font-size:10px;padding:6px 4px;overflow:hidden;box-sizing:border-box">
-                  <span style="font-weight:600;white-space:nowrap">Autonomous</span>
-                </button>
-              </div>
-              <div id="modeHint" class="mode-hint">
-                <div id="modeDesc" style="font-size:9px;color:var(--muted);margin-bottom:4px">Pauses before high-risk actions</div>
-                <div id="modeDetailsPanel" style="font-size:9px;line-height:1.5"></div>
-              </div>
-            </div>
-          </div>
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05)">
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Model Tier</div>
-            <div id="tierBtnWrap" style="position:relative">
-              <div style="display:flex;gap:4px">
-                <button id="tierEconomy" class="btn mode-btn" onclick="setModelTier('economy')" title="Haiku for routine, Sonnet for complex" style="flex:1;min-width:0;font-size:10px;padding:6px 4px;overflow:hidden;box-sizing:border-box">
-                  <span style="font-weight:600;white-space:nowrap">Economy</span>
-                </button>
-                <button id="tierPerformance" class="btn mode-btn" onclick="setModelTier('performance')" title="Sonnet for all tasks" style="flex:1;min-width:0;font-size:10px;padding:6px 4px;overflow:hidden;box-sizing:border-box">
-                  <span style="font-weight:600;white-space:nowrap">Performance</span>
-                </button>
-              </div>
-              <div id="tierHint" class="tier-hint">
-                <div id="tierDesc" style="font-size:9px;color:var(--muted);margin-bottom:4px">Sonnet for all tasks</div>
-                <div id="modelDetailsPanel" style="font-size:9px;line-height:1.5"></div>
-              </div>
-            </div>
-          </div>
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05)">
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Computer API Path</div>
-            <div style="display:flex;gap:4px;margin-bottom:4px">
-              <button id="apiAuto" class="btn mode-btn" onclick="setComputerUseApi('auto')" title="Prefers direct Anthropic when key is set" style="flex:1;min-width:0;font-size:10px;padding:6px 4px;overflow:hidden;box-sizing:border-box">
-                <span style="font-weight:600;white-space:nowrap">Auto</span>
-              </button>
-              <button id="apiDirect" class="btn mode-btn" onclick="setComputerUseApi('direct')" title="Native computer-use tool + prompt caching" style="flex:1;min-width:0;font-size:10px;padding:6px 4px;overflow:hidden;box-sizing:border-box">
-                <span style="font-weight:600;white-space:nowrap">Direct</span>
-              </button>
-              <button id="apiOpenRouter" class="btn mode-btn" onclick="setComputerUseApi('openrouter')" title="Unified billing, wider model selection" style="flex:1;min-width:0;font-size:10px;padding:6px 4px;overflow:hidden;box-sizing:border-box">
-                <span style="font-weight:600;white-space:nowrap">OpenRouter</span>
-              </button>
-            </div>
-            <div id="apiPathDesc" style="font-size:9px;color:var(--muted);line-height:1.4">Auto: uses direct Anthropic when key is set</div>
-          </div>
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05)">
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Browser Session</div>
-            <div id="browserSessionStatus" style="font-size:11px;margin-bottom:6px;padding:6px 8px;background:rgba(255,255,255,0.02);border-radius:6px">
-              <div style="display:flex;align-items:center;gap:6px">
-                <span id="chromeStatusDot" style="width:7px;height:7px;border-radius:50%;background:var(--muted);flex-shrink:0"></span>
-                <span id="chromeStatusText" style="font-size:11px">Not connected</span>
-              </div>
-              <div id="chromeModeText" style="font-size:10px;color:var(--muted)"></div>
-            </div>
-            <div id="chromeBtnWrap" style="position:relative">
-              <button class="btn" id="launchChromeBtn" style="width:100%;font-size:11px;margin-bottom:0" onclick="launchChrome()">Launch Chrome Session</button>
-              <button class="btn" id="stopChromeBtn" style="width:100%;font-size:11px;margin-bottom:0;background:rgba(217,83,79,0.15);color:var(--err);display:none" onclick="stopChrome()">Stop Chrome Session</button>
-              <div id="chromeBtnHint" style="font-size:9px;color:var(--muted);line-height:1.4;margin-top:4px;overflow:hidden;max-height:0;opacity:0;transition:max-height .2s ease,opacity .2s ease" title="Opens a dedicated Chrome profile at %LOCALAPPDATA%\\ClawBridge\\ChromeProfile. Sign into your accounts once — logins persist between sessions.">Persistent Chrome profile with saved logins<div id="chromeExeInfo" style="margin-top:4px"></div></div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="card expandable" id="card-activity">
-        <h2 class="expandable-header" onclick="toggleSection('activity')">
-          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>Activity</span>
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-        </h2>
-        <div class="expandable-content" id="activityContent">
-          <div id="activityFeed" class="activity-feed" style="overflow-y:auto;max-height:150px;"><p class="muted">Waiting for activity...</p></div>
-        </div>
-      </div>
-      <div class="card expandable" id="card-liveview">
-        <h2 class="expandable-header" onclick="toggleSection('liveview')">
-          <span style="display:flex;align-items:center;gap:8px;"><svg id="monitorIcon" class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Live View</span>
-          <span style="display:flex;align-items:center;gap:6px;">
-            <span id="liveStatus" style="font-size:9px;color:var(--muted)">Idle</span>
-            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          </span>
-        </h2>
-        <div class="expandable-content collapsed" id="liveviewContent">
-          <div class="live-view-img-wrap">
-            <img id="liveImage" src="" alt="Live Browser Feed">
-            <div id="livePlaceholder" style="display:flex;flex-direction:column;align-items:center;padding:24px 16px;gap:8px">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-              <div style="font-size:11px;color:var(--muted);text-align:center">No active session</div>
-              <div id="lastSessionTime" style="font-size:9px;color:rgba(160,174,192,0.4)"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="card expandable" id="card-templates">
-        <h2 class="expandable-header" onclick="toggleSection('templates')">
-          <span style="display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>Templates</span>
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-        </h2>
-        <div class="expandable-content collapsed" id="templatesContent">
-          <div id="templateList"><p style="color:var(--muted);font-size:11px">No templates yet</p></div>
-          <button class="btn" style="width:100%;font-size:11px;margin-top:8px;background:#232428;border:1px solid var(--border)" onclick="showNewTemplateForm()">+ New Template</button>
-          <div id="newTemplateForm" style="display:none;margin-top:8px">
-            <input id="tmplName" placeholder="Template name" style="margin-bottom:6px;font-size:12px">
-            <textarea id="tmplPrompt" placeholder="Task prompt..." style="margin-bottom:6px;font-size:12px;min-height:50px"></textarea>
-            <select id="tmplEngine" style="margin-bottom:6px;font-size:12px;width:100%!important"><option value="auto">Auto</option><option value="browser_use">browser-use</option><option value="computer_use">computer-use</option><option value="openclaw">OpenClaw</option></select>
-            <button class="btn" style="width:100%;font-size:11px" onclick="createTemplate()">Save Template</button>
-          </div>
-        </div>
-      </div>
       <div class="sidebar-nav-item active" onclick="switchView('chat')" id="nav-chat">
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
         <span>Chat</span>
+      </div>
+      <div class="sidebar-nav-item" onclick="switchView('config')" id="nav-config">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Config</span>
       </div>
       <div class="sidebar-nav-item" onclick="switchView('soul')" id="nav-soul">
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
@@ -8662,6 +8958,10 @@ document.addEventListener('DOMContentLoaded', () => {
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
         <span>Workflows</span>
         <span id="workflowsBadge" class="nav-badge" style="display:none">0</span>
+      </div>
+      <div class="sidebar-nav-item" onclick="switchView('templates')" id="nav-templates">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+        <span>Templates</span>
       </div>
     </aside>
     <div class="sidebar-pull-tab" onclick="toggleSidebar('left')" title="Open sidebar">
@@ -8726,6 +9026,146 @@ document.addEventListener('DOMContentLoaded', () => {
               </form>
             </div>
             <button type="button" class="record-chip" id="chatRecordBtn" onclick="toggleChatRecording()" title="Record a desktop workflow"><span class="rec-dot"></span><span id="chatRecordLabel">Rec</span><span class="rec-timer" id="chatRecordTimer" style="display:none">00:00</span></button>
+          </div>
+        </div>
+      </div>
+      <!-- Config View -->
+      <div id="configView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
+        <div style="max-width:900px;margin:0 auto;width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+            <div>
+              <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Configuration</h3>
+              <p style="font-size:12px;color:var(--muted)">Engines, API keys, and automation settings</p>
+            </div>
+            <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#232428;border:1px solid var(--border)">Back to Chat</button>
+          </div>
+          <!-- Engines Section -->
+          <div class="card" style="margin-bottom:16px;">
+            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>Engines</h2>
+            <div id="engineList"><p class="muted">Loading...</p></div>
+          </div>
+          <!-- API Keys Section -->
+          <div class="card" style="margin-bottom:16px;">
+            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>API Keys</h2>
+            <div id="configSummary"><p class="muted">Loading...</p></div>
+            <div id="creditBalanceWidget" style="display:none;margin-top:16px;padding:12px;background:rgba(88,101,242,0.08);border-radius:8px;border:1px solid rgba(88,101,242,0.2)">
+              <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Credit Balance</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <span id="creditAmount" style="font-size:18px;font-weight:600;color:#5865f2">$0.00</span>
+                <span style="color:var(--muted);font-size:12px">/</span>
+                <span id="creditLimit" style="font-size:14px;color:var(--muted)">$0.00</span>
+              </div>
+              <div style="background:rgba(255,255,255,0.1);border-radius:4px;height:6px;overflow:hidden;margin-bottom:8px">
+                <div id="creditBar" style="height:100%;background:#5865f2;transition:width 0.3s;width:0%"></div>
+              </div>
+              <button class="btn" onclick="window.open(window._topupUrl||'https://clawbridge.ai/account','_blank')" style="width:100%;font-size:11px;background:#5865f2">Buy More Credits</button>
+            </div>
+          </div>
+          <!-- Automation Settings -->
+          <div class="card" style="margin-bottom:16px;">
+            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;">Automation Settings</h2>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+              <div>
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Automation Mode</div>
+                <div id="automationModeWrap" style="position:relative">
+                  <div style="display:flex;gap:4px">
+                    <button id="modeSupervised" class="btn mode-btn" onclick="setAutomationMode('supervised')" title="Pauses before high-risk actions" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Supervised</span>
+                    </button>
+                    <button id="modeAutonomous" class="btn mode-btn" onclick="setAutomationMode('autonomous')" title="Runs without interruption" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Autonomous</span>
+                    </button>
+                  </div>
+                  <div id="modeHint" class="mode-hint">
+                    <div id="modeDesc" style="font-size:10px;color:var(--muted);margin-top:6px">Pauses before high-risk actions</div>
+                    <div id="modeDetailsPanel" style="font-size:10px;line-height:1.5"></div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Model Tier</div>
+                <div id="tierBtnWrap" style="position:relative">
+                  <div style="display:flex;gap:4px">
+                    <button id="tierEconomy" class="btn mode-btn" onclick="setModelTier('economy')" title="Haiku for routine, Sonnet for complex" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Economy</span>
+                    </button>
+                    <button id="tierPerformance" class="btn mode-btn" onclick="setModelTier('performance')" title="Sonnet for all tasks" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Performance</span>
+                    </button>
+                  </div>
+                  <div id="tierHint" class="tier-hint">
+                    <div id="tierDesc" style="font-size:10px;color:var(--muted);margin-top:6px">Sonnet for all tasks</div>
+                    <div id="modelDetailsPanel" style="font-size:10px;line-height:1.5"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Advanced Settings -->
+          <div class="card" style="margin-bottom:16px;">
+            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;">Advanced</h2>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+              <div>
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Computer API Path</div>
+                <div id="apiPathWrap" style="position:relative">
+                  <div style="display:flex;gap:4px">
+                    <button id="apiAuto" class="btn mode-btn" onclick="setComputerUseApi('auto')" title="Prefers direct Anthropic when key is set" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Auto</span>
+                    </button>
+                    <button id="apiDirect" class="btn mode-btn" onclick="setComputerUseApi('direct')" title="Native computer-use tool + prompt caching" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Direct</span>
+                    </button>
+                    <button id="apiOpenRouter" class="btn mode-btn" onclick="setComputerUseApi('openrouter')" title="Unified billing, wider model selection" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">OpenRouter</span>
+                    </button>
+                  </div>
+                  <div class="api-hint">
+                    <div id="apiPathDesc" style="font-size:10px;color:var(--muted);margin-top:6px">Auto: uses direct Anthropic when key is set</div>
+                    <div id="apiPathDetails" style="font-size:10px;line-height:1.5"></div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Scaffolding Profile</div>
+                <div id="scaffoldingWrap" style="position:relative">
+                  <div style="display:flex;gap:4px">
+                    <button id="scaffFull" class="btn mode-btn" onclick="setScaffoldingProfile('full')" title="Maximum guidance" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Full</span>
+                    </button>
+                    <button id="scaffStandard" class="btn mode-btn" onclick="setScaffoldingProfile('standard')" title="Balanced guidance" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Standard</span>
+                    </button>
+                    <button id="scaffMinimal" class="btn mode-btn" onclick="setScaffoldingProfile('minimal')" title="Core rules only" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Minimal</span>
+                    </button>
+                    <button id="scaffRaw" class="btn mode-btn" onclick="setScaffoldingProfile('raw')" title="No scaffolding" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                      <span style="font-weight:600;white-space:nowrap">Raw</span>
+                    </button>
+                  </div>
+                  <div class="scaffolding-hint">
+                    <div id="scaffoldingDesc" style="font-size:10px;color:var(--muted);margin-top:6px">Balanced guidance for current models</div>
+                    <div id="scaffoldingDetailsPanel" style="font-size:10px;line-height:1.5"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Browser Session -->
+          <div class="card" style="margin-bottom:16px;">
+            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>Browser Session</h2>
+            <div id="browserSessionStatus" style="font-size:12px;margin-bottom:8px;padding:8px 12px;background:rgba(255,255,255,0.02);border-radius:6px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span id="chromeStatusDot" style="width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0"></span>
+                <span id="chromeStatusText" style="font-size:12px">Not connected</span>
+              </div>
+              <div id="chromeModeText" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
+            </div>
+            <div id="chromeBtnWrap" style="display:flex;gap:8px;align-items:center">
+              <button class="btn" id="launchChromeBtn" style="font-size:12px" onclick="launchChrome()">Launch Chrome Session</button>
+              <button class="btn" id="stopChromeBtn" style="font-size:12px;background:rgba(217,83,79,0.15);color:var(--err);display:none" onclick="stopChrome()">Stop Chrome Session</button>
+              <span id="chromeBtnHint" style="font-size:10px;color:var(--muted)">Persistent Chrome profile with saved logins</span>
+              <span id="chromeExeInfo" style="font-size:10px;color:var(--muted)"></span>
+            </div>
           </div>
         </div>
       </div>
@@ -8818,28 +9258,35 @@ document.addEventListener('DOMContentLoaded', () => {
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
             <div>
               <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Task History</h3>
-              <p style="font-size:12px;color:var(--muted)">Browse, search, and replay all tasks</p>
+              <p style="font-size:12px;color:var(--muted)">Browse, search, and replay all tasks and system activity</p>
             </div>
             <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#232428;border:1px solid var(--border)">Back to Chat</button>
           </div>
-          <div id="historyCreditBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:rgba(88,101,242,0.06);border:1px solid rgba(88,101,242,0.15);border-radius:6px;margin-bottom:12px;min-height:0;"></div>
-          <div class="history-filters">
-            <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Filter:</span>
-            <select id="historyFilterStatus" onchange="filterHistory()" style="font-size:12px;width:auto!important;">
-              <option value="">All statuses</option>
-              <option value="complete">Complete</option>
-              <option value="error">Error</option>
-              <option value="running">Running</option>
-              <option value="pending">Pending</option>
-            </select>
-            <select id="historyFilterEngine" onchange="filterHistory()" style="font-size:12px;width:auto!important;">
-              <option value="">All engines</option>
-              <option value="browser_use">browser-use</option>
-              <option value="computer_use">computer-use</option>
-              <option value="openclaw">OpenClaw</option>
-            </select>
-            <input id="historySearch" placeholder="Search prompts or results..." oninput="filterHistory()" style="flex:1;min-width:200px;max-width:300px;font-size:13px;padding:8px 12px;">
+          
+          <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border);">
+            <button id="historyTabTasks" onclick="toggleHistoryTab('tasks')" class="history-tab active" style="background:none;border:none;color:var(--text);font-size:13px;font-weight:600;padding:8px 16px;cursor:pointer;border-bottom:2px solid var(--accent);">Tasks</button>
+            <button id="historyTabActivity" onclick="toggleHistoryTab('activity')" class="history-tab" style="background:none;border:none;color:var(--muted);font-size:13px;font-weight:600;padding:8px 16px;cursor:pointer;border-bottom:2px solid transparent;">System Activity</button>
           </div>
+
+          <div id="historyTabContentTasks">
+            <div id="historyCreditBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:rgba(88,101,242,0.06);border:1px solid rgba(88,101,242,0.15);border-radius:6px;margin-bottom:12px;min-height:0;"></div>
+            <div class="history-filters">
+              <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Filter:</span>
+              <select id="historyFilterStatus" onchange="filterHistory()" style="font-size:12px;width:auto!important;">
+                <option value="">All statuses</option>
+                <option value="complete">Complete</option>
+                <option value="error">Error</option>
+                <option value="running">Running</option>
+                <option value="pending">Pending</option>
+              </select>
+              <select id="historyFilterEngine" onchange="filterHistory()" style="font-size:12px;width:auto!important;">
+                <option value="">All engines</option>
+                <option value="browser_use">browser-use</option>
+                <option value="computer_use">computer-use</option>
+                <option value="openclaw">OpenClaw</option>
+              </select>
+              <input id="historySearch" placeholder="Search prompts or results..." oninput="filterHistory()" style="flex:1;min-width:200px;max-width:300px;font-size:13px;padding:8px 12px;">
+            </div>
           <div style="overflow-x:auto;">
             <table class="history-table">
               <thead><tr>
@@ -8854,6 +9301,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)">No tasks yet</td></tr>
               </tbody>
             </table>
+          </div>
+          </div>
+          <div id="historyTabContentActivity" style="display:none;">
+            <div id="activityFeed" class="activity-feed" style="max-height:600px;overflow-y:auto;"><p class="muted">Waiting for activity...</p></div>
           </div>
         </div>
       </div>
@@ -8886,13 +9337,66 @@ document.addEventListener('DOMContentLoaded', () => {
               <button class="btn" onclick="discardRecording()" style="font-size:12px;background:#232428;border:1px solid var(--border);">Discard</button>
             </div>
           </div>
-          <!-- Workflow list -->
-          <div id="workflowList">
-            <div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">No workflows saved yet. Click Record to create one.</div>
+          <!-- Workflow List -->
+          <div id="workflowList"><p style="color:var(--muted);font-size:13px;text-align:center;padding:40px;">No workflows found. Record one to get started!</p></div>
+        </div>
+      </div>
+      <!-- Templates View -->
+      <div id="templatesView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
+        <div style="max-width:1200px;margin:0 auto;width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <div>
+              <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Templates</h3>
+              <p style="font-size:12px;color:var(--muted)">Reusable task prompts for quick execution</p>
+            </div>
+            <button class="btn" style="font-size:13px;" onclick="document.getElementById('newTemplateFormMain').style.display='block'">+ New Template</button>
+          </div>
+          <div id="newTemplateFormMain" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;">
+            <h4 style="font-size:13px;font-weight:600;margin-bottom:8px;">Create Template</h4>
+            <input id="tmplNameMain" placeholder="Template name" style="margin-bottom:6px;font-size:12px;width:100%;box-sizing:border-box;">
+            <textarea id="tmplPromptMain" placeholder="Task prompt..." style="margin-bottom:6px;font-size:12px;min-height:80px;width:100%;box-sizing:border-box;"></textarea>
+            <select id="tmplEngineMain" style="margin-bottom:8px;font-size:12px;width:100%!important;box-sizing:border-box;">
+              <option value="auto">Auto</option>
+              <option value="browser_use">browser-use</option>
+              <option value="computer_use">computer-use</option>
+              <option value="openclaw">OpenClaw</option>
+            </select>
+            <div style="display:flex;gap:8px;">
+              <button class="btn" style="flex:1;font-size:12px" onclick="createTemplateMain()">Save Template</button>
+              <button class="btn" style="font-size:12px;background:#232428;border:1px solid var(--border)" onclick="document.getElementById('newTemplateFormMain').style.display='none'">Cancel</button>
+            </div>
+          </div>
+          <div id="templateListMain">
+            <p style="color:var(--muted);font-size:13px;text-align:center;padding:40px;">No templates yet. Save a task as a template to reuse it.</p>
           </div>
         </div>
       </div>
     </main>
+  </div>
+  <!-- PiP Floating Panel -->
+  <div id="pipPanel" class="pip-hidden">
+    <div class="pip-titlebar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+      <span class="pip-title">Live View</span>
+      <span id="pipStatus" style="font-size:9px;color:var(--muted)">Idle</span>
+      <button class="pip-minimize" onclick="minimizePip()" title="Minimize"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg></button>
+    </div>
+    <div class="pip-body">
+      <img id="liveImage" src="" alt="Live View">
+      <div id="livePlaceholder" style="display:flex;flex-direction:column;align-items:center;padding:24px 16px;gap:8px">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+        <div style="font-size:11px;color:var(--muted);text-align:center">No active session</div>
+        <div id="lastSessionTime" style="font-size:9px;color:rgba(160,174,192,0.4)"></div>
+      </div>
+    </div>
+    <div class="pip-resize-n" data-dir="n"></div>
+    <div class="pip-resize-s" data-dir="s"></div>
+    <div class="pip-resize-e" data-dir="e"></div>
+    <div class="pip-resize-w" data-dir="w"></div>
+    <div class="pip-resize-ne" data-dir="ne"></div>
+    <div class="pip-resize-nw" data-dir="nw"></div>
+    <div class="pip-resize-se" data-dir="se"></div>
+    <div class="pip-resize-sw" data-dir="sw"></div>
   </div>
   <!-- Activation Modal -->
   <div id="activationModal" class="modal-overlay" style="display:none">
@@ -8981,7 +9485,26 @@ def create_app() -> FastAPI:
         asyncio.create_task(get_manager().remote_bridge_loop())
         # Start schedule manager loop
         asyncio.create_task(get_schedule_manager().run_loop(get_manager().submit))
+        # Background update check (warm the cache for dashboard)
+        async def _startup_update_check():
+            await asyncio.sleep(5)
+            try:
+                await _check_for_update()
+            except Exception:
+                pass
+        asyncio.create_task(_startup_update_check())
+        # Start hotkey monitor (triple-Escape, Ctrl+Shift+O)
+        loop = asyncio.get_running_loop()
+        if _hotkey_monitor is not None:
+            _hotkey_monitor.start(loop)
+        if _overlay is not None:
+            _overlay.start(loop)
         yield
+        # Cleanup hotkey monitor and overlay
+        if _hotkey_monitor is not None:
+            _hotkey_monitor.stop()
+        if _overlay is not None:
+            _overlay.stop()
         # Cleanup tray icon on shutdown so Windows removes it from the notification area
         if _tray_icon is not None:
             try:
@@ -9231,19 +9754,8 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
 
     @app.post("/api/stop-all")
     async def stop_all_tasks():
-        """Emergency stop: cancel all running tasks and reset all engines."""
-        mgr = get_manager()
-        cancelled = 0
-        for t in mgr.list_tasks():
-            if t.status in (TaskStatus.RUNNING, TaskStatus.PENDING):
-                await mgr.cancel(t.id)
-                cancelled += 1
-        # Force-reset all engine statuses
-        for eng in mgr._engines.values():
-            if hasattr(eng, '_cancel_requested'):
-                eng._cancel_requested = True
-            eng._status = EngineStatus.AVAILABLE
-        await _broadcast({"type": "stop_all", "payload": {"cancelled": cancelled}})
+        """Emergency stop: cancel all running/pending tasks and reset all engines."""
+        cancelled = await get_manager().emergency_stop_all()
         return {"cancelled": cancelled}
 
     @app.patch("/api/tasks/{task_id}")
@@ -9337,6 +9849,7 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
             "policy": {"mode": s.policy_mode, "max_concurrent_tasks": s.max_concurrent_tasks},
             "automation": {"mode": s.automation_mode},
             "model_tier": s.model_tier,
+            "scaffolding_profile": s.scaffolding_profile,
             "computer_use_api": s.computer_use_api,
             "browser": {"mode": s.browser_mode, "cdp_url": s.browser_cdp_url, "user_data_dir": s.browser_user_data_dir, "chrome_exe": _find_chrome_exe() or "not found"},
             "machine_id": get_machine_id(),
@@ -9351,6 +9864,31 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
                 "economy_model_override": s.economy_model,
             }
         }
+
+    @app.get("/api/permissions")
+    async def get_permissions():
+        """Check platform permissions needed for automation (macOS only)."""
+        if sys.platform != "darwin":
+            return {"platform": sys.platform, "accessibility": True, "screen_recording": True}
+        a11y = False
+        try:
+            from ApplicationServices import AXIsProcessTrusted
+            a11y = AXIsProcessTrusted()
+        except ImportError:
+            a11y = False
+        except Exception:
+            a11y = False
+        screen_ok = False
+        try:
+            import mss
+            with mss.mss() as sct:
+                img = sct.grab(sct.monitors[1])
+                # All-black screenshot means Screen Recording permission not granted
+                pixels = img.raw
+                screen_ok = any(b != 0 for b in pixels[:4000])
+        except Exception:
+            screen_ok = False
+        return {"platform": "darwin", "accessibility": a11y, "screen_recording": screen_ok}
 
     @app.post("/api/config/keys")
     async def save_key(body: dict):
@@ -9549,6 +10087,30 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
         await _broadcast({"type": "config_update", "payload": {"computer_use_api": api_path}})
         return {"status": "ok", "api_path": api_path}
 
+    @app.post("/api/config/scaffolding")
+    async def save_scaffolding_profile(body: dict):
+        """Set scaffolding profile: full, standard, minimal, or raw."""
+        profile = body.get("profile", "standard")
+        if profile not in ("full", "standard", "minimal", "raw"):
+            raise HTTPException(400, f"Invalid scaffolding profile: {profile}. Use 'full', 'standard', 'minimal', or 'raw'.")
+        # Persist to .env
+        env_path = Path(".env")
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith("SCAFFOLDING_PROFILE=") or line.strip().startswith("SCAFFOLDING_PROFILE ="):
+                lines[i] = f"SCAFFOLDING_PROFILE={profile}"
+                found = True
+                break
+        if not found:
+            lines.append(f"SCAFFOLDING_PROFILE={profile}")
+        env_path.write_text("\n".join(lines) + "\n")
+        # Update in-memory
+        Settings.scaffolding_profile = profile
+        os.environ["SCAFFOLDING_PROFILE"] = profile
+        await _broadcast({"type": "config_update", "payload": {"scaffolding_profile": profile}})
+        return {"status": "ok", "profile": profile}
+
     # ── License / Activation Endpoints ───────────────────────────────────
 
     @app.post("/api/license/activate")
@@ -9589,6 +10151,13 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
             "topup_url": info.topup_url,
             "error": info.error,
         }
+
+    # ── Auto-Update Check ────────────────────────────────────────────────
+
+    @app.get("/api/updates/check")
+    async def api_check_update():
+        """Check if a newer version is available on GitHub."""
+        return await _check_for_update()
 
     # ── Chrome Launcher ──────────────────────────────────────────────────
     _chrome_proc: subprocess.Popen | None = None
@@ -9955,6 +10524,40 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
         asyncio.create_task(_delete_temp_workflow(temp_wf.id))
         return {"workflow": temp_wf.model_dump(mode="json"), "task": result.model_dump(mode="json"), "modifications": modifications}
 
+    @app.post("/api/workflows/{wf_id}/save-modified")
+    async def save_modified_workflow(wf_id: str, body: dict):
+        """Save an AI-modified workflow as a new workflow (without replaying it)."""
+        wf = get_workflow_manager().get(wf_id)
+        if not wf:
+            raise HTTPException(404, "Workflow not found")
+        modifications = body.get("modifications", "").strip()
+        if not modifications:
+            raise HTTPException(400, "modifications field is required")
+        if len(modifications) > 2000:
+            raise HTTPException(400, "modifications text too long (max 2000 chars)")
+        mod_scan = safety_scan_prompt(modifications)
+        if mod_scan.get("injection_flags"):
+            raise HTTPException(400, "Modification text contains unsafe patterns")
+        try:
+            modified_actions = await get_manager()._modify_workflow_actions(
+                [a if isinstance(a, dict) else a.model_dump() for a in wf.actions],
+                modifications
+            )
+        except Exception as e:
+            logging.error("Workflow modification failed: %s", e)
+            raise HTTPException(500, f"Modification failed: {e}")
+        if not modified_actions:
+            raise HTTPException(500, "Modification produced no actions")
+        new_wf = get_workflow_manager().create(
+            name=f"{wf.name} (edited)",
+            description=f"AI-edited version of '{wf.name}': {modifications[:200]}",
+            actions=modified_actions,
+            target_app=wf.target_app or "",
+            tags=list(set((wf.tags or []) + ["ai-edited"])),
+        )
+        await _broadcast({"type": "workflow_update", "payload": [w.model_dump(mode="json") for w in get_workflow_manager().list_all()]})
+        return {"id": new_wf.id, "name": new_wf.name}
+
     @app.post("/api/workflows/{wf_id}/save-params")
     async def save_workflow_params(wf_id: str, body: dict):
         """Save parameter default values for a workflow.
@@ -10001,6 +10604,18 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
             raise HTTPException(400, "params field is required")
 
         # Safety scan all parameter values
+        # VULN-107: Also check for shell metacharacters that could execute
+        # commands if the workflow types into a terminal window.
+        import re as _re_param
+        _SHELL_DANGER_PATTERNS = _re_param.compile(
+            r'[;&|`$]'           # Shell command separators and expansion
+            r'|\$\('             # Command substitution $(...)
+            r'|>\s*/'            # Redirect to absolute path
+            r'|>\s*[A-Za-z]:\\'  # Redirect to Windows path
+            r'|\brm\s+-rf\b'    # Destructive commands
+            r'|\bdel\s+/[sfq]'  # Windows delete with flags
+            r'|\bformat\s+[A-Za-z]:'  # Format drive
+        )
         for pname, pval in params.items():
             if not isinstance(pval, str) or len(pval) > 5000:
                 raise HTTPException(400, f"Parameter '{pname}' must be a string under 5000 chars")
@@ -10009,6 +10624,9 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
                 raise HTTPException(400, f"Parameter '{pname}' contains unsafe patterns")
             if get_settings().policy_mode == "strict" and scan.get("credentials"):
                 raise HTTPException(400, f"Parameter '{pname}' contains credentials (blocked in strict mode)")
+            # VULN-107: Block shell metacharacters in non-permissive modes
+            if get_settings().policy_mode != "permissive" and _SHELL_DANGER_PATTERNS.search(pval):
+                raise HTTPException(400, f"Parameter '{pname}' contains shell metacharacters that could be dangerous if typed into a terminal")
 
         # Build action-index-to-new-value mapping from detected_variables
         action_subs: dict[int, str] = {}  # action_index -> new text value
@@ -10254,7 +10872,7 @@ def _create_tray_icon(url: str):
         draw.rectangle([32, 8, 56, 56], fill=(99, 102, 241, 255))  # cut right side for "C"
 
     def on_open(icon, item):
-        webbrowser.open(url)
+        _open_app_mode(url)
 
     def on_stop_task(icon, item):
         """Stop the currently running task via the API."""
@@ -10294,9 +10912,29 @@ def _create_tray_icon(url: str):
         icon.stop()
         os._exit(0)
 
+    def on_emergency_stop(icon, item):
+        """Emergency stop all tasks via the API."""
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                f"{url}/api/stop-all",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception as e:
+            logging.warning("Tray emergency stop failed: %s", e)
+
+    def on_toggle_overlay(icon, item):
+        if _overlay is not None:
+            _overlay.toggle()
+
     menu = pystray.Menu(
         pystray.MenuItem("Open Dashboard", on_open, default=True),
         pystray.MenuItem("Stop Task", on_stop_task, enabled=_has_running_task),
+        pystray.MenuItem("Emergency Stop All", on_emergency_stop),
+        pystray.MenuItem("Show/Hide Overlay", on_toggle_overlay),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"ClawBridge v{__version__}", None, enabled=False),
         pystray.MenuItem(f"Running on {url}", None, enabled=False),
@@ -10308,8 +10946,610 @@ def _create_tray_icon(url: str):
     return icon
 
 
+# ---------------------------------------------------------------------------
+# Triple-Escape Emergency Stop + Ctrl+Shift+O Overlay Toggle
+# ---------------------------------------------------------------------------
+
+_hotkey_monitor: "_HotkeyMonitor | None" = None
+_overlay: "_MiniOverlay | None" = None
+
+
+class _HotkeyMonitor:
+    """Detect triple-Escape (3x within 1s) to emergency-stop all tasks.
+
+    Also handles Ctrl+Shift+O to toggle the mini overlay.
+    Runs pynput.keyboard.Listener in a daemon thread.
+    """
+
+    TRIGGER_COUNT = 3
+    TRIGGER_WINDOW = 1.0  # seconds
+
+    def __init__(self):
+        self._esc_times: list[float] = []
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._listener = None
+        self._ctrl = False
+        self._shift = False
+
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+        try:
+            from pynput import keyboard
+            self._listener = keyboard.Listener(
+                on_press=self._on_press,
+                on_release=self._on_release,
+            )
+            self._listener.daemon = True
+            self._listener.start()
+            logging.info("Hotkey monitor started (triple-Escape to stop, Ctrl+Shift+F2 for overlay)")
+        except ImportError:
+            logging.warning("pynput not available -- hotkey monitor disabled")
+        except Exception as e:
+            logging.warning("Hotkey monitor failed to start: %s", e)
+
+    def stop(self) -> None:
+        if self._listener:
+            try:
+                self._listener.stop()
+            except Exception:
+                pass
+
+    def _on_press(self, key) -> None:
+        from pynput import keyboard
+        now = __import__("time").time()
+        # Track modifier state
+        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
+            self._ctrl = True
+            return
+        if key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r):
+            self._shift = True
+            return
+
+        # Ctrl+Shift+F2 -> toggle overlay
+        if self._ctrl and self._shift and key == keyboard.Key.f2:
+            if _overlay is not None:
+                _overlay.toggle()
+            return
+
+        # Escape tracking
+        if key == keyboard.Key.esc:
+            self._esc_times.append(now)
+            # Keep only presses within window
+            self._esc_times = [t for t in self._esc_times if now - t <= self.TRIGGER_WINDOW]
+            if len(self._esc_times) >= self.TRIGGER_COUNT:
+                self._esc_times.clear()
+                self._fire_emergency_stop()
+        else:
+            # Non-Escape, non-modifier key resets counter
+            self._esc_times.clear()
+
+    def _on_release(self, key) -> None:
+        from pynput import keyboard
+        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
+            self._ctrl = False
+        if key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r):
+            self._shift = False
+
+    def _fire_emergency_stop(self) -> None:
+        logging.warning("Triple-Escape detected -- firing emergency stop")
+        # Audio feedback
+        try:
+            if sys.platform == "win32":
+                import winsound
+                winsound.Beep(1000, 200)
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["afplay", "/System/Library/Sounds/Basso.aiff"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        # Update overlay immediately (don't wait for WS round-trip)
+        if _overlay is not None and _overlay._root is not None:
+            _overlay._root.after(0, _overlay._set_stopped_state)
+            _overlay._focus_dashboard()
+        # Schedule on asyncio loop
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(get_manager().emergency_stop_all())
+            )
+
+
+class _MiniOverlay:
+    """Always-on-top mini window showing real-time task progress + STOP button.
+
+    Pinned to bottom-right, draggable. Receives updates via WebSocket.
+    Shows: status with elapsed time, action count, current action,
+    reasoning, animated progress bar, and STOP button.
+    """
+
+    WIDTH = 360
+    HEIGHT = 200
+    MAX_WIDTH = 600
+    MAX_HEIGHT = 420
+    BG = "#1e1f23"
+    FG = "#dbdee1"
+    ACCENT = "#5865f2"
+    OK = "#57a86d"
+    ERR = "#d9534f"
+    WARN = "#c49a3a"
+    MUTED = "#949ba4"
+
+    def __init__(self):
+        self._root = None
+        self._thread: threading.Thread | None = None
+        self._ws_thread: threading.Thread | None = None
+        self._visible = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # UI element refs
+        self._status_var = None
+        self._status_label = None
+        self._step_var = None
+        self._action_var = None
+        self._reasoning_var = None
+        self._progress_canvas = None
+        self._stop_btn = None
+        self._progress_pct = 0
+        self._drag_x = 0
+        self._drag_y = 0
+        # State tracking
+        self._action_count = 0
+        self._task_start: float = 0
+        self._timer_id = None
+        self._pulse_pos = 0
+        self._is_running = False
+        self._autohide_id = None
+
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+        self._thread = threading.Thread(target=self._run_tk, daemon=True)
+        self._thread.start()
+        logging.info("Mini overlay thread started")
+
+    def stop(self) -> None:
+        if self._root:
+            try:
+                self._root.quit()
+            except Exception:
+                pass
+
+    def toggle(self) -> None:
+        if self._root is None:
+            return
+        if self._visible:
+            self._root.after(0, self._hide)
+        else:
+            self._root.after(0, self._show)
+
+    def _show(self) -> None:
+        if self._root:
+            self._root.deiconify()
+            self._visible = True
+            if self._autohide_id:
+                self._root.after_cancel(self._autohide_id)
+                self._autohide_id = None
+
+    def _hide(self) -> None:
+        if self._root:
+            self._root.withdraw()
+            self._visible = False
+
+    def _run_tk(self) -> None:
+        try:
+            import tkinter as tk
+        except ImportError:
+            logging.warning("tkinter not available -- overlay disabled")
+            return
+
+        root = tk.Tk()
+        self._root = root
+        root.title("ClawBridge")
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        root.configure(bg=self.BG)
+        root.geometry(f"{self.WIDTH}x{self.HEIGHT}")
+        # Position bottom-right
+        try:
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            x = sw - self.WIDTH - 20
+            y = sh - self.HEIGHT - 60
+            root.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+        root.attributes("-alpha", 0.92)
+        self._apply_rounded_corners()
+        self._resize_edge = None  # Track which edge is being resized
+
+        # -- Header (draggable) --
+        hdr = tk.Frame(root, bg=self.ACCENT, height=26)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="Esc 3 times to stop", font=("Segoe UI", 9, "bold"),
+                 bg=self.ACCENT, fg="white").pack(side="left", padx=8)
+        close_btn = tk.Button(hdr, text="x", font=("Segoe UI", 9),
+                              bg=self.ACCENT, fg="white", bd=0,
+                              activebackground="#4752c4", activeforeground="white",
+                              command=self._hide, cursor="hand2")
+        close_btn.pack(side="right", padx=6)
+        # Drag only from header
+        hdr.bind("<Button-1>", self._start_drag)
+        hdr.bind("<B1-Motion>", self._do_drag)
+        for child in hdr.winfo_children():
+            if not isinstance(child, tk.Button):
+                child.bind("<Button-1>", self._start_drag)
+                child.bind("<B1-Motion>", self._do_drag)
+
+        body = tk.Frame(root, bg=self.BG, padx=10, pady=6)
+        body.pack(fill="both", expand=True)
+
+        # -- Status row (status + elapsed time) --
+        status_row = tk.Frame(body, bg=self.BG)
+        status_row.pack(fill="x")
+        self._status_var = tk.StringVar(value="Idle")
+        self._status_label = tk.Label(status_row, textvariable=self._status_var,
+                                      font=("Segoe UI", 11, "bold"),
+                                      bg=self.BG, fg=self.MUTED, anchor="w")
+        self._status_label.pack(side="left")
+        self._elapsed_var = tk.StringVar(value="")
+        tk.Label(status_row, textvariable=self._elapsed_var, font=("Segoe UI", 9),
+                 bg=self.BG, fg=self.MUTED, anchor="e").pack(side="right")
+
+        # -- Step (action count) --
+        self._step_var = tk.StringVar(value="")
+        tk.Label(body, textvariable=self._step_var, font=("Segoe UI", 9),
+                 bg=self.BG, fg=self.ACCENT, anchor="w").pack(fill="x")
+
+        # -- Current action --
+        self._action_var = tk.StringVar(value="")
+        tk.Label(body, textvariable=self._action_var, font=("Segoe UI", 9),
+                 bg=self.BG, fg=self.FG, anchor="w").pack(fill="x")
+
+        # -- Reasoning (wraps to window width, expands with resize) --
+        self._reasoning_var = tk.StringVar(value="")
+        self._reasoning_label = tk.Label(body, textvariable=self._reasoning_var, font=("Segoe UI", 8),
+                 bg=self.BG, fg=self.MUTED, anchor="w", justify="left",
+                 wraplength=self.WIDTH - 30)
+        self._reasoning_label.pack(fill="x", pady=(2, 0))
+
+        # -- Progress bar --
+        bar_frame = tk.Frame(body, bg="#2b2d31", height=4)
+        bar_frame.pack(fill="x", pady=(6, 4))
+        self._progress_canvas = tk.Canvas(bar_frame, height=4, bg="#2b2d31",
+                                          highlightthickness=0)
+        self._progress_canvas.pack(fill="x")
+
+        # -- Bottom row: STOP button + resize grip --
+        bottom_row = tk.Frame(body, bg=self.BG)
+        bottom_row.pack(fill="x", pady=(2, 0))
+        self._stop_btn = tk.Button(bottom_row, text="STOP", font=("Segoe UI", 9, "bold"),
+                                   bg=self.ERR, fg="white", bd=0, padx=16, pady=3,
+                                   activebackground="#c0392b", activeforeground="white",
+                                   cursor="hand2", command=self._on_stop)
+        self._stop_btn.pack(side="right")
+        # Resize grip (bottom-right corner)
+        grip = tk.Label(bottom_row, text="\u25e2", font=("Segoe UI", 8),
+                        bg=self.BG, fg="#555", cursor="bottom_right_corner")
+        grip.pack(side="left", anchor="sw")
+        grip.bind("<Button-1>", self._start_resize)
+        grip.bind("<B1-Motion>", self._do_resize)
+
+        # Resize from edges (bottom and right borders)
+        root.bind("<Motion>", self._check_resize_cursor)
+        root.bind("<Button-1>", self._maybe_start_edge_resize)
+        root.bind("<B1-Motion>", self._maybe_do_edge_resize)
+
+        # Start hidden
+        root.withdraw()
+        self._visible = False
+
+        # Start WS listener
+        self._ws_thread = threading.Thread(target=self._ws_loop, daemon=True)
+        self._ws_thread.start()
+
+        root.mainloop()
+
+    def _apply_rounded_corners(self) -> None:
+        """Apply rounded window region on Windows."""
+        try:
+            if sys.platform == "win32" and self._root:
+                self._root.update_idletasks()
+                hwnd = int(self._root.wm_frame(), 16) if self._root.wm_frame() else int(self._root.frame(), 16)
+                import ctypes
+                w = self._root.winfo_width()
+                h = self._root.winfo_height()
+                rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 16, 16)
+                ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+        except Exception:
+            pass
+
+    def _start_drag(self, event):
+        self._drag_x = event.x_root
+        self._drag_y = event.y_root
+
+    def _do_drag(self, event):
+        if self._root:
+            dx = event.x_root - self._drag_x
+            dy = event.y_root - self._drag_y
+            x = self._root.winfo_x() + dx
+            y = self._root.winfo_y() + dy
+            self._root.geometry(f"+{x}+{y}")
+            self._drag_x = event.x_root
+            self._drag_y = event.y_root
+
+    def _start_resize(self, event):
+        self._resize_x = event.x_root
+        self._resize_y = event.y_root
+        self._resize_w = self._root.winfo_width()
+        self._resize_h = self._root.winfo_height()
+
+    def _do_resize(self, event):
+        if not self._root:
+            return
+        dx = event.x_root - self._resize_x
+        dy = event.y_root - self._resize_y
+        new_w = max(self.WIDTH, min(self.MAX_WIDTH, self._resize_w + dx))
+        new_h = max(self.HEIGHT, min(self.MAX_HEIGHT, self._resize_h + dy))
+        self._root.geometry(f"{new_w}x{new_h}")
+        if hasattr(self, '_reasoning_label'):
+            self._reasoning_label.configure(wraplength=new_w - 30)
+        self._apply_rounded_corners()
+
+    def _check_resize_cursor(self, event):
+        """Show resize cursor near bottom-right edges."""
+        if not self._root:
+            return
+        w = self._root.winfo_width()
+        h = self._root.winfo_height()
+        margin = 6
+        near_right = event.x >= w - margin
+        near_bottom = event.y >= h - margin
+        if near_right and near_bottom:
+            self._root.configure(cursor="bottom_right_corner")
+        elif near_right:
+            self._root.configure(cursor="right_side")
+        elif near_bottom:
+            self._root.configure(cursor="bottom_side")
+        else:
+            self._root.configure(cursor="")
+
+    def _maybe_start_edge_resize(self, event):
+        """Start resize if clicking near window edges."""
+        if not self._root:
+            return
+        w = self._root.winfo_width()
+        h = self._root.winfo_height()
+        margin = 6
+        near_right = event.x >= w - margin
+        near_bottom = event.y >= h - margin
+        if near_right or near_bottom:
+            self._resize_edge = ("r" if near_right else "") + ("b" if near_bottom else "")
+            self._resize_x = event.x_root
+            self._resize_y = event.y_root
+            self._resize_w = w
+            self._resize_h = h
+        else:
+            self._resize_edge = None
+
+    def _maybe_do_edge_resize(self, event):
+        """Resize window when dragging edges."""
+        if not self._root or not self._resize_edge:
+            return
+        dx = event.x_root - self._resize_x
+        dy = event.y_root - self._resize_y
+        new_w = self._resize_w
+        new_h = self._resize_h
+        if "r" in self._resize_edge:
+            new_w = max(self.WIDTH, min(self.MAX_WIDTH, self._resize_w + dx))
+        if "b" in self._resize_edge:
+            new_h = max(self.HEIGHT, min(self.MAX_HEIGHT, self._resize_h + dy))
+        self._root.geometry(f"{new_w}x{new_h}")
+        if hasattr(self, '_reasoning_label'):
+            self._reasoning_label.configure(wraplength=new_w - 30)
+        self._apply_rounded_corners()
+
+    def _focus_dashboard(self, delay_ms: int = 800) -> None:
+        """Bring the dashboard browser tab back to foreground after a short delay."""
+        def _do_focus():
+            try:
+                # Try to find existing ClawBridge Dashboard window first
+                focused = _plat.bring_app_to_foreground("clawbridge")
+                if not focused:
+                    # Fallback: try finding by localhost
+                    focused = _plat.bring_app_to_foreground("localhost")
+                if not focused:
+                    # Last resort: open in app-mode window
+                    _open_app_mode("http://127.0.0.1:8765")
+            except Exception:
+                try:
+                    _open_app_mode("http://127.0.0.1:8765")
+                except Exception:
+                    pass
+        if self._root:
+            self._root.after(delay_ms, _do_focus)
+
+    def _on_stop(self) -> None:
+        """STOP button pressed -- fire emergency stop."""
+        self._set_stopped_state()
+        self._focus_dashboard()
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(get_manager().emergency_stop_all())
+            )
+
+    def _set_stopped_state(self) -> None:
+        """Set overlay to stopped state and schedule auto-hide."""
+        self._is_running = False
+        self._progress_pct = 0
+        if self._status_var:
+            self._status_var.set("STOPPED")
+        if self._status_label:
+            self._status_label.config(fg=self.ERR)
+        if self._step_var:
+            self._step_var.set("")
+        if self._action_var:
+            self._action_var.set("All tasks cancelled")
+        if self._reasoning_var:
+            self._reasoning_var.set("")
+        self._stop_timer()
+        if self._root:
+            self._root.after(0, self._update_progress_bar)
+            # Auto-hide after 6s
+            if self._autohide_id:
+                self._root.after_cancel(self._autohide_id)
+            self._autohide_id = self._root.after(6000, self._hide)
+
+    def _start_timer(self) -> None:
+        """Start elapsed time ticker."""
+        self._task_start = __import__("time").time()
+        self._stop_timer()
+        self._tick_elapsed()
+
+    def _stop_timer(self) -> None:
+        if self._timer_id:
+            try:
+                self._root.after_cancel(self._timer_id)
+            except Exception:
+                pass
+            self._timer_id = None
+
+    def _tick_elapsed(self) -> None:
+        if not self._is_running or not self._root:
+            return
+        elapsed = int(__import__("time").time() - self._task_start)
+        if elapsed < 60:
+            txt = f"{elapsed}s"
+        else:
+            txt = f"{elapsed // 60}m {elapsed % 60}s"
+        self._elapsed_var.set(txt)
+        # Pulse progress bar while waiting between steps
+        self._pulse_pos = (self._pulse_pos + 3) % 100
+        self._update_progress_bar()
+        self._timer_id = self._root.after(1000, self._tick_elapsed)
+
+    def _update_progress_bar(self) -> None:
+        if not self._progress_canvas:
+            return
+        c = self._progress_canvas
+        c.delete("all")
+        w = c.winfo_width()
+        if w < 2:
+            w = self.WIDTH - 30
+        if self._is_running and self._progress_pct < 100:
+            # Animated pulse: a moving highlight segment
+            fill_w = max(int(w * self._progress_pct / 100), 2)
+            c.create_rectangle(0, 0, fill_w, 4, fill=self.ACCENT, outline="")
+            # Pulse shimmer on top
+            pulse_x = int(w * self._pulse_pos / 100)
+            pulse_w = 40
+            c.create_rectangle(pulse_x, 0, min(pulse_x + pulse_w, w), 4,
+                               fill="#7c85f5", outline="")
+        elif self._progress_pct >= 100:
+            c.create_rectangle(0, 0, w, 4, fill=self.OK, outline="")
+        # else: empty bar (stopped/idle)
+
+    def _ws_loop(self) -> None:
+        """Connect to ClawBridge WebSocket and relay updates to tkinter."""
+        import time as _time
+        while True:
+            try:
+                import websockets.sync.client as wsc
+                with wsc.connect("ws://127.0.0.1:8765/ws", close_timeout=2) as ws:
+                    for msg_str in ws:
+                        try:
+                            msg = json.loads(msg_str)
+                        except Exception:
+                            continue
+                        mtype = msg.get("type")
+                        if mtype == "task_update":
+                            self._handle_task_update(msg.get("payload", {}))
+                        elif mtype == "step_update":
+                            self._handle_step_update(msg.get("payload", {}))
+                        elif mtype in ("emergency_stop", "stop_all"):
+                            self._handle_emergency(msg.get("payload", {}))
+                        elif mtype == "routing_info":
+                            self._handle_routing(msg.get("payload", {}))
+            except Exception:
+                pass
+            _time.sleep(3)  # reconnect delay
+
+    def _handle_task_update(self, p: dict) -> None:
+        if not self._root or not p:
+            return
+        status = p.get("status", "")
+        prompt = (p.get("prompt", "") or "")[:60]
+        if status == "running":
+            self._is_running = True
+            self._action_count = 0
+            self._progress_pct = 0
+            self._root.after(0, lambda: self._status_var.set("Running"))
+            self._root.after(0, lambda: self._status_label.config(fg=self.FG))
+            self._root.after(0, lambda: self._step_var.set("Starting..."))
+            self._root.after(0, lambda: self._action_var.set(prompt))
+            self._root.after(0, lambda: self._reasoning_var.set(""))
+            self._root.after(0, self._start_timer)
+            self._root.after(0, self._update_progress_bar)
+            # Auto-show on task start
+            if not self._visible:
+                self._root.after(0, self._show)
+        elif status in ("complete", "error", "cancelled"):
+            self._is_running = False
+            labels = {"complete": ("Complete", self.OK),
+                      "error": ("Error", self.ERR),
+                      "cancelled": ("Cancelled", self.WARN)}
+            label, color = labels.get(status, (status, self.FG))
+            self._root.after(0, lambda: self._status_var.set(label))
+            self._root.after(0, lambda: self._status_label.config(fg=color))
+            self._root.after(0, self._stop_timer)
+            if status == "complete":
+                self._progress_pct = 100
+                summary = ""
+                if p.get("result") and p["result"].get("summary"):
+                    summary = p["result"]["summary"][:120]
+                self._root.after(0, lambda: self._reasoning_var.set(summary))
+                self._root.after(0, lambda: self._step_var.set(f"Done in {self._action_count} actions"))
+            else:
+                self._progress_pct = 0
+                self._root.after(0, lambda: self._step_var.set(""))
+                err = p.get("error")
+                if err:
+                    self._root.after(0, lambda: self._reasoning_var.set(err[:120]))
+            self._root.after(0, self._update_progress_bar)
+            # Focus dashboard and auto-hide
+            self._focus_dashboard()
+            if self._autohide_id:
+                self._root.after_cancel(self._autohide_id)
+            self._autohide_id = self._root.after(8000, self._hide)
+
+    def _handle_step_update(self, p: dict) -> None:
+        if not self._root or not p:
+            return
+        action = (p.get("action", "") or "")[:50]
+        reasoning = (p.get("reasoning", "") or "")[:140]
+        # Track action count locally (step number from payload doesn't count free screenshots)
+        self._action_count += 1
+        # Progress fills gradually, never hits 100 until done
+        self._progress_pct = min(85, self._action_count * 12)
+        self._root.after(0, lambda: self._step_var.set(f"Action {self._action_count}"))
+        self._root.after(0, lambda: self._action_var.set(action))
+        self._root.after(0, lambda: self._reasoning_var.set(reasoning))
+        self._root.after(0, self._update_progress_bar)
+
+    def _handle_routing(self, p: dict) -> None:
+        if not self._root or not p:
+            return
+        engine = p.get("engine_display", "")
+        if engine:
+            self._root.after(0, lambda: self._action_var.set(engine))
+
+    def _handle_emergency(self, p: dict) -> None:
+        if not self._root:
+            return
+        self._root.after(0, self._set_stopped_state)
+        self._focus_dashboard()
+
+
 def main() -> None:
-    global _loading_server, _tray_icon
+    global _loading_server, _tray_icon, _hotkey_monitor, _overlay
     import atexit
     import signal
     import time as _time
@@ -10325,25 +11565,41 @@ def main() -> None:
 
     _startup_status.update({"stage": "Initializing application...", "progress": 80})
 
+    # 0. Create hotkey monitor and overlay (started later in lifespan)
+    _hotkey_monitor = _HotkeyMonitor()
+    _overlay = _MiniOverlay()
+
     # 1. System tray icon in background thread (skip if port already in use)
     if _loading_server is not None:
         _tray_icon = _create_tray_icon(url)
         if _tray_icon:
             threading.Thread(target=_tray_icon.run, daemon=True).start()
             print("  System tray icon active")
+    print("  Triple-Escape emergency stop active (press Esc 3x within 1s)")
+    print("  Overlay toggle: Ctrl+Shift+F2")
 
-    # Register cleanup handlers so Windows removes the tray icon on exit
-    def _cleanup_tray():
+    # Register cleanup handlers
+    def _cleanup():
+        if _hotkey_monitor is not None:
+            try:
+                _hotkey_monitor.stop()
+            except Exception:
+                pass
+        if _overlay is not None:
+            try:
+                _overlay.stop()
+            except Exception:
+                pass
         if _tray_icon is not None:
             try:
                 _tray_icon.stop()
             except Exception:
                 pass
 
-    atexit.register(_cleanup_tray)
+    atexit.register(_cleanup)
 
     def _signal_handler(signum, frame):
-        _cleanup_tray()
+        _cleanup()
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, _signal_handler)

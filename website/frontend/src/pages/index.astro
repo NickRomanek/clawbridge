@@ -4,11 +4,11 @@ import Base from '../layouts/Base.astro';
 const faqs = [
   {
     question: "What is ClawBridge?",
-    answer: "ClawBridge is a free, open-source AI agent that automates your browser and desktop applications using plain English commands. It runs 100% locally on your Windows PC with full privacy -- your data never leaves your machine except to the LLM API you choose."
+    answer: "ClawBridge is a free, open-source AI agent that automates your browser and desktop applications using plain English commands. It runs locally on your Windows or Mac with full privacy -- your data never leaves your machine except to the LLM API you choose."
   },
   {
     question: "Is ClawBridge free?",
-    answer: "Yes. ClawBridge is open source under the Apache 2.0 license and free to download. You can bring your own API keys (BYOK) from Anthropic, OpenAI, or OpenRouter at no additional cost, or purchase a starter pack with $5 in pre-loaded credits for $9.99."
+    answer: "Yes. ClawBridge is open source under the Apache 2.0 license and free to download for Windows and macOS. You can bring your own API keys (BYOK) from Anthropic, OpenAI, or OpenRouter at no additional cost, or purchase a starter pack with $5 in pre-loaded credits for $9.99."
   },
   {
     question: "What can ClawBridge automate?",
@@ -24,7 +24,7 @@ const faqs = [
   },
   {
     question: "What platforms does ClawBridge support?",
-    answer: "ClawBridge currently supports Windows 10 and Windows 11 with a one-click installer. macOS support is on the roadmap. The dashboard runs in any modern browser at localhost:8765."
+    answer: "ClawBridge supports Windows 10/11 and macOS (Apple Silicon and Intel). Download the Windows installer or macOS DMG from the download page. The dashboard runs in any modern browser at localhost:8765."
   },
 ];
 
@@ -48,7 +48,7 @@ const softwareSchema = {
   "url": "https://clawbridge.ai",
   "downloadUrl": "https://clawbridge.ai/download",
   "applicationCategory": "UtilitiesApplication",
-  "operatingSystem": "Windows 10, Windows 11",
+  "operatingSystem": "Windows 10, Windows 11, macOS",
   "offers": {
     "@type": "Offer",
     "price": "0",
@@ -61,12 +61,12 @@ const softwareSchema = {
     "Workflow recording and AI-powered replay",
     "Natural language task descriptions",
     "BYOK - Bring your own API keys",
-    "100% local execution with full privacy",
+    "Local-first execution with full privacy",
     "Smart auto-routing across three AI engines",
     "Scheduled task automation"
   ],
   "screenshot": "https://clawbridge.ai/og-image.png",
-  "softwareVersion": "0.3.7",
+  "softwareVersion": "0.5.0",
   "license": "https://www.apache.org/licenses/LICENSE-2.0"
 };
 
@@ -128,13 +128,13 @@ const websiteSchema = {
 
       <!-- CTA Buttons -->
       <div class="flex flex-col sm:flex-row gap-4 justify-center mb-12">
-        <a href="/pricing" class="btn-primary text-lg px-8 py-4 gap-2">
+        <a href="/pricing/" class="btn-primary text-lg px-8 py-4 gap-2">
           <span>Get Started</span>
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
           </svg>
         </a>
-        <a href="/download" class="btn-secondary text-lg px-8 py-4 gap-2">
+        <a href="/download/" class="btn-secondary text-lg px-8 py-4 gap-2">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
           </svg>
@@ -148,7 +148,7 @@ const websiteSchema = {
           <svg class="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
             <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
           </svg>
-          <span>100% Local</span>
+          <span>Local-First</span>
         </div>
         <div class="flex items-center gap-2">
           <svg class="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
@@ -392,10 +392,10 @@ const websiteSchema = {
       <p class="text-xl text-gray-400 mb-10">Open source, free to start. Bring your own API keys or get $5 in credits for $9.99.</p>
 
       <div class="flex flex-col sm:flex-row gap-4 justify-center">
-        <a href="/pricing" class="btn-primary text-lg px-10 py-4">
+        <a href="/pricing/" class="btn-primary text-lg px-10 py-4">
           View Pricing
         </a>
-        <a href="/docs" class="btn-secondary text-lg px-10 py-4">
+        <a href="/docs/" class="btn-secondary text-lg px-10 py-4">
           Read the Docs
         </a>
       </div>

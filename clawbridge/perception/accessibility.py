@@ -1,7 +1,7 @@
-"""Enhanced UIA accessibility wrapper for ClawBridge perception layer.
+"""Enhanced accessibility wrapper for ClawBridge perception layer.
 
-Built on the same pywinauto UIA pattern as ComputerUseEngine._get_ui_elements(),
-but enriched with automation_id, parent tracking, and element matching for replay.
+Uses the platform abstraction layer (clawbridge.platform) so the same code
+works on Windows (pywinauto UIA), macOS (AXUIElement), and Linux (stub).
 """
 
 from __future__ import annotations
@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Platform abstraction — auto-selects Windows/macOS/Linux backend
+from clawbridge.platform import platform as _plat
 
 CLICKABLE_TYPES = frozenset({
     "Button", "Edit", "MenuItem", "ListItem", "TabItem",
@@ -51,115 +54,48 @@ class ElementSnapshot:
 async def get_accessibility_tree(max_depth: int = 8, max_elements: int = 60) -> List[ElementSnapshot]:
     """Enumerate interactive UI elements from the foreground window.
 
-    Enhanced version of ComputerUseEngine._get_ui_elements() with:
-    - automation_id tracking
-    - parent_name tracking
-    - class_name tracking
-    - password field detection
+    Uses platform abstraction (Windows UIA, macOS AXUIElement, or stub).
     """
     loop = asyncio.get_running_loop()
 
     def _enumerate() -> List[ElementSnapshot]:
         try:
-            import ctypes
-            from pywinauto import Desktop
-
-            d = Desktop(backend="uia")
-            user32 = ctypes.windll.user32
-            fg_hwnd = user32.GetForegroundWindow()
-            if not fg_hwnd:
-                return []
-
-            buf = ctypes.create_unicode_buffer(512)
-            user32.GetWindowTextW(fg_hwnd, buf, 512)
-            fg_title = buf.value
-
-            # Find matching pywinauto window
-            target_win = None
-            for w in d.windows():
-                try:
-                    if w.window_text() == fg_title:
-                        target_win = w
-                        break
-                except Exception:
-                    pass
-
-            if not target_win:
-                for w in d.windows():
-                    try:
-                        wt = w.window_text()
-                        if wt and fg_title and fg_title[:20] in wt:
-                            target_win = w
-                            break
-                    except Exception:
-                        pass
-
-            if not target_win:
-                return []
+            raw_tree = _plat.get_accessibility_tree(max_depth=max_depth, max_elements=max_elements)
 
             elements: List[ElementSnapshot] = []
-            for c in target_win.descendants(depth=max_depth):
-                try:
-                    ct = c.element_info.control_type
-                    if ct not in CLICKABLE_TYPES:
-                        continue
-                    r = c.rectangle()
-                    if r.width() < 10 or r.height() < 10:
-                        continue
-                    name = (c.window_text() or "").strip()[:80]
-                    if not name and ct not in ("Edit", "Image"):
-                        continue
+            for el in raw_tree:
+                ct = el.get("control_type", "")
+                name = el.get("name", "")
+                if not name and ct not in ("Edit", "Image"):
+                    continue
 
-                    cx = (r.left + r.right) // 2
-                    cy = (r.top + r.bottom) // 2
-                    if cx <= 0 or cy <= 0:
-                        continue
+                auto_id = el.get("automation_id", "")
+                parent_name = el.get("parent_name", "")
 
-                    # Get automation_id and class_name
-                    auto_id = ""
-                    cls_name = ""
+                # Detect password fields
+                is_pwd = False
+                if ct == "Edit":
                     try:
-                        auto_id = c.element_info.automation_id or ""
-                    except Exception:
-                        pass
-                    try:
-                        cls_name = c.element_info.class_name or ""
+                        is_pwd = "password" in (auto_id + name).lower()
                     except Exception:
                         pass
 
-                    # Get parent name
-                    parent_name = ""
-                    try:
-                        p = c.parent()
-                        if p:
-                            parent_name = (p.window_text() or "").strip()[:60]
-                    except Exception:
-                        pass
+                left = el.get("left", 0)
+                top = el.get("top", 0)
+                right = el.get("right", 0)
+                bottom = el.get("bottom", 0)
 
-                    # Detect password fields
-                    is_pwd = False
-                    if ct == "Edit":
-                        try:
-                            is_pwd = "password" in (auto_id + cls_name + name).lower()
-                        except Exception:
-                            pass
-
-                    elements.append(ElementSnapshot(
-                        control_type=ct,
-                        name=name,
-                        automation_id=auto_id,
-                        class_name=cls_name,
-                        bounding_rect=(r.left, r.top, r.right, r.bottom),
-                        center_x=cx,
-                        center_y=cy,
-                        is_password=is_pwd,
-                        parent_name=parent_name,
-                    ))
-
-                    if len(elements) >= max_elements:
-                        break
-                except Exception:
-                    pass
+                elements.append(ElementSnapshot(
+                    control_type=ct,
+                    name=name,
+                    automation_id=auto_id,
+                    class_name="",
+                    bounding_rect=(left, top, right, bottom),
+                    center_x=el.get("cx", (left + right) // 2),
+                    center_y=el.get("cy", (top + bottom) // 2),
+                    is_password=is_pwd,
+                    parent_name=parent_name,
+                ))
             return elements
         except Exception as exc:
             logger.debug("Accessibility tree enumeration failed: %s", exc)
@@ -194,10 +130,10 @@ def find_matching_element(
     """Multi-strategy element matcher for replay.
 
     Matching strategies (in priority order):
-    1. automation_id exact match → confidence 1.0
-    2. name + control_type + parent_name → 0.95
-    3. name + control_type → 0.85
-    4. control_type + bounding_rect proximity → 0.6
+    1. automation_id exact match -> confidence 1.0
+    2. name + control_type + parent_name -> 0.95
+    3. name + control_type -> 0.85
+    4. control_type + bounding_rect proximity -> 0.6
 
     Returns (matched_element, confidence) or (None, 0.0) if below threshold.
     """

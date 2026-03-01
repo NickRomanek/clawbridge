@@ -5,6 +5,56 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-03-01
+
+### Added
+
+#### macOS Support
+- **Platform abstraction layer**: `clawbridge/platform/` with `_windows.py`, `_macos.py`, `_linux.py` backends, auto-selected by `sys.platform`
+- **PyObjC backend**: AXUIElement accessibility, Quartz screen capture, Cocoa window management
+- **macOS DMG distribution**: `build_macos.py --arch arm64|x64` for Apple Silicon and Intel Macs
+- **macOS permissions endpoint**: `/api/permissions` checks Accessibility + Screen Recording, dashboard shows non-dismissable banner if missing
+- **Key remapping**: Ctrl-based shortcuts automatically remapped to Cmd on macOS (pre-navigation, key combos, blocked combos)
+- **Download page**: OS auto-detection via `navigator.userAgent`, separate arm64/x64 macOS DMGs with quickstart guide
+
+#### Scaffolding Profile System
+- **`SCAFFOLDING_PROFILE` setting**: `full`, `standard` (default), `minimal`, `raw` — controls system prompt verbosity and runtime compensations
+- **System prompt decomposition**: 9 named sections (`_PROMPT_PREAMBLE`, `_PROMPT_REASONING`, `_PROMPT_DECISION_TREES`, etc.) assembled by `_build_system_prompt()`
+- **Runtime gating**: Pre-navigation, focus management, stale escalation, vision fallback threshold, and redirect detection all vary by profile
+- **Dashboard toggle**: 4-button selector in settings panel, persists to `.env`, broadcasts via WebSocket
+
+#### Dashboard & UX
+- **App-mode browser launch**: `_open_app_mode(url)` opens dashboard in chromeless Chrome/Edge window via `--app=` flag (no URL bar, no tabs)
+- **Floating PiP live view panel**: Replaces sidebar live view card with draggable picture-in-picture panel
+- **Workflow UX improvements**: Streamlined params panel ("Run with params" -> "Run", "Save defaults" -> "Save"), AI Edit "Save as New" button
+
+### Changed
+- Monolith grew from ~10,200 to ~11,300 lines with platform abstraction, scaffolding profiles, and app-mode window
+- All `ctypes.windll` calls extracted from monolith into `clawbridge/platform/` — zero platform-specific code remains in `clawbridge.py`
+- Recorder and perception modules now use platform abstraction layer
+- Computer-use mechanical pre-navigation uses Cmd instead of Ctrl on macOS
+
+---
+
+## [0.4.0] - 2026-02-22
+
+### Added
+
+#### Task Queue & Reliability
+- **Pending task promotion**: `_promote_pending_task()` auto-starts next PENDING task when concurrency slots open. Reserves `_running` immediately to prevent double-promotion race condition.
+- **Task-level timeout**: `TASK_TIMEOUT=300` wraps `engine.run_task()` in `asyncio.wait_for()`. Default 5 minutes, set 0 to disable.
+- **Stale action hard-stop**: `MAX_CONSECUTIVE_STALE=5` stops task with ERROR after N consecutive identical screenshots. Prevents token waste on stuck loops.
+- **Fallback-before-retry**: Tries different engine first (fallback), then retries original engine with backoff. `tried_engines` cleared between retry passes.
+
+#### Computer-Use Improvements
+- **Redirect detection**: `_detect_redirect()` checks browser window title after click actions against expected domain. Catches ad-click domain redirects (ESPN->Amazon), warns model to close tab and go back.
+- **Personality context gating**: Skips full context injection for simple OpenClaw chat tasks (saves 5-20K tokens). Keyword-triggered: "remember", "you are", "my name", etc.
+
+### Changed
+- Monolith grew from ~10,000 to ~10,200 lines with task queue promotion, timeouts, and redirect detection
+
+---
+
 ## [0.2.0] - 2026-02-15
 
 ### Added

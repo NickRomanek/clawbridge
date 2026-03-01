@@ -8,6 +8,8 @@ import io
 import logging
 from typing import Tuple
 
+from clawbridge.platform import platform as _plat
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,20 +70,13 @@ async def get_foreground_window_rect(screen_w: int, screen_h: int) -> Tuple[int,
     loop = asyncio.get_running_loop()
 
     def _get_rect() -> Tuple[int, int, int, int] | None:
-        import ctypes
-        import ctypes.wintypes
-
-        user32 = ctypes.windll.user32
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
+        raw = _plat.get_foreground_window_rect()
+        if not raw:
             return None
-        rect = ctypes.wintypes.RECT()
-        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-            return None
-        left = max(0, rect.left)
-        top = max(0, rect.top)
-        right = min(screen_w, rect.right)
-        bottom = min(screen_h, rect.bottom)
+        left = max(0, raw[0])
+        top = max(0, raw[1])
+        right = min(screen_w, raw[2])
+        bottom = min(screen_h, raw[3])
         if right - left < 20 or bottom - top < 20:
             return None
         return (left, top, right, bottom)

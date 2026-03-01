@@ -21,6 +21,9 @@ from typing import Any, List
 
 logger = logging.getLogger(__name__)
 
+# Platform abstraction — auto-selects Windows/macOS/Linux backend
+from clawbridge.platform import platform as _plat
+
 # Delay (seconds) before coalescing buffered keystrokes into a "type" event
 _KEY_COALESCE_DELAY = 0.3
 
@@ -32,86 +35,24 @@ _a11y_lock = threading.Lock()
 
 
 def _get_fg_window_title() -> str:
-    """Get the foreground window title via ctypes (fast, no imports cached)."""
-    try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        buf = ctypes.create_unicode_buffer(512)
-        hwnd = user32.GetForegroundWindow()
-        if hwnd:
-            user32.GetWindowTextW(hwnd, buf, 512)
-            return buf.value
-    except Exception:
-        pass
-    return ""
+    """Get the foreground window title via platform abstraction."""
+    return _plat.get_foreground_window_title()
 
 
 def _get_window_title_at(x: int, y: int) -> str:
     """Get the title of the window at screen coordinates (x, y).
 
-    Uses WindowFromPoint to find the window under the click, then walks up
-    to the top-level owner to get the real window title.  This is more
-    reliable than GetForegroundWindow for clicks that close/dismiss their
-    target window, because the OS may shift focus before pynput's callback
-    fires.
+    Uses platform-specific hit-test (WindowFromPoint on Windows,
+    CGWindowListCopyWindowInfo on macOS) then walks up to the root
+    window. More reliable than get_foreground_window_title() for
+    clicks that dismiss their target.
     """
-    import sys
-    if sys.platform != "win32":
-        return ""
-    try:
-        import ctypes
-        import ctypes.wintypes
-        user32 = ctypes.windll.user32
-
-        pt = ctypes.wintypes.POINT(x, y)
-        hwnd = user32.WindowFromPoint(pt)
-        if not hwnd:
-            return ""
-        # Walk up to the top-level (owned) window
-        GA_ROOT = 2
-        root = user32.GetAncestor(hwnd, GA_ROOT)
-        if root:
-            hwnd = root
-        buf = ctypes.create_unicode_buffer(512)
-        user32.GetWindowTextW(hwnd, buf, 512)
-        return buf.value
-    except Exception:
-        return ""
+    return _plat.get_window_title_at_point(x, y)
 
 
 def _get_fg_process_name() -> str:
-    """Get the process name (e.g. 'Telegram.exe') of the foreground window."""
-    import sys
-    if sys.platform != "win32":
-        return ""
-    try:
-        import ctypes
-        import ctypes.wintypes
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
-            return ""
-        pid = ctypes.wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if not pid.value:
-            return ""
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-        if not handle:
-            return ""
-        try:
-            buf = ctypes.create_unicode_buffer(260)
-            size = ctypes.wintypes.DWORD(260)
-            kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
-            full_path = buf.value
-            if full_path:
-                return full_path.rsplit("\\", 1)[-1]
-        finally:
-            kernel32.CloseHandle(handle)
-    except Exception:
-        pass
-    return ""
+    """Get the process name (e.g. 'Telegram.exe' / 'Telegram') of the foreground window."""
+    return _plat.get_foreground_process_name()
 
 
 # Last-known non-dashboard foreground title — fallback when the clicked
@@ -126,28 +67,8 @@ def _get_fg_window_rect() -> tuple[int, int, int, int] | None:
 
     Used to compute window-relative click coordinates so replays work
     even when the target window has been moved to a different position.
-    Calls SetProcessDPIAware() to ensure physical pixel coordinates,
-    matching the DPI context used by ComputerUseEngine at replay time.
     """
-    import sys
-    if sys.platform != "win32":
-        return None
-    try:
-        import ctypes
-        import ctypes.wintypes
-        user32 = ctypes.windll.user32
-        try:
-            user32.SetProcessDPIAware()
-        except Exception:
-            pass
-        hwnd = user32.GetForegroundWindow()
-        if hwnd:
-            rect = ctypes.wintypes.RECT()
-            if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                return (rect.left, rect.top, rect.right, rect.bottom)
-    except Exception:
-        pass
-    return None
+    return _plat.get_foreground_window_rect()
 
 
 def _get_a11y_element_at(x: int, y: int) -> dict:
@@ -158,10 +79,6 @@ def _get_a11y_element_at(x: int, y: int) -> dict:
     result = {"element_type": "", "element_name": "", "element_automation_id": "",
               "element_parent_name": "", "confidence": 0.0}
     try:
-        import sys
-        if sys.platform != "win32":
-            return result
-
         now = time.monotonic()
         tree = None
 
@@ -170,83 +87,8 @@ def _get_a11y_element_at(x: int, y: int) -> dict:
                 tree = _a11y_cache
 
         if tree is None:
-            # Enumerate fresh tree
             try:
-                import ctypes
-                from pywinauto import Desktop
-
-                d = Desktop(backend="uia")
-                user32 = ctypes.windll.user32
-                fg_hwnd = user32.GetForegroundWindow()
-                if not fg_hwnd:
-                    return result
-
-                buf = ctypes.create_unicode_buffer(512)
-                user32.GetWindowTextW(fg_hwnd, buf, 512)
-                fg_title = buf.value
-
-                target_win = None
-                for w in d.windows():
-                    try:
-                        if w.window_text() == fg_title:
-                            target_win = w
-                            break
-                    except Exception:
-                        pass
-                if not target_win:
-                    for w in d.windows():
-                        try:
-                            wt = w.window_text()
-                            if wt and fg_title and fg_title[:20] in wt:
-                                target_win = w
-                                break
-                        except Exception:
-                            pass
-                if not target_win:
-                    return result
-
-                CLICKABLE_TYPES = frozenset({
-                    "Button", "Edit", "MenuItem", "ListItem", "TabItem",
-                    "ComboBox", "CheckBox", "RadioButton", "Hyperlink",
-                    "TreeItem", "DataItem", "Text", "Image",
-                })
-                tree = []
-                for c in target_win.descendants(depth=8):
-                    try:
-                        ct = c.element_info.control_type
-                        if ct not in CLICKABLE_TYPES:
-                            continue
-                        r = c.rectangle()
-                        if r.width() < 10 or r.height() < 10:
-                            continue
-                        name = (c.window_text() or "").strip()[:80]
-                        cx = (r.left + r.right) // 2
-                        cy = (r.top + r.bottom) // 2
-                        if cx <= 0 or cy <= 0:
-                            continue
-                        auto_id = ""
-                        try:
-                            auto_id = c.element_info.automation_id or ""
-                        except Exception:
-                            pass
-                        parent_name = ""
-                        try:
-                            p = c.parent()
-                            if p:
-                                parent_name = (p.window_text() or "").strip()[:60]
-                        except Exception:
-                            pass
-                        tree.append({
-                            "control_type": ct, "name": name,
-                            "automation_id": auto_id, "parent_name": parent_name,
-                            "left": r.left, "top": r.top, "right": r.right, "bottom": r.bottom,
-                            "cx": cx, "cy": cy,
-                        })
-                        if len(tree) >= 80:
-                            break
-                    except Exception:
-                        pass
-
+                tree = _plat.get_accessibility_tree(max_depth=8, max_elements=80)
                 with _a11y_lock:
                     _a11y_cache = tree
                     _a11y_cache_time = time.monotonic()
@@ -269,16 +111,16 @@ def _get_a11y_element_at(x: int, y: int) -> dict:
         el = candidates[0][1]
 
         conf = 0.5
-        if el["automation_id"]:
+        if el.get("automation_id"):
             conf = 1.0
-        elif el["name"] and el["control_type"]:
+        elif el.get("name") and el.get("control_type"):
             conf = 0.8
 
         return {
             "element_type": el["control_type"],
             "element_name": el["name"],
-            "element_automation_id": el["automation_id"],
-            "element_parent_name": el["parent_name"],
+            "element_automation_id": el.get("automation_id", ""),
+            "element_parent_name": el.get("parent_name", ""),
             "confidence": conf,
         }
     except Exception as exc:

@@ -34,7 +34,7 @@ if sys.platform != "darwin":
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-VERSION = "0.2.0"
+VERSION = "0.5.0"
 
 ROOT = Path(__file__).parent.resolve()
 DIST_DIR = ROOT / "dist"
@@ -223,6 +223,16 @@ def step_project_files():
         else:
             print(f"    [skip] {fname} (not found)")
 
+    # Copy clawbridge/ package (platform abstraction, recorder, perception)
+    pkg_src = ROOT / "clawbridge"
+    pkg_dst = BUNDLE_DIR / "clawbridge"
+    if pkg_src.is_dir():
+        shutil.copytree(pkg_src, pkg_dst, ignore=shutil.ignore_patterns(
+            "__pycache__", "*.pyc", ".pytest_cache",
+        ))
+        pkg_files = sum(1 for _ in pkg_dst.rglob("*.py"))
+        print(f"    clawbridge/ ({pkg_files} Python files)")
+
     # Copy icon if present
     for icon_name in ("clawbridge.icns", "clawbridge.png"):
         src = ROOT / icon_name
@@ -328,6 +338,8 @@ def step_app_bundle():
     <true/>
     <key>LSUIElement</key>
     <false/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>ClawBridge uses AppleScript to activate applications and automate desktop tasks.</string>
 </dict>
 </plist>
 """)
