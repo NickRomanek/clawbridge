@@ -59,19 +59,19 @@ jobs:
       - name: Create DMG
         run: |
           pip install dmgbuild
-          dmgbuild -s dmg_settings.py "ClawBridge" dist/ClawBridge-macOS-arm64.dmg
+          dmgbuild -s dmg_settings.py "ClawBridge" dist/ClawBridge-arm64.dmg
 
       - name: Create ZIP fallback
         run: |
           cd dist
-          zip -r ClawBridge-macOS-arm64.zip ClawBridge/ ClawBridge.app/
+          zip -r ClawBridge-arm64.zip ClawBridge/ ClawBridge.app/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ClawBridge-macOS-arm64
+          name: ClawBridge-arm64
           path: |
-            dist/ClawBridge-macOS-arm64.dmg
-            dist/ClawBridge-macOS-arm64.zip
+            dist/ClawBridge-arm64.dmg
+            dist/ClawBridge-arm64.zip
           retention-days: 30
 
   # ── macOS Build (Intel) ─────────────────────────────────────────────────
@@ -90,19 +90,19 @@ jobs:
       - name: Create DMG
         run: |
           pip install dmgbuild
-          dmgbuild -s dmg_settings.py "ClawBridge" dist/ClawBridge-macOS-x64.dmg
+          dmgbuild -s dmg_settings.py "ClawBridge" dist/ClawBridge-x64.dmg
 
       - name: Create ZIP fallback
         run: |
           cd dist
-          zip -r ClawBridge-macOS-x64.zip ClawBridge/ ClawBridge.app/
+          zip -r ClawBridge-x64.zip ClawBridge/ ClawBridge.app/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ClawBridge-macOS-x64
+          name: ClawBridge-x64
           path: |
-            dist/ClawBridge-macOS-x64.dmg
-            dist/ClawBridge-macOS-x64.zip
+            dist/ClawBridge-x64.dmg
+            dist/ClawBridge-x64.zip
           retention-days: 30
 
   # ── GitHub Release ──────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/ClawBridge-Windows-x64/ClawBridge-Windows-x64.zip
-            artifacts/ClawBridge-macOS-arm64/ClawBridge-macOS-arm64.dmg
-            artifacts/ClawBridge-macOS-arm64/ClawBridge-macOS-arm64.zip
-            artifacts/ClawBridge-macOS-x64/ClawBridge-macOS-x64.dmg
-            artifacts/ClawBridge-macOS-x64/ClawBridge-macOS-x64.zip
+            artifacts/ClawBridge-arm64/ClawBridge-arm64.dmg
+            artifacts/ClawBridge-arm64/ClawBridge-arm64.zip
+            artifacts/ClawBridge-x64/ClawBridge-x64.dmg
+            artifacts/ClawBridge-x64/ClawBridge-x64.zip

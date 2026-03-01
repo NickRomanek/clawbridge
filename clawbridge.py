@@ -239,12 +239,22 @@ def _open_app_mode(url: str) -> None:
             if path:
                 candidates.append(path)
 
+    # On Windows, explicitly set SW_SHOWNORMAL to prevent inheriting SW_HIDE
+    # from parent process (e.g. when launched via installer's runhidden flag).
+    popen_kwargs: dict = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if _pf.system() == "Windows":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 1  # SW_SHOWNORMAL
+        popen_kwargs["startupinfo"] = si
+        popen_kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        )
+
     for exe in candidates:
         if os.path.isfile(exe):
             try:
-                subprocess.Popen([exe, f"--app={url}"],
-                                 stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
+                subprocess.Popen([exe, f"--app={url}"], **popen_kwargs)
                 return
             except Exception:
                 continue

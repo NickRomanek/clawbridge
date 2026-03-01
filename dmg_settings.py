@@ -11,7 +11,11 @@ Docs: https://dmgbuild.readthedocs.io/
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).parent.resolve()
+try:
+    ROOT = Path(__file__).parent.resolve()
+except NameError:
+    # dmgbuild loads this file via exec() where __file__ is not defined
+    ROOT = Path.cwd()
 
 # ── Volume Settings ─────────────────────────────────────────────────────────
 
