@@ -76,16 +76,15 @@ jobs:
 
   # ── macOS Build (Intel) ─────────────────────────────────────────────────
   build-macos-x64:
-    runs-on: macos-14  # ARM runner, x64 Python via Rosetta
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          architecture: x64
 
-      - name: Build .app bundle
+      - name: Build .app bundle (x64 standalone Python downloaded inside)
         run: python build_macos.py --arch x64
 
       - name: Create DMG

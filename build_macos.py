@@ -40,17 +40,26 @@ DIST_DIR = ROOT / "dist"
 APP_DIR = DIST_DIR / "ClawBridge.app"
 BUNDLE_DIR = APP_DIR / "Contents" / "Resources" / "bundle"
 
-PYTHON_VERSION = "3.12.8"
+PYTHON_VERSION = "3.12.9"
+PBS_RELEASE = "20250317"  # python-build-standalone release tag
 
 # Detect architecture
 MACHINE = platform.machine()  # arm64 or x86_64
 if MACHINE == "arm64":
     NODE_ARCH = "arm64"
+    PBS_ARCH = "aarch64"
 elif MACHINE == "x86_64":
     NODE_ARCH = "x64"
+    PBS_ARCH = "x86_64"
 else:
     print(f"WARNING: Unknown architecture '{MACHINE}', defaulting to x64")
     NODE_ARCH = "x64"
+    PBS_ARCH = "x86_64"
+
+PBS_URL = (
+    f"https://github.com/astral-sh/python-build-standalone/releases/download/{PBS_RELEASE}/"
+    f"cpython-{PYTHON_VERSION}+{PBS_RELEASE}-{PBS_ARCH}-apple-darwin-install_only_stripped.tar.gz"
+)
 
 NODE_VERSION = "22.14.0"
 NODE_URL = f"https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-darwin-{NODE_ARCH}.tar.gz"
@@ -114,27 +123,53 @@ def step_clean():
     print("    Created ClawBridge.app/ structure")
 
 
-def step_python_venv():
-    banner("Creating Python virtual environment")
+def step_python():
+    banner("Installing standalone Python")
 
-    # Use the system Python (from Homebrew, pyenv, or python.org installer)
-    # to create a venv inside the bundle
-    venv_dir = BUNDLE_DIR / "python"
-    print(f"    Creating venv with {sys.executable}...")
-    subprocess.run(
-        [sys.executable, "-m", "venv", "--copies", str(venv_dir)],
-        check=True, capture_output=True
-    )
+    cache_dir = ROOT / ".build_cache"
+    cache_dir.mkdir(exist_ok=True)
+    tar_name = f"cpython-{PYTHON_VERSION}+{PBS_RELEASE}-{PBS_ARCH}-apple-darwin-install_only_stripped.tar.gz"
+    tar_path = cache_dir / tar_name
 
-    python_exe = venv_dir / "bin" / "python"
-    pip_exe = venv_dir / "bin" / "pip"
+    # Download python-build-standalone (fully relocatable, no framework dependency)
+    download(PBS_URL, tar_path, f"Python {PYTHON_VERSION} ({PBS_ARCH})")
 
-    # Upgrade pip
-    print("    Upgrading pip...")
-    subprocess.run(
-        [str(pip_exe), "install", "--upgrade", "pip", "setuptools"],
-        check=True, capture_output=True
-    )
+    # Extract — the tarball contains a `python/` directory at the root
+    python_dir = BUNDLE_DIR / "python"
+    print("    Extracting...")
+    extract_tar_gz(tar_path, BUNDLE_DIR, strip_top=0)
+    # python-build-standalone extracts to install/ — rename to python/
+    extracted = BUNDLE_DIR / "python"
+    if not extracted.exists():
+        # Some builds extract to "install/" instead
+        alt = BUNDLE_DIR / "install"
+        if alt.exists():
+            alt.rename(extracted)
+        else:
+            print("    [!] Unexpected archive structure, listing contents:")
+            for item in BUNDLE_DIR.iterdir():
+                print(f"        {item.name}")
+            sys.exit(1)
+
+    python_exe = python_dir / "bin" / "python3"
+    if not python_exe.exists():
+        python_exe = python_dir / "bin" / f"python{'.'.join(PYTHON_VERSION.split('.')[:2])}"
+    if not python_exe.exists():
+        print(f"    [!] Python binary not found in {python_dir / 'bin'}")
+        sys.exit(1)
+
+    py_size = sum(f.stat().st_size for f in python_dir.rglob("*") if f.is_file())
+    print(f"    Python {PYTHON_VERSION} standalone ({py_size // (1024*1024)} MB)")
+
+    # Install pip (standalone Python may not include it)
+    pip_exe = python_dir / "bin" / "pip3"
+    if not pip_exe.exists():
+        print("    Installing pip...")
+        subprocess.run(
+            [str(python_exe), "-m", "ensurepip", "--upgrade"],
+            check=True, capture_output=True
+        )
+        pip_exe = python_dir / "bin" / "pip3"
 
     # Install all dependencies
     print("    Installing ClawBridge dependencies (this takes a minute)...")
@@ -152,201 +187,48 @@ def step_python_venv():
         sys.exit(1)
 
     # Count installed packages
-    site_pkgs = venv_dir / "lib"
-    # Find the python3.xx directory inside lib
-    py_dirs = list(site_pkgs.glob("python3.*"))
-    if py_dirs:
-        sp = py_dirs[0] / "site-packages"
+    py_ver = ".".join(PYTHON_VERSION.split(".")[:2])
+    sp = python_dir / "lib" / f"python{py_ver}" / "site-packages"
+    if sp.exists():
         pkg_count = len([d for d in sp.iterdir() if d.is_dir() and not d.name.startswith("_")])
         print(f"    Installed {pkg_count} packages")
+
+    # Remove unnecessary files to save space
+    for name in ("test", "tests", "idlelib", "tkinter", "turtledemo"):
+        d = python_dir / "lib" / f"python{py_ver}" / name
+        if d.exists():
+            shutil.rmtree(d)
+    # Remove __pycache__ dirs
+    for pc in python_dir.rglob("__pycache__"):
+        if pc.is_dir():
+            shutil.rmtree(pc)
 
     return python_exe
 
 
-def step_copy_stdlib():
-    """Copy Python standard library into the bundle.
+def step_codesign_python():
+    """Ad-hoc re-sign all Python binaries and extensions.
 
-    The venv only contains pip-installed packages in site-packages/.
-    The stdlib (os, json, asyncio, etc.) lives in the Python framework
-    on the build machine. We must copy it so the app works on machines
-    without the framework installed.
+    python-build-standalone is already relocatable, but macOS may reject
+    binaries without valid code signatures. Ad-hoc signing fixes this.
     """
-    banner("Copying Python standard library")
+    banner("Code-signing Python binaries")
 
-    # Find stdlib location from the build Python
-    result = subprocess.run(
-        [sys.executable, "-c",
-         "import sysconfig; print(sysconfig.get_path('stdlib'))"],
-        capture_output=True, text=True, check=True
-    )
-    stdlib_src = Path(result.stdout.strip())
+    resigned = 0
+    python_dir = BUNDLE_DIR / "python"
 
-    if not stdlib_src.exists():
-        print(f"    [!] Stdlib not found at: {stdlib_src}")
-        return
-
-    py_ver = ".".join(PYTHON_VERSION.split(".")[:2])
-    venv_lib = BUNDLE_DIR / "python" / "lib" / f"python{py_ver}"
-
-    print(f"    Source: {stdlib_src}")
-
-    # Directories to skip (save ~15 MB)
-    skip = {
-        "site-packages",  # Already in venv from pip install
-        "test",           # Python's own test suite
-        "tests",
-        "idlelib",        # IDLE editor — not needed
-        "tkinter",        # Tk GUI — we use web dashboard
-        "turtledemo",     # Turtle graphics demo
-        "ensurepip",      # pip bootstrapper — already installed
-        "__pycache__",    # Regenerated at runtime
-    }
-
-    copied = 0
-    for item in stdlib_src.iterdir():
-        if item.name in skip:
-            continue
-        dest = venv_lib / item.name
-        if item.is_dir():
-            if dest.exists():
-                # Merge into existing directory (e.g., lib-dynload)
-                shutil.copytree(str(item), str(dest), dirs_exist_ok=True,
-                                ignore=shutil.ignore_patterns(
-                                    "__pycache__", "test", "tests"))
-            else:
-                shutil.copytree(str(item), str(dest),
-                                ignore=shutil.ignore_patterns(
-                                    "__pycache__", "test", "tests"))
-            copied += 1
-        elif item.is_file() and not dest.exists():
-            shutil.copy2(str(item), str(dest))
-            copied += 1
-
-    total = sum(f.stat().st_size for f in venv_lib.rglob("*") if f.is_file())
-    print(f"    Copied {copied} items ({total // (1024*1024)} MB total in lib/python{py_ver}/)")
-
-
-def step_fix_python_relocatable():
-    """Make the bundled Python relocatable by fixing dylib references.
-
-    The venv Python binary is dynamically linked to the framework Python
-    (e.g., /Library/Frameworks/Python.framework/Versions/3.12/Python).
-    On machines without that framework installed, this causes dyld errors.
-
-    Fix: copy the dylib into the bundle and rewrite references with
-    install_name_tool so the binary finds it via @executable_path.
-    """
-    banner("Making Python relocatable")
-
-    python_bin = BUNDLE_DIR / "python" / "bin" / "python"
-    if not python_bin.exists():
-        python_bin = BUNDLE_DIR / "python" / "bin" / "python3"
-    if not python_bin.exists():
-        print("    [skip] No Python binary found in bundle")
-        return
-
-    # Find what dylibs the Python binary links to
-    result = subprocess.run(
-        ["otool", "-L", str(python_bin)],
-        capture_output=True, text=True, check=True
-    )
-
-    # Look for Python framework or libpython reference
-    # e.g., /Library/Frameworks/Python.framework/Versions/3.12/Python
-    # e.g., /usr/local/lib/libpython3.12.dylib
-    framework_ref = None
-    for line in result.stdout.splitlines()[1:]:  # Skip first line (binary name)
-        path = line.strip().split(" (")[0].strip()
-        name = Path(path).name
-        if name == "Python" or name.startswith("libpython"):
-            framework_ref = path
-            break
-
-    if not framework_ref:
-        print("    [skip] No Python framework/dylib reference found (statically linked?)")
-        return
-
-    framework_path = Path(framework_ref)
-    print(f"    Found reference: {framework_ref}")
-
-    if not framework_path.exists():
-        print(f"    [!] Dylib not found at referenced path: {framework_path}")
-        # Try common alternative locations
-        py_ver = ".".join(PYTHON_VERSION.split(".")[:2])
-        for alt in [
-            Path(f"/Library/Frameworks/Python.framework/Versions/{py_ver}/Python"),
-            Path(f"/usr/local/Frameworks/Python.framework/Versions/{py_ver}/Python"),
-            Path(f"/usr/local/lib/libpython{py_ver}.dylib"),
-        ]:
-            if alt.exists():
-                framework_path = alt
-                print(f"    Found at alternative: {framework_path}")
-                break
-        if not framework_path.exists():
-            print("    [!] Cannot find Python dylib to bundle -- app will NOT be relocatable!")
-            return
-
-    # Copy the dylib into the bundle's python/lib/ directory
-    lib_dir = BUNDLE_DIR / "python" / "lib"
-    lib_dir.mkdir(parents=True, exist_ok=True)
-    dest = lib_dir / framework_path.name
-    shutil.copy2(str(framework_path), str(dest))
-    dest_size = dest.stat().st_size // (1024 * 1024)
-    print(f"    Copied {framework_path.name} ({dest_size} MB) -> python/lib/")
-
-    # Ad-hoc re-sign the copied dylib — the copy invalidates the original
-    # code signature, and macOS will refuse to load an unsigned dylib
-    subprocess.run(
-        ["codesign", "--force", "--sign", "-", str(dest)],
-        check=True, capture_output=True
-    )
-    print(f"    Re-signed {framework_path.name} (ad-hoc)")
-
-    # Fix the reference in ALL Python executables using install_name_tool
-    new_ref = f"@executable_path/../lib/{framework_path.name}"
-    fixed = 0
-    bin_dir = BUNDLE_DIR / "python" / "bin"
-    for exe in bin_dir.iterdir():
-        if exe.is_symlink():
-            continue
-        # Check if this binary references the framework
-        check = subprocess.run(
-            ["otool", "-L", str(exe)], capture_output=True, text=True
-        )
-        if framework_ref in check.stdout:
-            subprocess.run([
-                "install_name_tool", "-change",
-                framework_ref, new_ref,
-                str(exe)
-            ], capture_output=True)
-            # Re-sign after install_name_tool (it invalidates the signature)
-            subprocess.run(
-                ["codesign", "--force", "--sign", "-", str(exe)],
-                capture_output=True
-            )
-            fixed += 1
-    print(f"    Patched & re-signed {fixed} binaries")
-
-    # Re-sign ALL .so and .dylib files in the bundle — copied extensions
-    # may have invalid signatures that macOS will reject at load time
-    resigned_ext = 0
-    for ext in ("*.so", "*.dylib"):
-        for f in (BUNDLE_DIR / "python").rglob(ext):
+    # Sign all Mach-O binaries, .so, and .dylib files
+    for pattern in ("bin/*", "lib/**/*.so", "lib/**/*.dylib"):
+        for f in python_dir.glob(pattern):
+            if f.is_symlink() or not f.is_file():
+                continue
             subprocess.run(
                 ["codesign", "--force", "--sign", "-", str(f)],
                 capture_output=True
             )
-            resigned_ext += 1
-    if resigned_ext:
-        print(f"    Re-signed {resigned_ext} extension modules")
+            resigned += 1
 
-    # Verify the fix
-    result = subprocess.run(
-        ["otool", "-L", str(python_bin)],
-        capture_output=True, text=True
-    )
-    for line in result.stdout.splitlines()[1:3]:
-        print(f"    Verify: {line.strip()}")
+    print(f"    Re-signed {resigned} files (ad-hoc)")
 
 
 def step_playwright(python_exe: Path):
@@ -573,23 +455,19 @@ def step_app_metadata():
         'LOG_DIR="$BUNDLE_DIR/logs"\n'
         'mkdir -p "$LOG_DIR"\n'
         '\n'
-        '# Strip quarantine attributes from bundle contents\n'
-        '# After user approves app via right-click > Open, this fixes internal files\n'
-        '# (Python binary, .so extensions, etc.) that macOS would otherwise block\n'
-        'xattr -cr "$CONTENTS_DIR" 2>/dev/null || true\n'
+        '# Strip quarantine attributes — needed for unsigned apps downloaded from internet.\n'
+        '# Try without sudo first; if that fails (permissions), prompt via osascript.\n'
+        'if xattr -r -l "$CONTENTS_DIR" 2>/dev/null | grep -q "com.apple.quarantine"; then\n'
+        '  xattr -cr "$CONTENTS_DIR" 2>/dev/null || \\\n'
+        '    osascript -e "do shell script \\"xattr -cr \'$CONTENTS_DIR\'\\" with administrator privileges" 2>/dev/null || true\n'
+        'fi\n'
         '\n'
         'export PLAYWRIGHT_BROWSERS_PATH="$BUNDLE_DIR/playwright_browsers"\n'
         'export PATH="$BUNDLE_DIR/nodejs/bin:$BUNDLE_DIR/python/bin:$PATH"\n'
         'export CLAWBRIDGE_OPEN_BROWSER=1\n'
         '\n'
-        '# Make Python fully self-contained:\n'
-        '# - PYTHONHOME overrides pyvenv.cfg (which points to CI build machine paths)\n'
-        '# - __PYVENV_LAUNCHER__ prevents framework Python from posix_spawn-ing\n'
-        '#   through Resources/Python.app (which does not exist in the bundle)\n'
-        '# - DYLD_LIBRARY_PATH catches .so extensions that reference the framework dylib\n'
+        '# Python standalone — set PYTHONHOME so it finds stdlib + site-packages\n'
         'export PYTHONHOME="$BUNDLE_DIR/python"\n'
-        'export __PYVENV_LAUNCHER__="$BUNDLE_DIR/python/bin/python"\n'
-        'export DYLD_LIBRARY_PATH="$BUNDLE_DIR/python/lib:${DYLD_LIBRARY_PATH:-}"\n'
         '\n'
         '# Check that the bundle exists\n'
         'if [ ! -f "$BUNDLE_DIR/clawbridge.py" ]; then\n'
@@ -601,7 +479,7 @@ def step_app_metadata():
         'fi\n'
         '\n'
         '# Run ClawBridge, capture exit code\n'
-        '"$BUNDLE_DIR/python/bin/python" "$BUNDLE_DIR/clawbridge.py" \\\n'
+        '"$BUNDLE_DIR/python/bin/python3" "$BUNDLE_DIR/clawbridge.py" \\\n'
         '  > "$LOG_DIR/app_stdout.log" 2> "$LOG_DIR/app_stderr.log"\n'
         'EXIT_CODE=$?\n'
         '\n'
@@ -661,9 +539,15 @@ def main():
         sys.exit(0)
 
     if args.arch:
-        global NODE_ARCH, NODE_URL
+        global NODE_ARCH, NODE_URL, PBS_ARCH, PBS_URL
         NODE_ARCH = args.arch
         NODE_URL = f"https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-darwin-{NODE_ARCH}.tar.gz"
+        # Also update Python standalone arch
+        PBS_ARCH = "aarch64" if args.arch == "arm64" else "x86_64"
+        PBS_URL = (
+            f"https://github.com/astral-sh/python-build-standalone/releases/download/{PBS_RELEASE}/"
+            f"cpython-{PYTHON_VERSION}+{PBS_RELEASE}-{PBS_ARCH}-apple-darwin-install_only_stripped.tar.gz"
+        )
 
     print()
     print("  ==========================================")
@@ -673,7 +557,7 @@ def main():
     print("  ==========================================")
 
     step_clean()
-    python_exe = step_python_venv()
+    python_exe = step_python()
 
     if not args.skip_playwright:
         step_playwright(python_exe)
@@ -688,13 +572,7 @@ def main():
     step_project_files()
     step_icon(python_exe)
     step_app_metadata()
-
-    # These two steps make the venv fully self-contained and portable.
-    # They run LAST because install_name_tool + codesign breaks the venv
-    # binary for local use — all build steps that invoke python_exe
-    # (Playwright, icon trim) must run before this.
-    step_copy_stdlib()
-    step_fix_python_relocatable()
+    step_codesign_python()
 
     step_summary()
 
