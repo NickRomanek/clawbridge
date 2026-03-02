@@ -231,6 +231,14 @@ def step_fix_python_relocatable():
     dest_size = dest.stat().st_size // (1024 * 1024)
     print(f"    Copied {framework_path.name} ({dest_size} MB) -> python/lib/")
 
+    # Ad-hoc re-sign the copied dylib — the copy invalidates the original
+    # code signature, and macOS will refuse to load an unsigned dylib
+    subprocess.run(
+        ["codesign", "--force", "--sign", "-", str(dest)],
+        check=True, capture_output=True
+    )
+    print(f"    Re-signed {framework_path.name} (ad-hoc)")
+
     # Fix the reference in ALL Python executables using install_name_tool
     new_ref = f"@executable_path/../lib/{framework_path.name}"
     fixed = 0
@@ -248,8 +256,13 @@ def step_fix_python_relocatable():
                 framework_ref, new_ref,
                 str(exe)
             ], capture_output=True)
+            # Re-sign after install_name_tool (it invalidates the signature)
+            subprocess.run(
+                ["codesign", "--force", "--sign", "-", str(exe)],
+                capture_output=True
+            )
             fixed += 1
-    print(f"    Patched {fixed} binaries -> @executable_path/../lib/{framework_path.name}")
+    print(f"    Patched & re-signed {fixed} binaries")
 
     # Verify the fix
     result = subprocess.run(
