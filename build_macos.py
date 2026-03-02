@@ -247,7 +247,7 @@ def step_project_files():
     print("    logs/")
 
 
-def step_icon():
+def step_icon(python_exe: Path):
     banner("Generating .icns icon")
 
     # Look for source PNG (prefer assets/logo.png, fall back to transparentlogo.png)
@@ -264,6 +264,39 @@ def step_icon():
 
     print(f"    Source: {logo_src.name}")
 
+    # Pre-process: trim transparent padding and center on 1024x1024 canvas
+    # Uses Pillow from the venv (already installed via requirements.txt)
+    trimmed = DIST_DIR / "_icon_trimmed.png"
+    trim_script = (
+        "from PIL import Image\n"
+        f"img = Image.open(r'{logo_src}')\n"
+        "bbox = img.getbbox()\n"
+        "if bbox:\n"
+        "    cropped = img.crop(bbox)\n"
+        "    w, h = cropped.size\n"
+        "    # Fit into 1024x1024 with ~8% padding on each side\n"
+        "    target = 1024\n"
+        "    content_size = int(target * 0.84)\n"
+        "    scale = content_size / max(w, h)\n"
+        "    new_w, new_h = int(w * scale), int(h * scale)\n"
+        "    resized = cropped.resize((new_w, new_h), Image.LANCZOS)\n"
+        "    canvas = Image.new('RGBA', (target, target), (0, 0, 0, 0))\n"
+        "    x = (target - new_w) // 2\n"
+        "    y = (target - new_h) // 2\n"
+        "    canvas.paste(resized, (x, y))\n"
+        "    canvas.save(r'" + str(trimmed) + "')\n"
+        "    print(f'Trimmed: {w}x{h} -> {new_w}x{new_h} centered on {target}x{target}')\n"
+    )
+    result = subprocess.run(
+        [str(python_exe), "-c", trim_script],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0 or not trimmed.exists():
+        print(f"    [warn] Trim failed ({result.stderr[:200]}), using original")
+        trimmed = logo_src
+    else:
+        print(f"    {result.stdout.strip()}")
+
     # Create iconset directory with required sizes
     iconset = DIST_DIR / "ClawBridge.iconset"
     if iconset.exists():
@@ -276,14 +309,14 @@ def step_icon():
         # Standard resolution
         out = iconset / f"icon_{size}x{size}.png"
         subprocess.run(
-            ["sips", "-z", str(size), str(size), str(logo_src), "--out", str(out)],
+            ["sips", "-z", str(size), str(size), str(trimmed), "--out", str(out)],
             check=True, capture_output=True
         )
         # Retina (@2x) — the next size up labeled as @2x of current
         out2x = iconset / f"icon_{size}x{size}@2x.png"
         retina_size = size * 2
         subprocess.run(
-            ["sips", "-z", str(retina_size), str(retina_size), str(logo_src), "--out", str(out2x)],
+            ["sips", "-z", str(retina_size), str(retina_size), str(trimmed), "--out", str(out2x)],
             check=True, capture_output=True
         )
 
@@ -296,6 +329,8 @@ def step_icon():
 
     # Cleanup
     shutil.rmtree(iconset)
+    if trimmed != logo_src and trimmed.exists():
+        trimmed.unlink()
     print(f"    Generated clawbridge.icns ({icns_path.stat().st_size // 1024} KB)")
 
 
@@ -451,7 +486,7 @@ def main():
         print("\n  [skip] Node.js (--skip-nodejs)")
 
     step_project_files()
-    step_icon()
+    step_icon(python_exe)
     step_app_metadata()
     step_summary()
 
