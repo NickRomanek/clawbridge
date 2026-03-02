@@ -163,6 +163,69 @@ def step_python_venv():
     return python_exe
 
 
+def step_copy_stdlib():
+    """Copy Python standard library into the bundle.
+
+    The venv only contains pip-installed packages in site-packages/.
+    The stdlib (os, json, asyncio, etc.) lives in the Python framework
+    on the build machine. We must copy it so the app works on machines
+    without the framework installed.
+    """
+    banner("Copying Python standard library")
+
+    # Find stdlib location from the build Python
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sysconfig; print(sysconfig.get_path('stdlib'))"],
+        capture_output=True, text=True, check=True
+    )
+    stdlib_src = Path(result.stdout.strip())
+
+    if not stdlib_src.exists():
+        print(f"    [!] Stdlib not found at: {stdlib_src}")
+        return
+
+    py_ver = ".".join(PYTHON_VERSION.split(".")[:2])
+    venv_lib = BUNDLE_DIR / "python" / "lib" / f"python{py_ver}"
+
+    print(f"    Source: {stdlib_src}")
+
+    # Directories to skip (save ~15 MB)
+    skip = {
+        "site-packages",  # Already in venv from pip install
+        "test",           # Python's own test suite
+        "tests",
+        "idlelib",        # IDLE editor — not needed
+        "tkinter",        # Tk GUI — we use web dashboard
+        "turtledemo",     # Turtle graphics demo
+        "ensurepip",      # pip bootstrapper — already installed
+        "__pycache__",    # Regenerated at runtime
+    }
+
+    copied = 0
+    for item in stdlib_src.iterdir():
+        if item.name in skip:
+            continue
+        dest = venv_lib / item.name
+        if item.is_dir():
+            if dest.exists():
+                # Merge into existing directory (e.g., lib-dynload)
+                shutil.copytree(str(item), str(dest), dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns(
+                                    "__pycache__", "test", "tests"))
+            else:
+                shutil.copytree(str(item), str(dest),
+                                ignore=shutil.ignore_patterns(
+                                    "__pycache__", "test", "tests"))
+            copied += 1
+        elif item.is_file() and not dest.exists():
+            shutil.copy2(str(item), str(dest))
+            copied += 1
+
+    total = sum(f.stat().st_size for f in venv_lib.rglob("*") if f.is_file())
+    print(f"    Copied {copied} items ({total // (1024*1024)} MB total in lib/python{py_ver}/)")
+
+
 def step_fix_python_relocatable():
     """Make the bundled Python relocatable by fixing dylib references.
 
@@ -263,6 +326,19 @@ def step_fix_python_relocatable():
             )
             fixed += 1
     print(f"    Patched & re-signed {fixed} binaries")
+
+    # Re-sign ALL .so and .dylib files in the bundle — copied extensions
+    # may have invalid signatures that macOS will reject at load time
+    resigned_ext = 0
+    for ext in ("*.so", "*.dylib"):
+        for f in (BUNDLE_DIR / "python").rglob(ext):
+            subprocess.run(
+                ["codesign", "--force", "--sign", "-", str(f)],
+                capture_output=True
+            )
+            resigned_ext += 1
+    if resigned_ext:
+        print(f"    Re-signed {resigned_ext} extension modules")
 
     # Verify the fix
     result = subprocess.run(
@@ -506,9 +582,13 @@ def step_app_metadata():
         'export PATH="$BUNDLE_DIR/nodejs/bin:$BUNDLE_DIR/python/bin:$PATH"\n'
         'export CLAWBRIDGE_OPEN_BROWSER=1\n'
         '\n'
-        '# Python dylib loading: the main binary is fixed via install_name_tool at\n'
-        '# build time, but .so extension modules may still reference the framework\n'
-        '# path from the build machine. DYLD_LIBRARY_PATH catches those.\n'
+        '# Make Python fully self-contained:\n'
+        '# - PYTHONHOME overrides pyvenv.cfg (which points to CI build machine paths)\n'
+        '# - __PYVENV_LAUNCHER__ prevents framework Python from posix_spawn-ing\n'
+        '#   through Resources/Python.app (which does not exist in the bundle)\n'
+        '# - DYLD_LIBRARY_PATH catches .so extensions that reference the framework dylib\n'
+        'export PYTHONHOME="$BUNDLE_DIR/python"\n'
+        'export __PYVENV_LAUNCHER__="$BUNDLE_DIR/python/bin/python"\n'
         'export DYLD_LIBRARY_PATH="$BUNDLE_DIR/python/lib:${DYLD_LIBRARY_PATH:-}"\n'
         '\n'
         '# Check that the bundle exists\n'
@@ -609,9 +689,11 @@ def main():
     step_icon(python_exe)
     step_app_metadata()
 
-    # Make Python relocatable LAST — install_name_tool + codesign breaks the
-    # venv binary for local use, so all build steps that invoke python_exe
+    # These two steps make the venv fully self-contained and portable.
+    # They run LAST because install_name_tool + codesign breaks the venv
+    # binary for local use — all build steps that invoke python_exe
     # (Playwright, icon trim) must run before this.
+    step_copy_stdlib()
     step_fix_python_relocatable()
 
     step_summary()
