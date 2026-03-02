@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ClawBridge macOS Build Script — Assembles a portable macOS distribution.
+ClawBridge macOS Build Script — Assembles a self-contained .app bundle.
 
-Creates a .app bundle with embedded Python, all dependencies,
+Creates a macOS .app with embedded Python, all dependencies,
 Playwright Chromium, and optional Node.js for OpenClaw.
 
 Usage:
@@ -12,8 +12,7 @@ Usage:
     python build_macos.py --arch arm64     # Build for specific architecture (arm64 or x64)
 
 Output:
-    dist/ClawBridge.app/                   # macOS app bundle
-    dist/ClawBridge/                       # Portable folder (ready for dmgbuild)
+    dist/ClawBridge.app/                   # Self-contained macOS app bundle
 
 Requires macOS to run (uses framework Python and .app bundle structure).
 """
@@ -34,12 +33,12 @@ if sys.platform != "darwin":
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 ROOT = Path(__file__).parent.resolve()
 DIST_DIR = ROOT / "dist"
-BUNDLE_DIR = DIST_DIR / "ClawBridge"
 APP_DIR = DIST_DIR / "ClawBridge.app"
+BUNDLE_DIR = APP_DIR / "Contents" / "Resources" / "bundle"
 
 PYTHON_VERSION = "3.12.8"
 
@@ -105,12 +104,14 @@ def extract_tar_gz(tar_path: Path, dest: Path, strip_top: int = 0):
 
 def step_clean():
     banner("Cleaning previous build")
-    for d in (BUNDLE_DIR, APP_DIR):
-        if d.exists():
-            shutil.rmtree(d)
-            print(f"    Removed old {d.name}/")
+    if APP_DIR.exists():
+        shutil.rmtree(APP_DIR)
+        print(f"    Removed old ClawBridge.app/")
+    # Create the full .app structure upfront
     BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
-    print("    Created dist/ClawBridge/")
+    (APP_DIR / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
+    (APP_DIR / "Contents" / "Resources").mkdir(parents=True, exist_ok=True)
+    print("    Created ClawBridge.app/ structure")
 
 
 def step_python_venv():
@@ -233,13 +234,6 @@ def step_project_files():
         pkg_files = sum(1 for _ in pkg_dst.rglob("*.py"))
         print(f"    clawbridge/ ({pkg_files} Python files)")
 
-    # Copy icon if present
-    for icon_name in ("clawbridge.icns", "clawbridge.png"):
-        src = ROOT / icon_name
-        if src.exists():
-            shutil.copy2(src, BUNDLE_DIR / icon_name)
-            print(f"    {icon_name}")
-
     # Create default workspace structure
     ws = BUNDLE_DIR / "workspace"
     ws.mkdir(exist_ok=True)
@@ -253,60 +247,11 @@ def step_project_files():
     print("    logs/")
 
 
-def step_launcher_scripts():
-    banner("Creating launcher scripts")
+def step_app_metadata():
+    banner("Writing .app metadata")
 
-    # run.sh — console mode (shows logs)
-    run_sh = BUNDLE_DIR / "run.sh"
-    run_sh.write_text(
-        '#!/usr/bin/env bash\n'
-        'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
-        'export PLAYWRIGHT_BROWSERS_PATH="$SCRIPT_DIR/playwright_browsers"\n'
-        'export PATH="$SCRIPT_DIR/nodejs/bin:$SCRIPT_DIR/python/bin:$PATH"\n'
-        '"$SCRIPT_DIR/python/bin/python" "$SCRIPT_DIR/clawbridge.py" "$@"\n'
-    )
-    run_sh.chmod(0o755)
-    print("    run.sh (console mode)")
-
-    # ClawBridge.command — double-clickable from Finder
-    cb_cmd = BUNDLE_DIR / "ClawBridge.command"
-    cb_cmd.write_text(
-        '#!/usr/bin/env bash\n'
-        'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
-        'export PLAYWRIGHT_BROWSERS_PATH="$SCRIPT_DIR/playwright_browsers"\n'
-        'export PATH="$SCRIPT_DIR/nodejs/bin:$SCRIPT_DIR/python/bin:$PATH"\n'
-        'export CLAWBRIDGE_OPEN_BROWSER=1\n'
-        'echo "Starting ClawBridge..."\n'
-        '"$SCRIPT_DIR/python/bin/python" "$SCRIPT_DIR/clawbridge.py"\n'
-    )
-    cb_cmd.chmod(0o755)
-    print("    ClawBridge.command (double-clickable)")
-
-    # update.sh — re-install deps
-    update_sh = BUNDLE_DIR / "update.sh"
-    update_sh.write_text(
-        '#!/usr/bin/env bash\n'
-        'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
-        'echo "Updating ClawBridge dependencies..."\n'
-        '"$SCRIPT_DIR/python/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"\n'
-        'echo "Updating Playwright Chromium..."\n'
-        'export PLAYWRIGHT_BROWSERS_PATH="$SCRIPT_DIR/playwright_browsers"\n'
-        '"$SCRIPT_DIR/python/bin/python" -m playwright install chromium\n'
-        'echo "Done!"\n'
-    )
-    update_sh.chmod(0o755)
-    print("    update.sh (dependency updater)")
-
-
-def step_app_bundle():
-    banner("Creating macOS .app bundle")
-
-    # Structure: ClawBridge.app/Contents/{MacOS,Resources,Info.plist}
     contents = APP_DIR / "Contents"
-    macos_dir = contents / "MacOS"
     resources_dir = contents / "Resources"
-    macos_dir.mkdir(parents=True, exist_ok=True)
-    resources_dir.mkdir(parents=True, exist_ok=True)
 
     # Info.plist
     info_plist = contents / "Info.plist"
@@ -352,12 +297,12 @@ def step_app_bundle():
             shutil.copy2(src, resources_dir / icon_name)
             print(f"    {icon_name} -> Resources/")
 
-    # Launcher script (the actual executable)
-    launcher = macos_dir / "ClawBridge"
+    # Launcher script — finds bundle dir relative to itself inside the .app
+    launcher = contents / "MacOS" / "ClawBridge"
     launcher.write_text(
         '#!/usr/bin/env bash\n'
-        'APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"\n'
-        'BUNDLE_DIR="$APP_DIR/../ClawBridge"\n'
+        'CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"\n'
+        'BUNDLE_DIR="$CONTENTS_DIR/Resources/bundle"\n'
         'export PLAYWRIGHT_BROWSERS_PATH="$BUNDLE_DIR/playwright_browsers"\n'
         'export PATH="$BUNDLE_DIR/nodejs/bin:$BUNDLE_DIR/python/bin:$PATH"\n'
         'export CLAWBRIDGE_OPEN_BROWSER=1\n'
@@ -372,14 +317,14 @@ def step_app_bundle():
 def step_summary():
     banner("Build complete!")
 
-    total = sum(f.stat().st_size for f in BUNDLE_DIR.rglob("*") if f.is_file())
+    total = sum(f.stat().st_size for f in APP_DIR.rglob("*") if f.is_file())
     total_mb = total / (1024 * 1024)
 
-    print(f"    Output:  {BUNDLE_DIR}")
+    print(f"    Output:  {APP_DIR}")
     print(f"    Size:    {total_mb:.0f} MB")
     print(f"    Arch:    {NODE_ARCH}")
     print()
-    print("    Contents:")
+    print("    Bundle contents (Resources/bundle/):")
     for item in sorted(BUNDLE_DIR.iterdir()):
         if item.is_dir():
             dir_size = sum(f.stat().st_size for f in item.rglob("*") if f.is_file())
@@ -388,20 +333,19 @@ def step_summary():
             print(f"      {item.name:30s} {item.stat().st_size // 1024:>5d} KB")
     print()
     print("    Next steps:")
-    print("      1. Test:  cd dist/ClawBridge && ./run.sh")
+    print("      1. Test:  open dist/ClawBridge.app")
     print("      2. Pack:  pip install dmgbuild && dmgbuild -s dmg_settings.py 'ClawBridge' dist/ClawBridge.dmg")
-    print("      3. Ship:  Distribute the .dmg or ZIP the folder")
+    print("      3. Ship:  Distribute the .dmg")
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Build ClawBridge portable macOS distribution")
+    parser = argparse.ArgumentParser(description="Build ClawBridge macOS .app bundle")
     parser.add_argument("--version", action="store_true", help="Print version and exit")
     parser.add_argument("--skip-nodejs", action="store_true", help="Skip Node.js bundling")
     parser.add_argument("--skip-playwright", action="store_true", help="Skip Playwright Chromium")
-    parser.add_argument("--skip-app-bundle", action="store_true", help="Skip .app bundle creation")
     parser.add_argument("--arch", choices=["arm64", "x64"], default=None,
                         help="Target architecture (default: auto-detect)")
     args = parser.parse_args()
@@ -418,7 +362,7 @@ def main():
     print()
     print("  ==========================================")
     print("       ClawBridge Build System")
-    print("       Portable macOS Distribution")
+    print("       macOS .app Bundle")
     print(f"       Architecture: {NODE_ARCH}")
     print("  ==========================================")
 
@@ -436,13 +380,7 @@ def main():
         print("\n  [skip] Node.js (--skip-nodejs)")
 
     step_project_files()
-    step_launcher_scripts()
-
-    if not args.skip_app_bundle:
-        step_app_bundle()
-    else:
-        print("\n  [skip] .app bundle (--skip-app-bundle)")
-
+    step_app_metadata()
     step_summary()
 
 

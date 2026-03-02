@@ -6,7 +6,7 @@ ClawBridge is a local-first AI agent platform that unifies multiple automation e
 
 Submit a task, pick an engine (or let Auto choose), and watch it run. Everything stays on your machine — or bridge to the cloud.
 
-**Version:** 0.5.0 | [Website](https://clawbridge.ai) | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
+**Version:** 0.5.1 | [Website](https://clawbridge.ai) | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
 
 ---
 

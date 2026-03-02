@@ -30,9 +30,9 @@ size = None
 
 # ── Files to Include ────────────────────────────────────────────────────────
 
+# Only the self-contained .app bundle (everything is inside it)
 files = [
     str(ROOT / "dist" / "ClawBridge.app"),
-    str(ROOT / "dist" / "ClawBridge"),
 ]
 
 # Symlink to /Applications for drag-and-drop install
@@ -43,16 +43,15 @@ symlinks = {
 # ── Window Appearance ───────────────────────────────────────────────────────
 
 # Window position and size when the DMG is opened
-window_rect = ((200, 120), (640, 480))
+window_rect = ((200, 120), (540, 380))
 
 # Icon size in the DMG window
-icon_size = 80
+icon_size = 128
 
-# Icon positions (x, y from top-left of window content area)
+# Icon positions — classic 2-item layout: app on left, Applications on right
 icon_locations = {
-    "ClawBridge.app": (150, 200),
-    "ClawBridge": (150, 340),
-    "Applications": (490, 200),
+    "ClawBridge.app": (140, 160),
+    "Applications": (400, 160),
 }
 
 # Background color (no background image by default — keeps it simple)

@@ -5,6 +5,14 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-03-01
+
+### Fixed
+- **macOS DMG: self-contained .app bundle** — App bundle now embeds all dependencies inside `Contents/Resources/bundle/` instead of requiring a sibling folder. DMG shows 2 items (app + Applications) instead of 3.
+- **macOS DMG: drag-to-Applications works** — Previously, dragging only the .app to `/Applications` broke it because the launcher referenced a sibling `ClawBridge/` folder. Now fully self-contained.
+- **CI: x64 macOS build uses Intel runner** — Changed from `macos-14` (ARM) to `macos-13` (Intel) so the x64 DMG produces true x86_64 binaries without Rosetta.
+- **Windows build version synced** — `build.py` VERSION updated from 0.3.5 to match release.
+
 ## [0.5.0] - 2026-03-01
 
 ### Added

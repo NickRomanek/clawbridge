@@ -53,7 +53,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build portable distribution
+      - name: Build .app bundle
         run: python build_macos.py --arch arm64
 
       - name: Create DMG
@@ -64,7 +64,7 @@ jobs:
       - name: Create ZIP fallback
         run: |
           cd dist
-          zip -r ClawBridge-arm64.zip ClawBridge/ ClawBridge.app/
+          zip -ry ClawBridge-arm64.zip ClawBridge.app/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,7 +76,7 @@ jobs:
 
   # ── macOS Build (Intel) ─────────────────────────────────────────────────
   build-macos-x64:
-    runs-on: macos-14  # Intel compat via Rosetta
+    runs-on: macos-13  # Intel runner for native x86_64 binaries
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +84,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build portable distribution
+      - name: Build .app bundle
         run: python build_macos.py --arch x64
 
       - name: Create DMG
@@ -95,7 +95,7 @@ jobs:
       - name: Create ZIP fallback
         run: |
           cd dist
-          zip -r ClawBridge-x64.zip ClawBridge/ ClawBridge.app/
+          zip -ry ClawBridge-x64.zip ClawBridge.app/
 
       - uses: actions/upload-artifact@v4
         with:
