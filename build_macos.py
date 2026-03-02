@@ -594,7 +594,6 @@ def main():
 
     step_clean()
     python_exe = step_python_venv()
-    step_fix_python_relocatable()
 
     if not args.skip_playwright:
         step_playwright(python_exe)
@@ -609,6 +608,12 @@ def main():
     step_project_files()
     step_icon(python_exe)
     step_app_metadata()
+
+    # Make Python relocatable LAST — install_name_tool + codesign breaks the
+    # venv binary for local use, so all build steps that invoke python_exe
+    # (Playwright, icon trim) must run before this.
+    step_fix_python_relocatable()
+
     step_summary()
 
 
