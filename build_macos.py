@@ -163,6 +163,103 @@ def step_python_venv():
     return python_exe
 
 
+def step_fix_python_relocatable():
+    """Make the bundled Python relocatable by fixing dylib references.
+
+    The venv Python binary is dynamically linked to the framework Python
+    (e.g., /Library/Frameworks/Python.framework/Versions/3.12/Python).
+    On machines without that framework installed, this causes dyld errors.
+
+    Fix: copy the dylib into the bundle and rewrite references with
+    install_name_tool so the binary finds it via @executable_path.
+    """
+    banner("Making Python relocatable")
+
+    python_bin = BUNDLE_DIR / "python" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = BUNDLE_DIR / "python" / "bin" / "python3"
+    if not python_bin.exists():
+        print("    [skip] No Python binary found in bundle")
+        return
+
+    # Find what dylibs the Python binary links to
+    result = subprocess.run(
+        ["otool", "-L", str(python_bin)],
+        capture_output=True, text=True, check=True
+    )
+
+    # Look for Python framework or libpython reference
+    # e.g., /Library/Frameworks/Python.framework/Versions/3.12/Python
+    # e.g., /usr/local/lib/libpython3.12.dylib
+    framework_ref = None
+    for line in result.stdout.splitlines()[1:]:  # Skip first line (binary name)
+        path = line.strip().split(" (")[0].strip()
+        name = Path(path).name
+        if name == "Python" or name.startswith("libpython"):
+            framework_ref = path
+            break
+
+    if not framework_ref:
+        print("    [skip] No Python framework/dylib reference found (statically linked?)")
+        return
+
+    framework_path = Path(framework_ref)
+    print(f"    Found reference: {framework_ref}")
+
+    if not framework_path.exists():
+        print(f"    [!] Dylib not found at referenced path: {framework_path}")
+        # Try common alternative locations
+        py_ver = ".".join(PYTHON_VERSION.split(".")[:2])
+        for alt in [
+            Path(f"/Library/Frameworks/Python.framework/Versions/{py_ver}/Python"),
+            Path(f"/usr/local/Frameworks/Python.framework/Versions/{py_ver}/Python"),
+            Path(f"/usr/local/lib/libpython{py_ver}.dylib"),
+        ]:
+            if alt.exists():
+                framework_path = alt
+                print(f"    Found at alternative: {framework_path}")
+                break
+        if not framework_path.exists():
+            print("    [!] Cannot find Python dylib to bundle -- app will NOT be relocatable!")
+            return
+
+    # Copy the dylib into the bundle's python/lib/ directory
+    lib_dir = BUNDLE_DIR / "python" / "lib"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+    dest = lib_dir / framework_path.name
+    shutil.copy2(str(framework_path), str(dest))
+    dest_size = dest.stat().st_size // (1024 * 1024)
+    print(f"    Copied {framework_path.name} ({dest_size} MB) -> python/lib/")
+
+    # Fix the reference in ALL Python executables using install_name_tool
+    new_ref = f"@executable_path/../lib/{framework_path.name}"
+    fixed = 0
+    bin_dir = BUNDLE_DIR / "python" / "bin"
+    for exe in bin_dir.iterdir():
+        if exe.is_symlink():
+            continue
+        # Check if this binary references the framework
+        check = subprocess.run(
+            ["otool", "-L", str(exe)], capture_output=True, text=True
+        )
+        if framework_ref in check.stdout:
+            subprocess.run([
+                "install_name_tool", "-change",
+                framework_ref, new_ref,
+                str(exe)
+            ], capture_output=True)
+            fixed += 1
+    print(f"    Patched {fixed} binaries -> @executable_path/../lib/{framework_path.name}")
+
+    # Verify the fix
+    result = subprocess.run(
+        ["otool", "-L", str(python_bin)],
+        capture_output=True, text=True
+    )
+    for line in result.stdout.splitlines()[1:3]:
+        print(f"    Verify: {line.strip()}")
+
+
 def step_playwright(python_exe: Path):
     banner("Installing Playwright Chromium")
     browsers_dir = BUNDLE_DIR / "playwright_browsers"
@@ -274,9 +371,9 @@ def step_icon(python_exe: Path):
         "if bbox:\n"
         "    cropped = img.crop(bbox)\n"
         "    w, h = cropped.size\n"
-        "    # Fit into 1024x1024 with ~8% padding on each side\n"
+        "    # Fit into 1024x1024 with minimal padding (~2.5% each side)\n"
         "    target = 1024\n"
-        "    content_size = int(target * 0.84)\n"
+        "    content_size = int(target * 0.95)\n"
         "    scale = content_size / max(w, h)\n"
         "    new_w, new_h = int(w * scale), int(h * scale)\n"
         "    resized = cropped.resize((new_w, new_h), Image.LANCZOS)\n"
@@ -378,7 +475,7 @@ def step_app_metadata():
     print("    Info.plist")
 
     # Launcher script — finds bundle dir relative to itself inside the .app
-    # Shows a native macOS dialog if Python fails to start
+    # Handles: quarantine stripping, dylib loading, error dialogs
     launcher = contents / "MacOS" / "ClawBridge"
     launcher.write_text(
         '#!/usr/bin/env bash\n'
@@ -387,9 +484,19 @@ def step_app_metadata():
         'LOG_DIR="$BUNDLE_DIR/logs"\n'
         'mkdir -p "$LOG_DIR"\n'
         '\n'
+        '# Strip quarantine attributes from bundle contents\n'
+        '# After user approves app via right-click > Open, this fixes internal files\n'
+        '# (Python binary, .so extensions, etc.) that macOS would otherwise block\n'
+        'xattr -cr "$CONTENTS_DIR" 2>/dev/null || true\n'
+        '\n'
         'export PLAYWRIGHT_BROWSERS_PATH="$BUNDLE_DIR/playwright_browsers"\n'
         'export PATH="$BUNDLE_DIR/nodejs/bin:$BUNDLE_DIR/python/bin:$PATH"\n'
         'export CLAWBRIDGE_OPEN_BROWSER=1\n'
+        '\n'
+        '# Python dylib loading: the main binary is fixed via install_name_tool at\n'
+        '# build time, but .so extension modules may still reference the framework\n'
+        '# path from the build machine. DYLD_LIBRARY_PATH catches those.\n'
+        'export DYLD_LIBRARY_PATH="$BUNDLE_DIR/python/lib:${DYLD_LIBRARY_PATH:-}"\n'
         '\n'
         '# Check that the bundle exists\n'
         'if [ ! -f "$BUNDLE_DIR/clawbridge.py" ]; then\n'
@@ -474,6 +581,7 @@ def main():
 
     step_clean()
     python_exe = step_python_venv()
+    step_fix_python_relocatable()
 
     if not args.skip_playwright:
         step_playwright(python_exe)
