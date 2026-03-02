@@ -409,6 +409,9 @@ def step_app_metadata():
     resources_dir = contents / "Resources"
 
     # Info.plist
+    # LSArchitecturePriority prevents Finder from launching bash under Rosetta
+    # which corrupts platform.processor() and breaks rubicon-objc's ARM64 guard
+    plist_arch = "arm64" if NODE_ARCH == "arm64" else "x86_64"
     info_plist = contents / "Info.plist"
     info_plist.write_text(f"""\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -438,6 +441,10 @@ def step_app_metadata():
     <true/>
     <key>LSUIElement</key>
     <false/>
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>{plist_arch}</string>
+    </array>
     <key>NSAppleEventsUsageDescription</key>
     <string>ClawBridge uses AppleScript to activate applications and automate desktop tasks.</string>
 </dict>

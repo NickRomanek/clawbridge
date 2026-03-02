@@ -290,9 +290,11 @@ def _ensure_dependencies() -> None:
         "Pillow",
         "mss",
         "pystray",
-        "pywinauto",
         "pynput",
     ]
+    # Platform-specific deps — only check on the correct OS
+    if sys.platform == "win32":
+        required.append("pywinauto")
     # Map pip package names to their actual import names where they differ
     import_names = {"python-dotenv": "dotenv", "Pillow": "PIL"}
     missing = []
@@ -302,6 +304,11 @@ def _ensure_dependencies() -> None:
             __import__(mod)
         except ImportError:
             missing.append(pkg)
+        except Exception as _dep_err:
+            # Module exists but has a runtime error (e.g. rubicon-objc ARM64
+            # AttributeError). Not a missing-dependency problem — don't try
+            # to reinstall, let the real import surface the error later.
+            print(f"  Warning: {pkg} loaded but raised {type(_dep_err).__name__}: {_dep_err}")
     if not missing:
         _startup_status.update({"stage": "Dependencies OK", "progress": 60})
         return
