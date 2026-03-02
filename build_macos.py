@@ -122,7 +122,7 @@ def step_python_venv():
     venv_dir = BUNDLE_DIR / "python"
     print(f"    Creating venv with {sys.executable}...")
     subprocess.run(
-        [sys.executable, "-m", "venv", str(venv_dir)],
+        [sys.executable, "-m", "venv", "--copies", str(venv_dir)],
         check=True, capture_output=True
     )
 
