@@ -29,6 +29,24 @@ if not sys.stdout or sys.executable.endswith('pythonw.exe'):
     sys.stderr = sys.stdout
 
 # ---------------------------------------------------------------------------
+# ARM64 macOS .app fix — platform.processor() returns 'i386' when launched
+# from Finder even on Apple Silicon (Finder/provenance attribute issue).
+# rubicon-objc uses this to decide whether to load objc_msgSendSuper_stret,
+# which doesn't exist on ARM64.  Cross-check with platform.machine().
+# Must run BEFORE any import that triggers rubicon-objc (pyautogui chain).
+# ---------------------------------------------------------------------------
+if sys.platform == "darwin":
+    import platform as _pf_fix
+    _orig_processor = _pf_fix.processor
+    def _patched_processor(_orig=_orig_processor, _machine=_pf_fix.machine):
+        result = _orig()
+        if _machine() == "arm64" and result in ("i386", "x86_64"):
+            return "arm"
+        return result
+    _pf_fix.processor = _patched_processor
+    del _pf_fix, _orig_processor, _patched_processor
+
+# ---------------------------------------------------------------------------
 # Early loading server — starts BEFORE dependency install using only stdlib.
 # Provides real-time startup progress via /startup-status JSON endpoint.
 # ---------------------------------------------------------------------------
@@ -11587,7 +11605,9 @@ def main() -> None:
     _overlay = _MiniOverlay()
 
     # 1. System tray icon in background thread (skip if port already in use)
-    if _loading_server is not None:
+    # On macOS, pystray.Icon.run() requires the main thread (AppKit/NSApplication).
+    # Running it in threading.Thread causes a SIGTRAP flood that kills the process.
+    if _loading_server is not None and sys.platform != "darwin":
         _tray_icon = _create_tray_icon(url)
         if _tray_icon:
             threading.Thread(target=_tray_icon.run, daemon=True).start()
