@@ -247,6 +247,58 @@ def step_project_files():
     print("    logs/")
 
 
+def step_icon():
+    banner("Generating .icns icon")
+
+    # Look for source PNG (prefer assets/logo.png, fall back to transparentlogo.png)
+    logo_src = None
+    for candidate in ("assets/logo.png", "transparentlogo.png", "clawbridge.png"):
+        p = ROOT / candidate
+        if p.exists():
+            logo_src = p
+            break
+
+    if logo_src is None:
+        print("    [skip] No source logo found (assets/logo.png, transparentlogo.png)")
+        return
+
+    print(f"    Source: {logo_src.name}")
+
+    # Create iconset directory with required sizes
+    iconset = DIST_DIR / "ClawBridge.iconset"
+    if iconset.exists():
+        shutil.rmtree(iconset)
+    iconset.mkdir(parents=True)
+
+    # macOS .icns requires these exact sizes
+    sizes = [16, 32, 64, 128, 256, 512]
+    for size in sizes:
+        # Standard resolution
+        out = iconset / f"icon_{size}x{size}.png"
+        subprocess.run(
+            ["sips", "-z", str(size), str(size), str(logo_src), "--out", str(out)],
+            check=True, capture_output=True
+        )
+        # Retina (@2x) — the next size up labeled as @2x of current
+        out2x = iconset / f"icon_{size}x{size}@2x.png"
+        retina_size = size * 2
+        subprocess.run(
+            ["sips", "-z", str(retina_size), str(retina_size), str(logo_src), "--out", str(out2x)],
+            check=True, capture_output=True
+        )
+
+    # Convert iconset to .icns
+    icns_path = APP_DIR / "Contents" / "Resources" / "clawbridge.icns"
+    subprocess.run(
+        ["iconutil", "-c", "icns", str(iconset), "-o", str(icns_path)],
+        check=True, capture_output=True
+    )
+
+    # Cleanup
+    shutil.rmtree(iconset)
+    print(f"    Generated clawbridge.icns ({icns_path.stat().st_size // 1024} KB)")
+
+
 def step_app_metadata():
     banner("Writing .app metadata")
 
@@ -290,25 +342,44 @@ def step_app_metadata():
 """)
     print("    Info.plist")
 
-    # Copy icon if available
-    for icon_name in ("clawbridge.icns",):
-        src = ROOT / icon_name
-        if src.exists():
-            shutil.copy2(src, resources_dir / icon_name)
-            print(f"    {icon_name} -> Resources/")
-
     # Launcher script — finds bundle dir relative to itself inside the .app
+    # Shows a native macOS dialog if Python fails to start
     launcher = contents / "MacOS" / "ClawBridge"
     launcher.write_text(
         '#!/usr/bin/env bash\n'
         'CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"\n'
         'BUNDLE_DIR="$CONTENTS_DIR/Resources/bundle"\n'
+        'LOG_DIR="$BUNDLE_DIR/logs"\n'
+        'mkdir -p "$LOG_DIR"\n'
+        '\n'
         'export PLAYWRIGHT_BROWSERS_PATH="$BUNDLE_DIR/playwright_browsers"\n'
         'export PATH="$BUNDLE_DIR/nodejs/bin:$BUNDLE_DIR/python/bin:$PATH"\n'
         'export CLAWBRIDGE_OPEN_BROWSER=1\n'
-        '# Redirect to log file in bundle\n'
-        'exec "$BUNDLE_DIR/python/bin/python" "$BUNDLE_DIR/clawbridge.py" \\\n'
-        '  > "$BUNDLE_DIR/logs/app_stdout.log" 2> "$BUNDLE_DIR/logs/app_stderr.log"\n'
+        '\n'
+        '# Check that the bundle exists\n'
+        'if [ ! -f "$BUNDLE_DIR/clawbridge.py" ]; then\n'
+        '  osascript -e \'display dialog "ClawBridge failed to start.\\n\\n'
+        'The application bundle is missing or corrupted.\\n'
+        'Try re-downloading from clawbridge.ai/download" '
+        'with title "ClawBridge" buttons {"OK"} default button "OK" with icon stop\'\n'
+        '  exit 1\n'
+        'fi\n'
+        '\n'
+        '# Run ClawBridge, capture exit code\n'
+        '"$BUNDLE_DIR/python/bin/python" "$BUNDLE_DIR/clawbridge.py" \\\n'
+        '  > "$LOG_DIR/app_stdout.log" 2> "$LOG_DIR/app_stderr.log"\n'
+        'EXIT_CODE=$?\n'
+        '\n'
+        '# Show error dialog if it crashed\n'
+        'if [ $EXIT_CODE -ne 0 ]; then\n'
+        '  ERR_TAIL=$(tail -5 "$LOG_DIR/app_stderr.log" 2>/dev/null || echo "No error log")\n'
+        '  osascript -e "display dialog \\"ClawBridge exited with an error (code $EXIT_CODE).\\n\\n$ERR_TAIL\\n\\nFull log: $LOG_DIR/app_stderr.log\\" '
+        'with title \\"ClawBridge\\" buttons {\\"Open Log\\", \\"OK\\"} default button \\"OK\\" with icon stop" \\\n'
+        '    -e "set btn to button returned of result" \\\n'
+        '    -e "if btn is \\"Open Log\\" then" \\\n'
+        '    -e "  do shell script \\"open \\\\\\"$LOG_DIR/app_stderr.log\\\\\\"\\"" \\\n'
+        '    -e "end if"\n'
+        'fi\n'
     )
     launcher.chmod(0o755)
     print("    MacOS/ClawBridge (launcher)")
@@ -380,6 +451,7 @@ def main():
         print("\n  [skip] Node.js (--skip-nodejs)")
 
     step_project_files()
+    step_icon()
     step_app_metadata()
     step_summary()
 
