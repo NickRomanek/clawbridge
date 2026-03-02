@@ -76,13 +76,14 @@ jobs:
 
   # ── macOS Build (Intel) ─────────────────────────────────────────────────
   build-macos-x64:
-    runs-on: macos-13  # Intel runner for native x86_64 binaries
+    runs-on: macos-14  # ARM runner, x64 Python via Rosetta
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          architecture: x64
 
       - name: Build .app bundle
         run: python build_macos.py --arch x64
