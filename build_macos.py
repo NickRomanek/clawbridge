@@ -33,7 +33,7 @@ if sys.platform != "darwin":
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 
 ROOT = Path(__file__).parent.resolve()
 DIST_DIR = ROOT / "dist"
@@ -489,6 +489,10 @@ def step_app_metadata():
         'with title "ClawBridge" buttons {"OK"} default button "OK" with icon stop\'\n'
         '  exit 1\n'
         'fi\n'
+        '\n'
+        '# Kill any stale ClawBridge process still holding port 8765\n'
+        'lsof -ti:8765 -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true\n'
+        'sleep 0.5\n'
         '\n'
         '# Run ClawBridge, capture exit code\n'
         '"$BUNDLE_DIR/python/bin/python3" "$BUNDLE_DIR/clawbridge.py" \\\n'

@@ -5,6 +5,38 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-03-07
+
+### Added
+
+#### Multi-Engine Task Orchestration
+- **LLM-powered task planner**: `_plan_task()` decomposes prompts into 1-3 sequential steps, each routed to the best engine. Uses cheapest available LLM (~$0.001 per plan). 3s timeout with 5-minute cache.
+- **Result chaining**: Previous step results injected as `[PREVIOUS STEP RESULTS]` context into next step's prompt (capped at 3,000 chars).
+- **Dashboard plan visualization**: `task_plan` and `step_plan_progress` WebSocket events show multi-step progress in chat.
+- **Planner sanity checks**: If planner says CHAT but prompt contains a URL or web keywords, auto-overrides to BROWSER. Applied both at single-step level and per-step inside the planner.
+
+#### Hybrid DOM + Visual Engine
+- **CDP bridge on computer-use**: When browser is focused, computer-use gains `read_page`, `get_url`, and `dom_click` tools via Chrome DevTools Protocol. DOM tools are free (don't count as steps).
+- **Browser detection**: `_is_browser_focused()` checks window title for Chrome/Edge/Firefox/Brave patterns.
+- **Lazy CDP connection**: `_cdp_connect()` establishes Playwright CDP connection on demand, `_cdp_disconnect()` cleans up on task completion.
+
+#### Browser-Use Reliability
+- **Auto-launch Chrome with CDP**: browser-use now auto-launches real Chrome with `--remote-debugging-port=9222` for `default` and `user_data_dir` modes. Avoids anti-bot detection that blocks Playwright's isolated Chromium.
+- **CDP session pre-connect**: `browser.start()` called during initialization so CDP is ready before the first task. Fixes race condition where initial navigation failed with "CDP client not initialized".
+- **Headless Chrome support**: `BROWSER_HEADLESS=true` adds `--headless=new` flag — Chrome runs invisible, users see activity via PiP live view in dashboard.
+
+#### Updated Routing Heuristics
+- **Web research routes to browser-use**: Non-interactive web tasks (URLs, search, reading) now route to browser-use (DOM access, 5-10x faster) instead of computer-use.
+- **Interactive web stays on computer-use**: Tasks with login/form/purchase keywords still use computer-use for real browser with saved sessions.
+- **Stronger planner prompt**: Explicit rules that URLs/domains = BROWSER, never CHAT.
+
+### Changed
+- Monolith grew from ~11,300 to ~12,700 lines with multi-engine orchestration, hybrid engine, and CDP auto-management.
+- `_classify_prompt_with_llm()` is now a thin wrapper around `_plan_task()` for backward compatibility.
+- macOS download disabled on website (not production-ready yet).
+
+---
+
 ## [0.5.1] - 2026-03-01
 
 ### Fixed

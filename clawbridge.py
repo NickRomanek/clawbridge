@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 import hmac
 import os
@@ -402,7 +402,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field, PrivateAttr
 import uvicorn
@@ -1839,6 +1839,61 @@ def init_db():
                 except Exception:
                     pass
             c.execute("UPDATE usage_stats SET total_tasks = ?, total_tokens = ?, total_cost_usd = ? WHERE id = 1", (len(existing), tot_tok, round(tot_cost, 4)))
+    # Planner items (kanban/checklist for tracking project goals)
+    c.execute('''CREATE TABLE IF NOT EXISTS planner_items
+                 (id TEXT PRIMARY KEY,
+                  phase TEXT NOT NULL DEFAULT '',
+                  title TEXT NOT NULL,
+                  description TEXT DEFAULT '',
+                  status TEXT DEFAULT 'pending',
+                  position INTEGER DEFAULT 0,
+                  notes TEXT DEFAULT '',
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL)''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_planner_phase ON planner_items(phase)')
+    # Seed default planner items if table is empty
+    _planner_count = c.execute("SELECT COUNT(*) FROM planner_items").fetchone()[0]
+    if _planner_count == 0:
+        _now = datetime.utcnow().isoformat()
+        # (id, phase, title, notes, position, status)
+        _seed_items = [
+            # Observability — get data on how well things work
+            ("obs-1", "observability", "Run first benchmark baseline", "python -m benchmarks run --tags smoke to start small, then full suite", 0, "pending"),
+            ("obs-2", "observability", "Review benchmark results and identify failure patterns", "Look for: which engines fail most, which task types struggle, cost per task", 1, "pending"),
+            ("obs-3", "observability", "Failure analysis endpoint + auto-populate on error", "analyze_task_failure() detects repeated actions, stale loops, max-steps. Auto-stored in task result.", 2, "done"),
+            ("obs-4", "observability", "Failure timeline view in dashboard history", "Color-coded step timeline (green/yellow/red), diagnosis text, token waste count on error tasks", 3, "done"),
+            # Reliability — make tasks actually succeed
+            ("rel-1", "reliability", "Post-action hint when screen unchanged", "Injects 'screen appears unchanged' note at first stale occurrence. Zero-cost (no API call).", 0, "done"),
+            ("rel-2", "reliability", "Action-repetition detection (3 identical actions)", "Tracks last 3 actions. Same action at same coordinates 3x fast-tracks stale counter + warning.", 1, "done"),
+            ("rel-3", "reliability", "Earlier diagnostic trigger (stale=2 for full+standard)", "Haiku diagnostic fires at stale=2 instead of 3, now works for standard profile too (~$0.001).", 2, "done"),
+            ("rel-4", "reliability", "Test scaffolding profiles against same benchmark tasks", "Run same 10 tasks on full/standard/minimal/raw. Compare success rate, cost, steps. Find sweet spot.", 3, "pending"),
+            # Benchmarks — build the test suite
+            ("bench-1", "benchmarks", "Fix any broken benchmark tasks, get clean first run", "Check tasks/*.json for invalid selectors, dead URLs. Goal: all tasks run without crashes.", 0, "pending"),
+            ("bench-2", "benchmarks", "Add practical tasks: price comparison, coupon finding, job search", "Tasks real users would pay for. Compare prices on 3 sites, find coupons on RetailMeNot, Indeed job search.", 1, "pending"),
+            ("bench-3", "benchmarks", "Add creative tasks: Canva, PowerPoint, Clipchamp, Paint", "Tasks that show visual reasoning. Create a presentation, design a social post, edit a video title card.", 2, "pending"),
+            ("bench-4", "benchmarks", "Add 'can it do this?' tasks: reservations, gov sites, support tickets", "The tasks people wonder about. Restaurant booking, DMV appointment, filing a support ticket.", 3, "pending"),
+            ("bench-5", "benchmarks", "Set up Android Studio emulator for mobile tasks", "Install Android Studio, create Pixel emulator. Goal: ClawBridge can see and control the emulator window.", 4, "pending"),
+            ("bench-6", "benchmarks", "Test computer-use on Android emulator window", "Try: open Settings, use Chrome, install app from Play Store. Document what works and what doesn't.", 5, "pending"),
+            ("bench-7", "benchmarks", "Cross-tool comparison: ClawBridge vs browser-use library", "Same 10 browser tasks. Measure: success rate, avg steps, cost, time. Be fair and honest.", 6, "pending"),
+            ("bench-8", "benchmarks", "Cross-tool comparison: ClawBridge vs Claude Cowork", "Same 10 tasks (mix of browser + desktop). Document differences in approach and capability.", 7, "pending"),
+            # Content — show the world, YouTube-first strategy
+            ("cont-1", "content", "Record first demo: AI completes a real task end-to-end", "Use OBS or Windows Game Bar. Show: open dashboard -> type task -> watch it run -> success. Pick something relatable (book a reservation, compare prices, fill a form). 30-60s. Don't overthink it.", 0, "pending"),
+            ("cont-2", "content", "Record comparison: AI vs doing it manually", "Side-by-side or before/after. You do a task manually (timed), then ClawBridge does it. Show the speed difference. This is your hook content.", 1, "pending"),
+            ("cont-3", "content", "Create YouTube channel", "Name: 'Computer Use Lab' or your own brand. Professional banner, about section, links to clawbridge.ai and GitHub. This is your main platform.", 2, "pending"),
+            ("cont-4", "content", "Upload first 2 videos to YouTube + cross-post clips", "Title formula: 'I Made AI [Do X] on My Desktop'. Add timestamps, description, tags. Cross-post 30s clips to Twitter/X (native upload, full link in reply).", 3, "pending"),
+            ("cont-5", "content", "Run full benchmark suite and build comparison data", "python -m benchmarks run + benchmarks report. Also test same tasks on Claude Cowork manually. Build a spreadsheet with success/cost/time columns.", 4, "pending"),
+            ("cont-6", "content", "Record THE comparison video: 'I tested N tools on the same tasks'", "This is your breakout content. Same 10 tasks on ClawBridge, Cowork, raw browser-use. Show each attempt. Results table at end. Be fair, show failures too. 5-10 min YouTube, 60s highlight clip for socials.", 5, "pending"),
+            ("cont-7", "content", "Write first blog post with benchmark charts", "Data-driven comparison. Include bar charts, cost table, embed video. Publish to clawbridge.ai/blog. SEO title: 'Computer Use Tools Compared: [Year] Benchmark Results'.", 6, "pending"),
+            ("cont-8", "content", "Post to Reddit with genuine findings", "r/selfhosted, r/automation, r/Python, r/artificial. Title: 'I tested N computer use tools - here are the results'. Share real data, not promo. Link to blog/video.", 7, "pending"),
+            ("cont-9", "content", "Set up weekly content rhythm", "Tuesday = record, Wednesday = edit + post. 1 YouTube video/week, 1 blog every 2 weeks. Consistency beats quality early on. Repurpose: YouTube -> Twitter clip -> blog embed.", 8, "pending"),
+            ("cont-10", "content", "Product Hunt launch", "Prepare: 5 screenshots, demo GIF, tagline, maker comment. Launch Tuesday 12:01 AM PT. Have supporters ready to upvote + comment early.", 9, "pending"),
+            ("cont-11", "content", "Record mobile automation demo (Android emulator)", "Unique content nobody else has. Show ClawBridge controlling Android apps via emulator. Great for 'Can AI use your phone?' angle.", 10, "pending"),
+            ("cont-12", "content", "Open-source the benchmark suite", "Separate repo. Credibility builder, community contributions. Include runner, scorer, test sites, tasks. MIT license.", 11, "pending"),
+        ]
+        for _id, _phase, _title, _notes, _pos, _status in _seed_items:
+            c.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?)",
+                      (_id, _phase, _title, _status, _pos, _notes, _now, _now))
+        logging.info("Seeded %d default planner items", len(_seed_items))
     # Settle orphaned "running"/"pending" tasks from previous crashed/killed server
     orphaned = c.execute("UPDATE tasks SET status = 'error', error = 'Server restarted — task interrupted' WHERE status IN ('running', 'pending')").rowcount
     if orphaned:
@@ -1889,6 +1944,7 @@ class TaskResult(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     estimated_cost_usd: float = 0.0
+    failure_summary: dict = Field(default_factory=dict)
 
 class Task(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
@@ -2079,6 +2135,108 @@ def get_steps_for_task(task_id: str) -> list[dict]:
     except Exception:
         return []
 
+
+def analyze_task_failure(task_id: str) -> dict:
+    """Algorithmic failure analysis for a task. No LLM call — pure pattern detection."""
+    steps = get_steps_for_task(task_id)
+    if not steps:
+        return {"failure_type": "no_data", "diagnosis": "No step data available for analysis."}
+
+    total_steps = len(steps)
+    total_tokens = sum((s.get("tokens_in", 0) or 0) + (s.get("tokens_out", 0) or 0) for s in steps)
+
+    # Detect repeated actions (3+ consecutive same action at similar coordinates)
+    repeated_action = None
+    stuck_at_step = None
+    for i in range(2, total_steps):
+        try:
+            actions = [steps[j].get("action", "") for j in range(i - 2, i + 1)]
+            if len(set(actions)) == 1 and actions[0]:
+                # Check coordinates if available
+                coords = []
+                for j in range(i - 2, i + 1):
+                    detail = steps[j].get("detail", "")
+                    try:
+                        d = json.loads(detail) if detail else {}
+                        c = d.get("coordinate", [0, 0])
+                        if isinstance(c, list) and len(c) == 2:
+                            coords.append(c)
+                    except Exception:
+                        pass
+                if len(coords) == 3:
+                    max_dist = max(abs(coords[a][0] - coords[b][0]) + abs(coords[a][1] - coords[b][1])
+                                   for a in range(3) for b in range(a + 1, 3))
+                    if max_dist < 60:
+                        repeated_action = actions[0]
+                        stuck_at_step = i - 1  # 0-indexed step where repetition starts
+                        break
+                elif not coords:
+                    repeated_action = actions[0]
+                    stuck_at_step = i - 1
+                    break
+        except Exception:
+            continue
+
+    # Detect stale sequences (reasoning mentions unchanged/no effect)
+    stale_steps = []
+    for i, s in enumerate(steps):
+        reasoning = (s.get("reasoning", "") or "").lower()
+        if any(kw in reasoning for kw in ("unchanged", "no effect", "no visible", "same screenshot", "stale")):
+            stale_steps.append(i)
+
+    # Check if max steps was hit
+    max_steps_hit = False
+    if steps and steps[-1].get("max_steps"):
+        max_steps_hit = steps[-1]["step"] >= steps[-1]["max_steps"]
+
+    # Get task error for hard-stop detection
+    hard_stop = False
+    try:
+        conn = sqlite3.connect(Settings.db_path)
+        row = conn.execute("SELECT error FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        conn.close()
+        if row and row[0] and "consecutive actions had no effect" in (row[0] or ""):
+            hard_stop = True
+    except Exception:
+        pass
+
+    # Determine failure type and diagnosis
+    if hard_stop:
+        failure_type = "stuck_loop"
+        diagnosis = f"Task was hard-stopped after consecutive stale actions. The automation got stuck repeating ineffective actions."
+    elif repeated_action and stuck_at_step is not None:
+        failure_type = "action_repetition"
+        diagnosis = f"Repeated '{repeated_action}' at similar coordinates starting at step {stuck_at_step + 1}. The model kept trying the same approach."
+    elif stale_steps and len(stale_steps) >= 3:
+        failure_type = "progressive_stale"
+        diagnosis = f"Multiple stale actions detected at steps {[s+1 for s in stale_steps[:5]]}. The automation struggled to make progress."
+    elif max_steps_hit:
+        failure_type = "max_steps"
+        diagnosis = f"Hit the {steps[-1]['max_steps']}-step limit without completing. Task may need more steps or a simpler approach."
+    else:
+        failure_type = "unknown"
+        diagnosis = f"Task failed after {total_steps} steps. Review step traces for details."
+
+    # Estimate wasted tokens (tokens after the stuck point)
+    wasted_tokens = 0
+    if stuck_at_step is not None:
+        for s in steps[stuck_at_step:]:
+            wasted_tokens += (s.get("tokens_in", 0) or 0) + (s.get("tokens_out", 0) or 0)
+
+    return {
+        "failure_type": failure_type,
+        "total_steps": total_steps,
+        "stuck_at_step": stuck_at_step + 1 if stuck_at_step is not None else None,
+        "repeated_action": repeated_action,
+        "stale_step_count": len(stale_steps),
+        "max_steps_hit": max_steps_hit,
+        "hard_stop": hard_stop,
+        "total_tokens": total_tokens,
+        "wasted_tokens": wasted_tokens,
+        "diagnosis": diagnosis,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Engines (browser-use only in single-file; OpenClaw stubbed)
 # ---------------------------------------------------------------------------
@@ -2168,6 +2326,65 @@ class BrowserUseEngine(EngineBase):
             settings = get_settings()
             vp = ViewportSize(width=1280, height=900)
             mode = settings.browser_mode
+            # Auto-upgrade to CDP mode: launch real Chrome with CDP for any non-CDP mode.
+            # Playwright's Chromium (both default and user_data_dir) gets blocked by anti-bot systems.
+            # Real Chrome with CDP avoids this while keeping cookies/sessions via ClawBridge profile.
+            if mode in ("default", "user_data_dir"):
+                chrome_exe = _find_chrome_exe()
+                if chrome_exe:
+                    cdp_port = 9222
+                    cdp_url = f"http://localhost:{cdp_port}"
+                    # Check if CDP is already available (Chrome already running)
+                    cdp_ready = False
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient(timeout=2) as _hc:
+                            r = await _hc.get(f"{cdp_url}/json/version")
+                            cdp_ready = r.status_code == 200
+                    except Exception:
+                        pass
+                    if not cdp_ready:
+                        # Launch Chrome with CDP
+                        if sys.platform == "darwin":
+                            _profile_dir = os.path.expanduser("~/Library/Application Support/ClawBridge/ChromeProfile")
+                        elif sys.platform == "win32":
+                            _profile_dir = os.path.expandvars(r"%LOCALAPPDATA%\ClawBridge\ChromeProfile")
+                        else:
+                            _profile_dir = os.path.expanduser("~/.local/share/ClawBridge/ChromeProfile")
+                        os.makedirs(_profile_dir, exist_ok=True)
+                        cmd = [
+                            chrome_exe,
+                            f"--remote-debugging-port={cdp_port}",
+                            f"--user-data-dir={_profile_dir}",
+                            "--no-first-run",
+                            "--no-default-browser-check",
+                            "--window-size=1300,950",
+                        ]
+                        # Run headless so Chrome doesn't steal focus — user sees PiP live view in dashboard
+                        if settings.browser_headless:
+                            cmd.append("--headless=new")
+                        logging.info("browser-use: auto-launching Chrome with CDP: %s", " ".join(cmd))
+                        import subprocess
+                        subprocess.Popen(cmd)
+                        # Wait for CDP to become ready
+                        import httpx
+                        for _ in range(10):
+                            await asyncio.sleep(1)
+                            try:
+                                async with httpx.AsyncClient(timeout=2) as _hc:
+                                    r = await _hc.get(f"{cdp_url}/json/version")
+                                    if r.status_code == 200:
+                                        cdp_ready = True
+                                        break
+                            except Exception:
+                                continue
+                    if cdp_ready:
+                        mode = "cdp"
+                        settings.browser_mode = "cdp"
+                        settings.browser_cdp_url = cdp_url
+                        logging.info("browser-use: auto-upgraded to CDP mode on %s", cdp_url)
+                    else:
+                        logging.warning("browser-use: Chrome CDP launch failed, falling back to isolated Chromium")
             if mode == "cdp":
                 profile = BrowserProfile(
                     cdp_url=settings.browser_cdp_url,
@@ -2193,6 +2410,13 @@ class BrowserUseEngine(EngineBase):
                     window_size=vp,
                 )
             self._browser = Browser(browser_profile=profile)
+            # Pre-connect CDP session so initial actions don't race the connection
+            if mode == "cdp":
+                try:
+                    await self._browser.start()
+                    logging.info("browser-use: CDP session pre-connected")
+                except Exception as e:
+                    logging.warning("browser-use: CDP pre-connect failed (%s), will retry on task start", e)
             # Economy mode: use gpt-4o-mini for browser-use (6x cheaper)
             bu_model = settings.default_model
             bu_openai_model = "gpt-4o"
@@ -2723,6 +2947,7 @@ _URL_EXTRACT_PATTERN = re.compile(
 )
 
 _SERVICE_URL_MAP = {
+    "google": "https://www.google.com",
     "gmail": "https://mail.google.com",
     "youtube": "https://www.youtube.com",
     "twitter": "https://twitter.com",
@@ -2738,6 +2963,10 @@ _SERVICE_URL_MAP = {
     "amazon": "https://www.amazon.com",
     "chatgpt": "https://chat.openai.com",
     "claude": "https://claude.ai",
+    "espn": "https://www.espn.com",
+    "cnn": "https://www.cnn.com",
+    "bing": "https://www.bing.com",
+    "duckduckgo": "https://duckduckgo.com",
 }
 
 _SEARCH_PREFIXES = [
@@ -2747,6 +2976,12 @@ _SEARCH_PREFIXES = [
     r"(?i)search bing for\s+(.+)",
     r"(?i)search duckduckgo for\s+(.+)",
     r"(?i)look up\s+(.+)\s+online",
+    r"(?i)go to google and (?:search|find|look)\s+(?:for\s+)?(.+)",
+    r"(?i)go to google\.com and (?:search|find|look)\s+(?:for\s+)?(.+)",
+    r"(?i)open google and (?:search|find|look)\s+(?:for\s+)?(.+)",
+    r"(?i)search for\s+(.+?)(?:\s+on google|\s+online)?$",
+    r"(?i)find\s+(.+?)(?:\s+on google|\s+online)$",
+    r"(?i)google\s+[\"'](.+?)[\"']",
 ]
 
 def _extract_navigation_target(prompt: str) -> str | None:
@@ -2999,6 +3234,7 @@ CORE RULES
 4. If the screenshot looks the same after your action, it FAILED. Try a DIFFERENT approach.
 5. When the task is complete, respond with a text summary (no tool call).
 6. TRUST the SYSTEM INFO and INTERACTIVE ELEMENTS over what you see in screenshots.
+7. REUSE the current browser tab for navigation. Use {mod_key}+L to focus the address bar -- NEVER open new windows or tabs unless explicitly asked.
 """
 
 _PROMPT_SCREENSHOT = """\
@@ -3099,6 +3335,10 @@ class ComputerUseEngine(EngineBase):
         self._last_ui_elements: list[dict] = []  # cached element list for click_element
         self._cancel_requested = False
         self._broadcast_fn = None  # For approval requests in supervised mode
+        # CDP bridge for hybrid DOM+Visual mode (Phase 3)
+        self._cdp_page = None  # Playwright Page object when browser is focused
+        self._cdp_browser = None  # Playwright Browser object for CDP connection
+        self._cdp_connected = False  # Whether CDP is currently connected
         self._current_task_id = ""  # Current task ID for approval context
         self._current_context = ""  # Current context (window title, etc.)
         self._recorder = None  # InputRecorder instance (lazy-loaded)
@@ -3513,6 +3753,105 @@ class ComputerUseEngine(EngineBase):
             lines.append(f"  [{el['id']}] {el['type']}: \"{el['name']}\" at ({el['center_x']},{el['center_y']})")
         return "\n".join(lines)
 
+    # ── CDP Bridge (Phase 3: Hybrid DOM + Visual) ─────────────────────
+
+    _BROWSER_TITLE_PATTERNS = ("chrome", "chromium", "edge", "firefox", "brave", "opera", "vivaldi", "arc")
+
+    def _is_browser_focused(self) -> bool:
+        """Check if a web browser is the currently focused window."""
+        try:
+            title = _plat.get_foreground_window_title().lower()
+            return any(p in title for p in self._BROWSER_TITLE_PATTERNS)
+        except Exception:
+            return False
+
+    async def _cdp_connect(self) -> bool:
+        """Connect to browser via CDP on port 9222. Returns True on success.
+        Lazy connect -- only called when browser is focused and DOM tools are needed."""
+        if self._cdp_connected and self._cdp_page:
+            return True
+        try:
+            from playwright.async_api import async_playwright
+            pw = await async_playwright().start()
+            self._cdp_browser = await pw.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            contexts = self._cdp_browser.contexts
+            if contexts and contexts[0].pages:
+                self._cdp_page = contexts[0].pages[-1]  # last active tab
+            else:
+                pages = await self._cdp_browser.new_page() if not contexts else None
+                if pages:
+                    self._cdp_page = pages
+                else:
+                    self._cdp_page = None
+            self._cdp_connected = self._cdp_page is not None
+            if self._cdp_connected:
+                logging.info("CDP bridge connected to browser on port 9222")
+            return self._cdp_connected
+        except Exception as e:
+            logging.debug("CDP bridge connection failed (expected if browser not in CDP mode): %s", e)
+            self._cdp_connected = False
+            self._cdp_page = None
+            return False
+
+    async def _cdp_disconnect(self) -> None:
+        """Disconnect CDP bridge."""
+        try:
+            if self._cdp_browser:
+                await self._cdp_browser.close()
+        except Exception:
+            pass
+        self._cdp_browser = None
+        self._cdp_page = None
+        self._cdp_connected = False
+
+    async def _cdp_read_page(self) -> str:
+        """Read visible text from current browser page via CDP. Returns text or error string."""
+        if not self._cdp_connected or not self._cdp_page:
+            if not await self._cdp_connect():
+                return "error: CDP not available. Browser may not be in CDP mode (set BROWSER_MODE=cdp). Falling back to screenshot."
+        try:
+            # Refresh page reference - user may have switched tabs
+            contexts = self._cdp_browser.contexts
+            if contexts and contexts[0].pages:
+                self._cdp_page = contexts[0].pages[-1]
+            text = await self._cdp_page.inner_text("body")
+            url = self._cdp_page.url
+            title = await self._cdp_page.title()
+            if text:
+                text = text.strip()[:5000]  # Cap at 5000 chars
+                return f"Page: {title}\nURL: {url}\n\n{text}"
+            return f"Page: {title}\nURL: {url}\n\n(empty page)"
+        except Exception as e:
+            logging.debug("CDP read_page failed: %s", e)
+            return f"error: Could not read page via CDP: {e}. Use screenshot instead."
+
+    async def _cdp_get_url(self) -> str:
+        """Get current browser URL via CDP."""
+        if not self._cdp_connected or not self._cdp_page:
+            if not await self._cdp_connect():
+                return "error: CDP not available"
+        try:
+            contexts = self._cdp_browser.contexts
+            if contexts and contexts[0].pages:
+                self._cdp_page = contexts[0].pages[-1]
+            return self._cdp_page.url
+        except Exception as e:
+            return f"error: {e}"
+
+    async def _cdp_click_element(self, selector: str) -> str:
+        """Click an element by CSS selector via CDP. More reliable than coordinate clicks for web elements."""
+        if not self._cdp_connected or not self._cdp_page:
+            if not await self._cdp_connect():
+                return "error: CDP not available for DOM click. Use coordinate click or click_element instead."
+        try:
+            contexts = self._cdp_browser.contexts
+            if contexts and contexts[0].pages:
+                self._cdp_page = contexts[0].pages[-1]
+            await self._cdp_page.click(selector, timeout=5000)
+            return f"dom_clicked: {selector}"
+        except Exception as e:
+            return f"error: DOM click failed for '{selector}': {e}. Try coordinate click instead."
+
     async def _execute_action(self, tool_input: dict, action_context: str = "") -> str:
         import pyautogui; loop = asyncio.get_event_loop()
         action = tool_input.get("action", "")
@@ -3701,6 +4040,22 @@ class ComputerUseEngine(EngineBase):
             logging.info("click_element [%d] '%s' at raw (%d,%d)", eid, el['name'], rx, ry)
             await loop.run_in_executor(None, lambda: pyautogui.click(rx, ry))
             return f"clicked_element_{eid}_{el['name']}_at_{rx}_{ry}"
+        # ── Phase 3: DOM tools via CDP bridge ────────────────────────
+        elif action == "read_page":
+            result = await self._cdp_read_page()
+            logging.info("read_page: %d chars returned", len(result))
+            return result
+        elif action == "get_url":
+            result = await self._cdp_get_url()
+            logging.info("get_url: %s", result[:200])
+            return result
+        elif action == "dom_click":
+            selector = tool_input.get("selector", "")
+            if not selector:
+                return "error: selector required for dom_click"
+            result = await self._cdp_click_element(selector)
+            logging.info("dom_click '%s': %s", selector[:50], result)
+            return result
         return f"unknown_{action}"
 
     @staticmethod
@@ -3937,12 +4292,12 @@ class ComputerUseEngine(EngineBase):
         try:
             _mod = "command" if sys.platform == "darwin" else "ctrl"
             if focused:
-                # Browser is already open and focused, just use hotkeys
-                logging.info("Pre-navigation: Browser active, using %s+N macro to %s", _mod.title(), url)
-                _pag.hotkey(_mod, "n")
-                await asyncio.sleep(1.0)
+                # Browser is already open and focused — reuse current tab
+                logging.info("Pre-navigation: Browser active, using %s+L to navigate to %s", _mod.title(), url)
                 _pag.hotkey(_mod, "l")
                 await asyncio.sleep(0.3)
+                _pag.hotkey(_mod, "a")  # select all in address bar
+                await asyncio.sleep(0.1)
                 _pag.write(url, interval=0.01)
                 await asyncio.sleep(0.2)
                 _pag.press("enter")
@@ -3968,9 +4323,9 @@ class ComputerUseEngine(EngineBase):
                     _pag.hotkey("alt", "tab")
                     await asyncio.sleep(0.5)
             else:
-                # Default / user_data_dir: let the OS open the default browser
-                logging.info("Pre-navigation: Calling OS webbrowser.open_new(%s)", url)
-                webbrowser.open_new(nav_url)
+                # Default / user_data_dir: open in existing browser window (new tab)
+                logging.info("Pre-navigation: Calling OS webbrowser.open_new_tab(%s)", url)
+                webbrowser.open_new_tab(nav_url)
                 # Wait for browser to open, then force the correct window to foreground
                 await asyncio.sleep(2.0)
                 # Focus by domain name so we get the target window, not the dashboard
@@ -5328,7 +5683,7 @@ class ComputerUseEngine(EngineBase):
                 native_tool_def["enable_zoom"] = True
             native_tool = [native_tool_def]
             # Standard function tool for OpenRouter compatibility (includes custom click_element action)
-            func_tool = [{"name": "computer", "description": f"Control the computer screen ({self._scaled_width}x{self._scaled_height}). Returns a screenshot and a list of interactive UI elements after every action. PREFER click_element over coordinate-based clicks for buttons, fields, and other named UI elements.", "input_schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["screenshot", "mouse_move", "left_click", "right_click", "double_click", "middle_click", "triple_click", "left_click_drag", "left_mouse_down", "left_mouse_up", "type", "key", "hold_key", "cursor_position", "scroll", "wait", "click_element"], "description": "The action to perform. Use 'click_element' with 'element_id' to click a UI element by its ID from the INTERACTIVE ELEMENTS list — this is MORE RELIABLE than coordinate-based clicks."}, "coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] pixel coordinates for mouse actions (not needed for click_element)"}, "start_coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] start coordinates for drag"}, "text": {"type": "string", "description": "Text to type, key combo like 'ctrl+c', or modifier key for click (shift/ctrl/alt)"}, "scroll_direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"}, "scroll_amount": {"type": "integer", "description": "Number of scroll clicks (default 3)"}, "amount": {"type": "integer", "description": "Legacy scroll amount (prefer scroll_direction+scroll_amount)"}, "duration": {"type": "number", "description": "Duration in seconds for hold_key or wait"}, "element_id": {"type": "integer", "description": "ID of the UI element to click (from the INTERACTIVE ELEMENTS list). Use with action='click_element'."}}, "required": ["action"]}}]
+            func_tool = [{"name": "computer", "description": f"Control the computer screen ({self._scaled_width}x{self._scaled_height}). Returns a screenshot and a list of interactive UI elements after every action. PREFER click_element over coordinate-based clicks for buttons, fields, and other named UI elements. When working with web browsers, use read_page to quickly extract page text (much faster than reading from screenshots), get_url to check the current URL, and dom_click to click web elements by CSS selector.", "input_schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["screenshot", "mouse_move", "left_click", "right_click", "double_click", "middle_click", "triple_click", "left_click_drag", "left_mouse_down", "left_mouse_up", "type", "key", "hold_key", "cursor_position", "scroll", "wait", "click_element", "read_page", "get_url", "dom_click"], "description": "The action to perform. Use 'click_element' with 'element_id' to click a UI element by its ID. When a web browser is focused, use 'read_page' to extract all visible text from the page (instant, no screenshot needed), 'get_url' to check current URL, and 'dom_click' with 'selector' to click web elements by CSS selector."}, "coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] pixel coordinates for mouse actions (not needed for click_element)"}, "start_coordinate": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] start coordinates for drag"}, "text": {"type": "string", "description": "Text to type, key combo like 'ctrl+c', or modifier key for click (shift/ctrl/alt)"}, "scroll_direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"}, "scroll_amount": {"type": "integer", "description": "Number of scroll clicks (default 3)"}, "amount": {"type": "integer", "description": "Legacy scroll amount (prefer scroll_direction+scroll_amount)"}, "duration": {"type": "number", "description": "Duration in seconds for hold_key or wait"}, "element_id": {"type": "integer", "description": "ID of the UI element to click (from the INTERACTIVE ELEMENTS list). Use with action='click_element'."}, "selector": {"type": "string", "description": "CSS selector for dom_click action. Example: 'button.submit', '#search-input', 'a[href*=robots]'. Only works when a web browser is focused and CDP is available."}}, "required": ["action"]}}]
             tools = native_tool if not self._is_openrouter else func_tool
             _pname = "Windows PC" if sys.platform == "win32" else "macOS computer" if sys.platform == "darwin" else "Linux computer"
             _mod_key = "Cmd" if sys.platform == "darwin" else "Ctrl"
@@ -5367,6 +5722,16 @@ class ComputerUseEngine(EngineBase):
                 ctx += f"\n\n{ui_text}"
                 logging.info("UI elements found: %d", len(self._last_ui_elements))
             ctx += "\n\nComplete the task. PREFER click_element over coordinate-based clicks."
+            # ── CDP bridge hint for hybrid DOM+Visual mode ────────────
+            # If browser is focused, try connecting CDP and tell the LLM about DOM tools
+            if self._is_browser_focused():
+                _cdp_ok = await self._cdp_connect()
+                if _cdp_ok:
+                    ctx += "\n\nDOM TOOLS AVAILABLE: A web browser is focused and CDP is connected. You have fast DOM access tools:\n"
+                    ctx += "- read_page: Instantly read all visible text from the page (much faster than screenshot). Use this FIRST for content extraction.\n"
+                    ctx += "- get_url: Check the current page URL without a screenshot.\n"
+                    ctx += "- dom_click(selector): Click a web element by CSS selector (e.g. 'a.result-link', '#submit'). More reliable than coordinate clicks for web elements.\n"
+                    ctx += "Use these DOM tools for reading content and simple clicks. Use screenshots + coordinate clicks for visual layout tasks.\n"
             # Extraction-aware prompting: detect summarize/extract tasks and nudge the LLM
             _extraction_keywords = ("tell me", "what is", "what are", "get me", "show me",
                                     "summarize", "extract", "look up", "read",
@@ -5383,7 +5748,7 @@ class ComputerUseEngine(EngineBase):
                 {"type": "text", "text": ctx},
             ]
             messages = [{"role": "user", "content": content_blocks}]
-            step_count = 0; total_in = 0; total_out = 0; final_text = ""; prev_ss = init_ss; _consecutive_stale = 0
+            step_count = 0; total_in = 0; total_out = 0; final_text = ""; prev_ss = init_ss; _consecutive_stale = 0; _recent_actions = []
             while step_count < max_steps:
                 if self._cancel_requested:
                     logging.info("Task cancelled by user at step %d", step_count)
@@ -5417,7 +5782,7 @@ class ComputerUseEngine(EngineBase):
                 tool_results = []
                 for tb in tu_blocks:
                     action_name = tb.input.get("action", "")
-                    is_ss_only = action_name in ("screenshot", "zoom")
+                    is_ss_only = action_name in ("screenshot", "zoom", "read_page", "get_url")
                     if not is_ss_only:
                         step_count += 1
                     logging.info("computer-use step %d/%d: %s%s", step_count, max_steps, action_name or "?", " (free)" if is_ss_only else "")
@@ -5440,6 +5805,10 @@ class ComputerUseEngine(EngineBase):
                         # raw: no focus management
                         await self._execute_action(tb.input)
                         await asyncio.sleep(delay)
+                        # Track recent actions for repetition detection
+                        _recent_actions.append({"action": action_name, "coord": tb.input.get("coordinate", [0, 0])})
+                        if len(_recent_actions) > 3:
+                            _recent_actions.pop(0)
                         # Redirect detection for click actions on web tasks (full/standard only)
                         if _profile in ("full", "standard") and _nav_domain and action_name in ("left_click", "double_click", "click_element"):
                             _redirect_warning = await self._detect_redirect(_nav_domain)
@@ -5505,7 +5874,7 @@ class ComputerUseEngine(EngineBase):
                                 rc.append({"type": "text", "text": "CRITICAL: Two consecutive actions had no visible effect. Your current approach is NOT working. You MUST try a fundamentally different strategy -- different element, different method, or different path to the goal."})
                             else:
                                 stuck_msg = "STUCK: %d consecutive actions with no effect. Troubleshooting checklist:\n- Is the target element actually interactable? Try a different element.\n- Is a dialog or overlay blocking? Look for popups, tooltips, or modal windows.\n- Is the app in the expected state? Maybe a previous step failed silently.\n- Try keyboard shortcuts instead of clicking.\n- Try clicking a DIFFERENT area of the same element (edges vs center)." % _consecutive_stale
-                                if _consecutive_stale == 3 and get_settings().computer_use_self_verify:
+                                if _consecutive_stale == 2 and get_settings().computer_use_self_verify:
                                     diag = await self._verify_stale_action(ss, self._format_ui_elements(self._last_ui_elements), messages)
                                     if diag:
                                         stuck_msg += "\n\nAI DIAGNOSTIC: " + diag
@@ -5513,7 +5882,13 @@ class ComputerUseEngine(EngineBase):
                                 rc.append({"type": "text", "text": stuck_msg})
                         elif _profile == "standard":
                             if _consecutive_stale >= 2:
-                                rc.append({"type": "text", "text": "WARNING: %d consecutive actions had no visible effect. Try a different approach." % _consecutive_stale})
+                                _std_msg = "WARNING: %d consecutive actions had no visible effect. Try a different approach." % _consecutive_stale
+                                if _consecutive_stale == 2 and get_settings().computer_use_self_verify:
+                                    diag = await self._verify_stale_action(ss, self._format_ui_elements(self._last_ui_elements), messages)
+                                    if diag:
+                                        _std_msg += "\n\nAI DIAGNOSTIC: " + diag
+                                        logging.info("Self-verify diagnostic: %s", diag[:200])
+                                rc.append({"type": "text", "text": _std_msg})
                         # minimal/raw: no stale warnings — model handles it on its own
                         # Hard-stop always applies regardless of profile (safety)
                         _max_stale = get_settings().max_consecutive_stale
@@ -5526,6 +5901,16 @@ class ComputerUseEngine(EngineBase):
                     else:
                         if not is_ss_only:
                             _consecutive_stale = 0
+                    # Action repetition detection: 3 identical actions at similar coordinates
+                    if len(_recent_actions) >= 3 and not is_ss_only:
+                        _ra = _recent_actions[-3:]
+                        if all(a["action"] == _ra[0]["action"] for a in _ra):
+                            _ra_coords = [a["coord"] for a in _ra if isinstance(a["coord"], list) and len(a["coord"]) == 2]
+                            if len(_ra_coords) == 3:
+                                _ra_dist = max(abs(_ra_coords[i][0]-_ra_coords[j][0]) + abs(_ra_coords[i][1]-_ra_coords[j][1]) for i in range(3) for j in range(i+1, 3))
+                                if _ra_dist < 40:
+                                    _consecutive_stale = max(_consecutive_stale, 2)
+                                    rc.append({"type": "text", "text": "WARNING: You have performed the same action (%s) at nearly the same location 3 times. This approach is not working. Try a fundamentally different strategy." % _ra[0]["action"]})
                     rc.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ss}})
                     tool_results.append({"type": "tool_result", "tool_use_id": tb.id, "content": rc})
                     prev_ss = ss
@@ -5561,6 +5946,12 @@ class ComputerUseEngine(EngineBase):
             task.status = TaskStatus.ERROR; task.error = str(e)
         finally:
             self._status = EngineStatus.AVAILABLE
+            # Clean up CDP bridge connection
+            if self._cdp_connected:
+                try:
+                    await self._cdp_disconnect()
+                except Exception:
+                    pass
         task.updated_at = datetime.now(timezone.utc)
         return task
 
@@ -5666,14 +6057,19 @@ class TaskManager:
                 await e.initialize()
                 self._engines[EngineName.COMPUTER_USE] = e
 
-    # ── LLM-based auto-routing ──────────────────────────────────────
-    _routing_cache: dict[str, tuple[str, float]] = {}  # hash -> (engine, timestamp)
+    # ── LLM-based task planning ──────────────────────────────────────
+    _routing_cache: dict[str, tuple] = {}  # hash -> (plan, timestamp)
     _ROUTING_CACHE_TTL = 300  # 5 minutes
     _ROUTING_CACHE_MAX = 100
 
-    async def _classify_prompt_with_llm(self, prompt: str) -> str | None:
-        """Classify prompt as BROWSER, DESKTOP, or CHAT using cheapest available LLM.
-        Returns engine name string or None on failure/timeout."""
+    async def _plan_task(self, prompt: str) -> list[dict] | None:
+        """Decompose a user prompt into 1-3 execution steps with engine assignments.
+
+        Returns list of dicts: [{"instruction": "...", "engine": "browser_use|computer_use|openclaw"}]
+        or None on failure (caller falls back to keyword heuristics).
+
+        Uses cheapest available LLM (~$0.001). 3s timeout. Results cached 5min.
+        """
         import hashlib
         cache_key = hashlib.md5(prompt[:200].lower().encode()).hexdigest()
         now = time.monotonic()
@@ -5684,53 +6080,102 @@ class TaskManager:
                 return cached_val
         settings = get_settings()
         sys_prompt = (
-            "You are a task router. Classify the user's task into exactly one category.\n"
-            "Reply with ONLY one word: BROWSER, DESKTOP, or CHAT.\n\n"
-            "BROWSER = tasks involving websites, URLs, web searches, web scraping, online services\n"
-            "DESKTOP = tasks involving desktop apps, files, system settings, mouse/keyboard control\n"
-            "CHAT = questions, conversations, analysis, coding help, math, anything that doesn't need a browser or desktop"
+            "You are a task planner for a desktop/browser automation system.\n"
+            "Given a user task, decompose it into 1-3 sequential steps.\n"
+            "For each step, assign the best engine.\n\n"
+            "Engines:\n"
+            "- BROWSER: Fast web navigation, search, content extraction via DOM access. "
+            "Use for web research, reading pages, scraping, searching. 5-10x faster than COMPUTER for web tasks.\n"
+            "- COMPUTER: Desktop app control, complex web interactions needing logged-in sessions, "
+            "visual reasoning, mouse/keyboard automation. Use for desktop apps, filling forms with saved logins, "
+            "clicking through complex UIs.\n"
+            "- CHAT: Questions, summarization, analysis, reasoning. No automation needed. Fastest, cheapest.\n\n"
+            "Rules:\n"
+            "- MOST tasks are 1 step. Only split when genuinely needed (e.g. web research + summarization).\n"
+            "- If the prompt contains a URL or domain name (e.g. wikipedia.org, google.com), it is ALWAYS a web task. Use BROWSER, never CHAT.\n"
+            "- 'Go to X' or 'tell me about X from Y.com' = BROWSER, not CHAT.\n"
+            "- Use BROWSER for web research/reading (NOT COMPUTER) unless login/extensions are needed.\n"
+            "- Use CHAT ONLY for pure reasoning/summarization that doesn't need a browser or any website.\n"
+            "- Never exceed 3 steps.\n"
+            "- Each step instruction should be self-contained and actionable.\n"
+            "- If a later step needs results from an earlier step, say 'Using the results from the previous step'.\n\n"
+            'Reply with ONLY a JSON array. Example:\n'
+            '[{"instruction": "Search Google for ...", "engine": "BROWSER"}]\n\n'
+            'Multi-step example:\n'
+            '[{"instruction": "Go to google.com and search for ... Extract all results from the page.", "engine": "BROWSER"}, '
+            '{"instruction": "Using the results from the previous step, summarize ...", "engine": "CHAT"}]'
         )
         try:
             import httpx
             if settings.has_openai_key():
                 url = "https://api.openai.com/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"}
-                body = {"model": "gpt-4o-mini", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt[:500]}], "max_tokens": 5, "temperature": 0}
+                body = {"model": "gpt-4o-mini", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt[:500]}], "max_tokens": 300, "temperature": 0}
             elif settings.has_anthropic_key():
                 url = "https://api.anthropic.com/v1/messages"
                 headers = {"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
-                body = {"model": "claude-haiku-4-5-20251001", "max_tokens": 5, "system": sys_prompt, "messages": [{"role": "user", "content": prompt[:500]}]}
+                body = {"model": "claude-haiku-4-5-20251001", "max_tokens": 300, "system": sys_prompt, "messages": [{"role": "user", "content": prompt[:500]}]}
             elif settings.has_openrouter_key():
                 url = "https://openrouter.ai/api/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {settings.openrouter_api_key}", "Content-Type": "application/json"}
-                body = {"model": "anthropic/claude-haiku-4-5", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt[:500]}], "max_tokens": 5, "temperature": 0}
+                body = {"model": "anthropic/claude-haiku-4-5", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt[:500]}], "max_tokens": 300, "temperature": 0}
             else:
                 return None
             async with httpx.AsyncClient(timeout=3.0) as client:
                 resp = await client.post(url, json=body, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
-            # Extract classification text
+            # Extract text
             text = ""
             if "choices" in data:
-                text = data["choices"][0]["message"]["content"].strip().upper()
+                text = data["choices"][0]["message"]["content"].strip()
             elif "content" in data and data["content"]:
-                text = data["content"][0]["text"].strip().upper()
-            # Auto mode: web tasks go to computer_use (real browser with logins/extensions)
-            # browser_use is only used when explicitly selected via dropdown or /browser
-            mapping = {"BROWSER": "computer_use", "DESKTOP": "computer_use", "CHAT": "openclaw"}
-            result = mapping.get(text)
-            if result:
-                # Cache result
-                if len(self._routing_cache) >= self._ROUTING_CACHE_MAX:
-                    oldest_key = min(self._routing_cache, key=lambda k: self._routing_cache[k][1])
-                    del self._routing_cache[oldest_key]
-                self._routing_cache[cache_key] = (result, now)
-                logging.info("LLM routing classified prompt as %s (%s)", text, result)
-            return result
+                text = data["content"][0]["text"].strip()
+            # Parse JSON — handle markdown code fences
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                text = text.rsplit("```", 1)[0]
+            steps_raw = json.loads(text)
+            if not isinstance(steps_raw, list) or not steps_raw:
+                return None
+            # Validate and normalize
+            engine_map = {"BROWSER": "browser_use", "COMPUTER": "computer_use", "CHAT": "openclaw",
+                          "browser_use": "browser_use", "computer_use": "computer_use", "openclaw": "openclaw"}
+            steps = []
+            for s in steps_raw[:3]:  # cap at 3
+                if not isinstance(s, dict) or "instruction" not in s or "engine" not in s:
+                    continue
+                eng = engine_map.get(s["engine"].upper().strip(), engine_map.get(s["engine"].strip()))
+                if not eng:
+                    continue
+                # Sanity: if engine is CHAT but instruction mentions a URL, fix to browser_use
+                if eng == "openclaw" and _URL_PATTERN.search(s["instruction"].lower()):
+                    eng = "browser_use"
+                steps.append({"instruction": s["instruction"], "engine": eng})
+            if not steps:
+                return None
+            # Cache result
+            if len(self._routing_cache) >= self._ROUTING_CACHE_MAX:
+                oldest_key = min(self._routing_cache, key=lambda k: self._routing_cache[k][1])
+                del self._routing_cache[oldest_key]
+            self._routing_cache[cache_key] = (steps, now)
+            engines_str = " -> ".join(s["engine"] for s in steps)
+            logging.info("Task planner: %d steps (%s) for: %s", len(steps), engines_str, prompt[:80])
+            return steps
         except Exception as e:
-            logging.debug("LLM routing classification failed: %s", e)
+            logging.debug("Task planner failed: %s", e)
             return None
+
+    async def _classify_prompt_with_llm(self, prompt: str) -> str | None:
+        """Legacy single-engine classifier. Used as fallback when _plan_task fails.
+        Returns engine name string or None."""
+        plan = await self._plan_task(prompt)
+        if plan and len(plan) == 1:
+            return plan[0]["engine"]
+        elif plan and len(plan) > 1:
+            # Multi-step plan: return first step's engine (caller will handle full plan in _run)
+            return plan[0]["engine"]
+        return None
 
     async def _modify_workflow_actions(self, actions: list[dict], modifications: str) -> list[dict] | None:
         """Use LLM to modify a workflow's action list based on natural-language instructions.
@@ -5914,12 +6359,10 @@ class TaskManager:
         """Select the best available engine for a task.
 
         Smart default priority:
-        - Web tasks (URLs, keywords): computer-use -> openclaw -> browser-use
+        - Web research (URLs + reading): browser-use (DOM access, fast) -> computer-use -> openclaw
+        - Interactive web (login, forms): computer-use (real browser) -> browser-use -> openclaw
         - Desktop tasks: computer-use -> browser-use -> openclaw
-        - Non-desktop tasks: openclaw (when available) -> browser-use -> computer-use
-
-        Computer-use is preferred for web tasks because it controls the real browser
-        with extensions, logins, and cookies. browser-use is available as explicit choice.
+        - Non-desktop tasks: openclaw (memory/skills) -> browser-use -> computer-use
         """
         exclude = exclude or []
 
@@ -5937,20 +6380,21 @@ class TaskManager:
         if not is_web_search and prompt_lower and _URL_PATTERN.search(prompt_lower):
             is_web_search = True
 
-        # Detect extraction intent (reading/scraping content from a page)
-        _extraction_kws = ("tell me", "what is", "what are", "get me", "show me",
-                           "find me", "list", "extract", "scrape", "read", "headline",
-                           "first", "latest", "price", "summary", "title")
-        is_extraction = prompt_lower and any(kw in prompt_lower for kw in _extraction_kws)
+        # Detect interactive intent (needs real browser with logins/extensions)
+        _interactive_kws = ("log in", "login", "sign in", "signin", "sign up",
+                            "register", "fill", "submit", "click", "type in",
+                            "enter my", "my account", "my profile", "authenticate",
+                            "password", "checkout", "purchase", "buy", "add to cart")
+        is_interactive = prompt_lower and any(kw in prompt_lower for kw in _interactive_kws)
 
-        if is_web_search and is_extraction and not is_desktop:
-            # Web extraction: prefer browser-use (has DOM access for reading content)
-            priority = [EngineName.BROWSER_USE, EngineName.COMPUTER_USE, EngineName.OPENCLAW]
-            reason = "web extraction -> browser-use (DOM access)"
+        if is_web_search and is_interactive and not is_desktop:
+            # Interactive web: prefer computer-use (real browser with logins/extensions)
+            priority = [EngineName.COMPUTER_USE, EngineName.BROWSER_USE, EngineName.OPENCLAW]
+            reason = "interactive web task -> real browser (computer-use)"
         elif is_web_search and not is_desktop:
-            # Web interaction: prefer computer-use (controls real browser with logins/extensions)
-            priority = [EngineName.COMPUTER_USE, EngineName.OPENCLAW, EngineName.BROWSER_USE]
-            reason = "web task -> real browser (computer-use)"
+            # Web research/reading: prefer browser-use (DOM access, 5-10x faster)
+            priority = [EngineName.BROWSER_USE, EngineName.COMPUTER_USE, EngineName.OPENCLAW]
+            reason = "web research -> browser-use (DOM access, fast)"
         elif is_desktop:
             # Desktop tasks: prefer computer-use for native app control
             priority = [EngineName.COMPUTER_USE, EngineName.BROWSER_USE, EngineName.OPENCLAW]
@@ -6057,145 +6501,300 @@ class TaskManager:
             logging.debug("Skipped personality context for task %s (simple chat)", task.id[:8])
 
         routing_reason = "keyword match"
-        # LLM-based auto-routing: try LLM classification first, fall back to keyword heuristics
-        if task.engine == EngineName.AUTO:
+        _is_replay = task.prompt.strip().lower().startswith("replay:")
+
+        # ── Multi-step task planning ──────────────────────────────────
+        # For AUTO-routed tasks (not replay, not explicit engine), try LLM planner
+        task_plan = None  # list of {"instruction": ..., "engine": ...}
+        if task.engine == EngineName.AUTO and not _is_replay:
             try:
-                llm_engine = await self._classify_prompt_with_llm(task.prompt)
-                if llm_engine:
-                    try:
-                        task.engine = EngineName(llm_engine)
-                        routing_reason = "LLM routing"
-                    except ValueError:
-                        pass
+                task_plan = await self._plan_task(task.prompt)
             except Exception as e:
-                logging.debug("LLM routing attempt failed: %s", e)
+                logging.debug("Task planner failed: %s", e)
 
-            # Override LLM routing for web extraction tasks -> prefer browser-use
-            if task.engine == EngineName.COMPUTER_USE:
-                _prompt_lower = task.prompt.lower()
-                _extraction_kws = ("tell me", "what is", "what are", "get me", "show me",
-                                   "find me", "list", "extract", "scrape", "read", "headline",
-                                   "first", "latest", "price", "summary", "title")
-                _has_url = _URL_PATTERN.search(_prompt_lower)
-                _is_extraction = any(kw in _prompt_lower for kw in _extraction_kws)
-                _interactive_kws = ("log in", "login", "sign in", "signin", "sign up",
-                                    "register", "fill", "submit", "click", "type in",
-                                    "enter my", "my account", "my profile", "authenticate")
-                _is_interactive = any(kw in _prompt_lower for kw in _interactive_kws)
-                if _has_url and _is_extraction and not _is_interactive and EngineName.BROWSER_USE in self._engines:
-                    task.engine = EngineName.BROWSER_USE
-                    routing_reason = "LLM routing + extraction override -> browser-use"
-                    logging.info("Extraction override: computer_use -> browser_use for web content task")
+        # Single-step plan or planner failure: fall back to legacy routing
+        if task_plan and len(task_plan) == 1:
+            try:
+                planned_engine = task_plan[0]["engine"]
+                # Sanity check: if planner said CHAT but prompt contains URL/web patterns,
+                # override to browser_use (planner sometimes misclassifies "go to X.org" as chat)
+                if planned_engine == "openclaw":
+                    _prompt_lower = task.prompt.lower()
+                    _has_url = _URL_PATTERN.search(_prompt_lower)
+                    _has_web_kw = any(kw in _prompt_lower for kw in WEB_SEARCH_KEYWORDS)
+                    if _has_url or _has_web_kw:
+                        planned_engine = "browser_use"
+                        logging.info("Planner override: CHAT -> BROWSER (URL/web keywords detected in prompt)")
+                task.engine = EngineName(planned_engine)
+                routing_reason = "task planner (single-step)"
+            except ValueError:
+                task_plan = None
+        elif not task_plan and task.engine == EngineName.AUTO:
+            # Planner failed, use keyword heuristics (existing _engine_for logic)
+            routing_reason = "keyword match (planner fallback)"
 
-        engine = self._engine_for(task.engine, prompt=task.prompt)
-        if not engine:
-            task.status = TaskStatus.ERROR
-            task.error = "No engine available"
-        else:
-            task.engine = engine.name
-            # Broadcast routing info to dashboard
+        # ── Multi-step execution path ─────────────────────────────────
+        _multi_step_t0 = time.monotonic()
+        if task_plan and len(task_plan) > 1:
+            routing_reason = "task planner (multi-step)"
             _engine_display = {"browser_use": "Web Browser (Isolated)", "computer_use": "Computer Control", "openclaw": "AI Chat"}
-            _is_replay = task.prompt.strip().lower().startswith("replay:")
+            # Broadcast the plan to dashboard
+            plan_payload = []
+            for i, step in enumerate(task_plan):
+                plan_payload.append({
+                    "step": i + 1,
+                    "total": len(task_plan),
+                    "instruction": step["instruction"][:200],
+                    "engine": step["engine"],
+                    "engine_display": _engine_display.get(step["engine"], step["engine"]),
+                })
             if self._broadcast:
-                await self._broadcast({"type": "routing_info", "payload": {
+                await self._broadcast({"type": "task_plan", "payload": {
                     "task_id": task.id,
-                    "engine_display": "Replaying Workflow (Computer Control)" if _is_replay else _engine_display.get(engine.name.value, engine.display_name),
-                    "reason": "workflow replay" if _is_replay else routing_reason,
+                    "steps": plan_payload,
+                    "reason": routing_reason,
                 }})
-            get_audit().log(AuditEvent(task_id=task.id, event_type="task_started", detail=engine.display_name))
-            # ── Reset live view for visual engines ────────────────────
-            if self._broadcast and engine.name in (EngineName.BROWSER_USE, EngineName.COMPUTER_USE):
-                await self._broadcast({"type": "live_view_clear", "payload": {"task_id": task.id, "engine": engine.display_name}})
-            # ── Execute with retry + engine fallback logic ────────────
-            max_retries = get_settings().max_task_retries
-            base_delay = get_settings().retry_base_delay
-            attempt = 0
-            tried_engines: list[EngineName] = []  # track engines we've already tried
-            original_engine = engine  # Track original for retry-after-fallback
-            while True:
+            get_audit().log(AuditEvent(task_id=task.id, event_type="task_planned",
+                                       detail=f"{len(task_plan)} steps: {' -> '.join(s['engine'] for s in task_plan)}"))
+
+            # Execute each step, chaining results
+            previous_result = ""
+            total_tokens_in = 0
+            total_tokens_out = 0
+            total_cost = 0.0
+            total_steps_count = 0
+            all_step_summaries = []
+
+            for step_idx, step_def in enumerate(task_plan):
+                if task.status == TaskStatus.CANCELLED:
+                    break
+                step_num = step_idx + 1
+                try:
+                    step_engine_name = EngineName(step_def["engine"])
+                except ValueError:
+                    step_engine_name = EngineName.AUTO
+
+                step_engine = self._engine_for(step_engine_name, prompt=step_def["instruction"])
+                if not step_engine:
+                    task.status = TaskStatus.ERROR
+                    task.error = f"No engine available for step {step_num} ({step_def['engine']})"
+                    break
+
+                # Broadcast step progress
+                if self._broadcast:
+                    await self._broadcast({"type": "step_plan_progress", "payload": {
+                        "task_id": task.id,
+                        "step": step_num,
+                        "total": len(task_plan),
+                        "instruction": step_def["instruction"][:200],
+                        "engine": step_engine.name.value,
+                        "engine_display": _engine_display.get(step_engine.name.value, step_engine.display_name),
+                        "status": "running",
+                    }})
+                    if step_engine.name in (EngineName.BROWSER_USE, EngineName.COMPUTER_USE):
+                        await self._broadcast({"type": "live_view_clear", "payload": {"task_id": task.id, "engine": step_engine.display_name}})
+
+                # Build step prompt — chain previous results
+                step_prompt = step_def["instruction"]
+                if previous_result:
+                    step_prompt = f"[PREVIOUS STEP RESULTS]\n{previous_result[:3000]}\n[END PREVIOUS RESULTS]\n\n{step_prompt}"
+
+                # Create a sub-task for this step
+                step_task = Task(
+                    id=task.id,  # same task ID for step tracking
+                    prompt=step_prompt,
+                    engine=step_engine.name,
+                    status=TaskStatus.RUNNING,
+                )
+                step_task._personality_context = task._personality_context if step_idx == 0 else ""
+
+                logging.info("Task %s step %d/%d: %s via %s",
+                             task.id[:8], step_num, len(task_plan),
+                             step_def["instruction"][:60], step_engine.display_name)
+
+                # Execute step with timeout
                 try:
                     _timeout = get_settings().task_timeout
                     if _timeout > 0:
-                        task = await asyncio.wait_for(engine.run_task(task), timeout=_timeout)
+                        step_task = await asyncio.wait_for(step_engine.run_task(step_task), timeout=_timeout)
                     else:
-                        task = await engine.run_task(task)
+                        step_task = await step_engine.run_task(step_task)
                 except asyncio.TimeoutError:
-                    task.status = TaskStatus.ERROR
-                    task.error = f"Task timed out after {_timeout}s"
-                    logging.error("Task %s timed out after %ds on %s", task.id[:8], _timeout, engine.display_name)
+                    step_task.status = TaskStatus.ERROR
+                    step_task.error = f"Step {step_num} timed out after {_timeout}s"
                 except asyncio.CancelledError:
                     task.status = TaskStatus.CANCELLED
-                    task.error = None
-                    logging.info("Task %s cancelled", task.id)
                     break
-                except Exception as run_err:
-                    task.status = TaskStatus.ERROR
-                    task.error = safety_redact(str(run_err))[:500]
-                    logging.error("Task %s engine error: %s", task.id[:8], run_err)
+                except Exception as step_err:
+                    step_task.status = TaskStatus.ERROR
+                    step_task.error = safety_redact(str(step_err))[:500]
 
-                # ── Detect web-search soft failures ───────────────────
-                # OpenClaw may return 200 OK with "I need a Brave Search API key" in the content.
-                # Detect this and treat as a failure eligible for engine fallback.
-                web_search_soft_fail = False
-                if task.status == TaskStatus.COMPLETE and task.result and task.result.summary:
-                    summary_lower = task.result.summary.lower()
-                    if any(pat in summary_lower for pat in WEB_SEARCH_FAILURE_PATTERNS):
-                        web_search_soft_fail = True
-                        logging.info("Task %s: web search soft failure detected in result from %s",
-                                     task.id[:8], engine.display_name)
+                # Check step result
+                if step_task.status == TaskStatus.ERROR:
+                    # Step failed — try engine fallback for this step
+                    fallback = self._engine_for(EngineName.AUTO, prompt=step_def["instruction"],
+                                                exclude=[step_engine.name])
+                    if fallback:
+                        logging.info("Task %s step %d: fallback %s -> %s",
+                                     task.id[:8], step_num, step_engine.display_name, fallback.display_name)
+                        step_task.status = TaskStatus.RUNNING
+                        step_task.error = None
+                        step_task.result = None
+                        try:
+                            if _timeout > 0:
+                                step_task = await asyncio.wait_for(fallback.run_task(step_task), timeout=_timeout)
+                            else:
+                                step_task = await fallback.run_task(step_task)
+                        except Exception:
+                            pass
+                    if step_task.status == TaskStatus.ERROR:
+                        task.status = TaskStatus.ERROR
+                        task.error = f"Step {step_num} failed: {step_task.error}"
+                        break
 
-                # ── Engine fallback: try a different engine ───────────
-                # Never fallback replay tasks — they only work on computer_use
-                _is_replay_task = task.prompt.strip().lower().startswith("replay:")
-                if not _is_replay_task and (web_search_soft_fail or task.status == TaskStatus.ERROR):
-                    tried_engines.append(engine.name)
-                    fallback_engine = self._engine_for(task.engine, prompt=task.prompt, exclude=tried_engines)
-                    if fallback_engine and fallback_engine.name not in tried_engines:
-                        old_name = engine.display_name
-                        engine = fallback_engine
-                        task.engine = engine.name
+                # Extract result for chaining
+                step_summary = ""
+                if step_task.result and step_task.result.summary:
+                    step_summary = step_task.result.summary
+                    total_tokens_in += step_task.result.tokens_in
+                    total_tokens_out += step_task.result.tokens_out
+                    total_cost += step_task.result.estimated_cost_usd
+                    total_steps_count += step_task.result.total_steps
+                previous_result = step_summary
+                all_step_summaries.append(f"[Step {step_num} via {step_engine.display_name}]\n{step_summary}")
+
+                # Broadcast step completion
+                if self._broadcast:
+                    await self._broadcast({"type": "step_plan_progress", "payload": {
+                        "task_id": task.id,
+                        "step": step_num,
+                        "total": len(task_plan),
+                        "engine_display": _engine_display.get(step_engine.name.value, step_engine.display_name),
+                        "status": "complete",
+                    }})
+
+            # Build final result from all steps
+            if task.status != TaskStatus.ERROR and task.status != TaskStatus.CANCELLED:
+                task.status = TaskStatus.COMPLETE
+                # Final result = last step's result (most useful to user)
+                final_summary = previous_result if previous_result else "\n\n".join(all_step_summaries)
+                task.result = TaskResult(
+                    summary=final_summary,
+                    total_steps=total_steps_count,
+                    total_duration_ms=int((time.monotonic() - _multi_step_t0) * 1000),
+                    engine_used="multi-engine",
+                    tokens_in=total_tokens_in,
+                    tokens_out=total_tokens_out,
+                    estimated_cost_usd=total_cost,
+                )
+                task.engine = EngineName(task_plan[-1]["engine"])  # set to last engine used
+
+        # ── Single-step execution path (original logic) ───────────────
+        else:
+            engine = self._engine_for(task.engine, prompt=task.prompt)
+            if not engine:
+                task.status = TaskStatus.ERROR
+                task.error = "No engine available"
+            else:
+                task.engine = engine.name
+                # Broadcast routing info to dashboard
+                _engine_display = {"browser_use": "Web Browser (Isolated)", "computer_use": "Computer Control", "openclaw": "AI Chat"}
+                if self._broadcast:
+                    await self._broadcast({"type": "routing_info", "payload": {
+                        "task_id": task.id,
+                        "engine_display": "Replaying Workflow (Computer Control)" if _is_replay else _engine_display.get(engine.name.value, engine.display_name),
+                        "reason": "workflow replay" if _is_replay else routing_reason,
+                    }})
+                get_audit().log(AuditEvent(task_id=task.id, event_type="task_started", detail=engine.display_name))
+                # ── Reset live view for visual engines ────────────────────
+                if self._broadcast and engine.name in (EngineName.BROWSER_USE, EngineName.COMPUTER_USE):
+                    await self._broadcast({"type": "live_view_clear", "payload": {"task_id": task.id, "engine": engine.display_name}})
+                # ── Execute with retry + engine fallback logic ────────────
+                max_retries = get_settings().max_task_retries
+                base_delay = get_settings().retry_base_delay
+                attempt = 0
+                tried_engines: list[EngineName] = []  # track engines we've already tried
+                original_engine = engine  # Track original for retry-after-fallback
+                while True:
+                    try:
+                        _timeout = get_settings().task_timeout
+                        if _timeout > 0:
+                            task = await asyncio.wait_for(engine.run_task(task), timeout=_timeout)
+                        else:
+                            task = await engine.run_task(task)
+                    except asyncio.TimeoutError:
+                        task.status = TaskStatus.ERROR
+                        task.error = f"Task timed out after {_timeout}s"
+                        logging.error("Task %s timed out after %ds on %s", task.id[:8], _timeout, engine.display_name)
+                    except asyncio.CancelledError:
+                        task.status = TaskStatus.CANCELLED
+                        task.error = None
+                        logging.info("Task %s cancelled", task.id)
+                        break
+                    except Exception as run_err:
+                        task.status = TaskStatus.ERROR
+                        task.error = safety_redact(str(run_err))[:500]
+                        logging.error("Task %s engine error: %s", task.id[:8], run_err)
+
+                    # ── Detect web-search soft failures ───────────────────
+                    web_search_soft_fail = False
+                    if task.status == TaskStatus.COMPLETE and task.result and task.result.summary:
+                        summary_lower = task.result.summary.lower()
+                        if any(pat in summary_lower for pat in WEB_SEARCH_FAILURE_PATTERNS):
+                            web_search_soft_fail = True
+                            logging.info("Task %s: web search soft failure detected in result from %s",
+                                         task.id[:8], engine.display_name)
+
+                    # ── Engine fallback: try a different engine ───────────
+                    _is_replay_task = task.prompt.strip().lower().startswith("replay:")
+                    if not _is_replay_task and (web_search_soft_fail or task.status == TaskStatus.ERROR):
+                        tried_engines.append(engine.name)
+                        fallback_engine = self._engine_for(task.engine, prompt=task.prompt, exclude=tried_engines)
+                        if fallback_engine and fallback_engine.name not in tried_engines:
+                            old_name = engine.display_name
+                            engine = fallback_engine
+                            task.engine = engine.name
+                            task.status = TaskStatus.RUNNING
+                            task.error = None
+                            task.result = None
+                            logging.info("Task %s: engine fallback %s -> %s", task.id[:8], old_name, engine.display_name)
+                            get_audit().log(AuditEvent(task_id=task.id, event_type="engine_fallback",
+                                                       detail=f"{old_name} -> {engine.display_name}"))
+                            if self._broadcast:
+                                await self._broadcast({"type": "engine_fallback", "payload": {
+                                    "task_id": task.id, "from": old_name, "to": engine.display_name,
+                                }})
+                                if engine.name in (EngineName.BROWSER_USE, EngineName.COMPUTER_USE):
+                                    await self._broadcast({"type": "live_view_clear", "payload": {"task_id": task.id, "engine": engine.display_name}})
+                                await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
+                            continue
+
+                    # ── Standard retry (original engine) ─────────────────
+                    if task.status == TaskStatus.ERROR and attempt < max_retries:
+                        attempt += 1
+                        if engine.name != original_engine.name:
+                            logging.info("Task %s: reverting to original engine %s for retry", task.id[:8], original_engine.display_name)
+                            engine = original_engine
+                            task.engine = engine.name
+                        delay = base_delay * (2 ** (attempt - 1))
+                        logging.info("Task %s failed (attempt %d/%d), retrying in %.1fs: %s",
+                                     task.id[:8], attempt, max_retries + 1, delay, task.error)
+                        get_audit().log(AuditEvent(task_id=task.id, event_type="task_retry",
+                                                   detail=f"Attempt {attempt + 1}/{max_retries + 1} after {delay:.0f}s delay: {task.error[:100]}"))
+                        if self._broadcast:
+                            await self._broadcast({"type": "task_update", "payload": {
+                                **task.model_dump(mode="json"),
+                                "status": "retrying",
+                                "_retry_attempt": attempt,
+                                "_retry_max": max_retries + 1,
+                                "_retry_delay": delay,
+                            }})
+                        await asyncio.sleep(delay)
                         task.status = TaskStatus.RUNNING
                         task.error = None
-                        task.result = None
-                        logging.info("Task %s: engine fallback %s -> %s", task.id[:8], old_name, engine.display_name)
-                        get_audit().log(AuditEvent(task_id=task.id, event_type="engine_fallback",
-                                                   detail=f"{old_name} → {engine.display_name}"))
-                        if self._broadcast:
-                            await self._broadcast({"type": "engine_fallback", "payload": {
-                                "task_id": task.id, "from": old_name, "to": engine.display_name,
-                            }})
-                            if engine.name in (EngineName.BROWSER_USE, EngineName.COMPUTER_USE):
-                                await self._broadcast({"type": "live_view_clear", "payload": {"task_id": task.id, "engine": engine.display_name}})
-                            await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
+                        tried_engines.clear()
                         continue
-
-                # ── Standard retry (original engine) ─────────────────
-                if task.status == TaskStatus.ERROR and attempt < max_retries:
-                    attempt += 1
-                    # Retry the original engine, not whatever fallback we last tried
-                    if engine.name != original_engine.name:
-                        logging.info("Task %s: reverting to original engine %s for retry", task.id[:8], original_engine.display_name)
-                        engine = original_engine
-                        task.engine = engine.name
-                    delay = base_delay * (2 ** (attempt - 1))  # exponential backoff: 2s, 4s, 8s...
-                    logging.info("Task %s failed (attempt %d/%d), retrying in %.1fs: %s",
-                                 task.id[:8], attempt, max_retries + 1, delay, task.error)
-                    get_audit().log(AuditEvent(task_id=task.id, event_type="task_retry",
-                                               detail=f"Attempt {attempt + 1}/{max_retries + 1} after {delay:.0f}s delay: {task.error[:100]}"))
-                    if self._broadcast:
-                        await self._broadcast({"type": "task_update", "payload": {
-                            **task.model_dump(mode="json"),
-                            "status": "retrying",
-                            "_retry_attempt": attempt,
-                            "_retry_max": max_retries + 1,
-                            "_retry_delay": delay,
-                        }})
-                    await asyncio.sleep(delay)
-                    task.status = TaskStatus.RUNNING
-                    task.error = None
-                    tried_engines.clear()  # Reset tried engines for retry pass
-                    continue
-                break  # success, cancelled, or max retries exhausted
+                    break  # success, cancelled, or max retries exhausted
 
             get_audit().log(AuditEvent(task_id=task.id, event_type="task_completed" if task.status == TaskStatus.COMPLETE else "task_cancelled" if task.status == TaskStatus.CANCELLED else "task_error", detail=task.error or "ok"))
             # ── Auto-log task to daily memory ────────────────────────────
@@ -6213,6 +6812,17 @@ class TaskManager:
                 )
             except Exception as e:
                 logging.warning("Failed to auto-log task to memory: %s", e)
+
+        # Auto-populate failure analysis for ERROR tasks
+        if task.status == TaskStatus.ERROR:
+            try:
+                fa = analyze_task_failure(task.id)
+                if task.result:
+                    task.result.failure_summary = fa
+                else:
+                    task.result = TaskResult(summary=fa.get("diagnosis", ""), failure_summary=fa)
+            except Exception as e:
+                logging.debug("Failed to generate failure analysis: %s", e)
 
         if self._running > 0:
             self._running -= 1
@@ -6399,7 +7009,7 @@ def get_manager() -> TaskManager:
 def _dashboard_html() -> str:
     # Inline CSS (enhanced for chat-like experience)
     css = """
-:root{--bg:#18191c;--card:#1e1f23;--border:#2b2d31;--text:#dbdee1;--fg:#dbdee1;--muted:#949ba4;--accent:#5865f2;--accent-dim:#4752c4;--ok:#57a86d;--err:#d9534f;--warn:#c49a3a;}
+:root{--bg:#18191c;--bg-secondary:#232428;--card:#1e1f23;--border:#2b2d31;--text:#dbdee1;--fg:#dbdee1;--muted:#949ba4;--accent:#5865f2;--accent-dim:#4752c4;--ok:#57a86d;--err:#d9534f;--warn:#c49a3a;}
 *{margin:0;padding:0;box-sizing:border-box;}
 html,body{overflow:hidden;width:100%;height:100%;}
 body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;}
@@ -6681,10 +7291,45 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .update-banner a:hover{text-decoration:underline;}
 .update-banner .dismiss{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px 6px;font-size:16px;line-height:1;border-radius:4px;}
 .update-banner .dismiss:hover{color:var(--text);background:rgba(255,255,255,0.1);}
+/* Planner */
+.planner-phase{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:12px;overflow:hidden;}
+.planner-phase[data-phase="observability"]{border-left:3px solid #5865f2;}
+.planner-phase[data-phase="reliability"]{border-left:3px solid #57a86d;}
+.planner-phase[data-phase="benchmarks"]{border-left:3px solid #9b59b6;}
+.planner-phase[data-phase="demos"]{border-left:3px solid #e67e22;}
+.planner-phase[data-phase="benchmark-site"]{border-left:3px solid #e74c3c;}
+.planner-phase[data-phase="content"]{border-left:3px solid #c49a3a;}
+.planner-phase[data-phase="custom"]{border-left:3px solid #949ba4;}
+.planner-phase-hdr{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none;transition:background 0.15s;}
+.planner-phase-hdr:hover{background:rgba(255,255,255,0.03);}
+.planner-chevron{width:16px;height:16px;color:var(--muted);transition:transform 0.2s;flex-shrink:0;}
+.planner-phase-hdr.collapsed .planner-chevron{transform:rotate(-90deg);}
+.planner-phase-label{font-size:13px;font-weight:600;flex:1;min-width:0;}
+.planner-phase-count{font-size:11px;color:var(--muted);white-space:nowrap;}
+.planner-phase-bar{width:80px;height:4px;background:var(--border);border-radius:2px;overflow:hidden;flex-shrink:0;}
+.planner-phase-bar-fill{height:100%;border-radius:2px;transition:width 0.4s ease;}
+.planner-items-wrap{border-top:1px solid var(--border);}
+.planner-item{display:flex;align-items:flex-start;gap:10px;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,0.04);transition:background 0.1s;}
+.planner-item:last-child{border-bottom:none;}
+.planner-item:hover{background:rgba(255,255,255,0.02);}
+.planner-item.done{opacity:0.5;}
+.planner-check{margin-top:2px;width:16px;height:16px;accent-color:var(--accent);cursor:pointer;flex-shrink:0;}
+.planner-item-body{flex:1;min-width:0;overflow:hidden;}
+.planner-item-title{font-size:13px;line-height:1.5;}
+.planner-item.done .planner-item-title{text-decoration:line-through;}
+.planner-item-notes{font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.planner-item-actions{display:flex;gap:2px;flex-shrink:0;opacity:0;transition:opacity 0.15s;align-items:center;}
+.planner-item:hover .planner-item-actions{opacity:1;}
+.planner-act-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;border-radius:4px;transition:all 0.15s;display:flex;align-items:center;}
+.planner-act-btn:hover{background:rgba(255,255,255,0.08);color:var(--text);}
+.planner-act-btn.del:hover{color:var(--err);background:rgba(217,83,79,0.1);}
+.planner-add-form{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;display:none;}
+.planner-add-form.visible{display:block;}
+.planner-empty{color:var(--muted);font-size:13px;text-align:center;padding:48px 20px;}
 """
     # Inline JS
     js = """
-const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null,routingInfo:{},chatExtras:{},chatRecordStart:null,runningTaskId:null,allTimeStats:{total_tasks:0,total_cost_usd:0,total_tokens:0,balance_usd:null}};
+const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],plannerItems:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null,routingInfo:{},chatExtras:{},chatRecordStart:null,runningTaskId:null,allTimeStats:{total_tasks:0,total_cost_usd:0,total_tokens:0,balance_usd:null}};
 function updateSystemHealth(){
   const dot=document.getElementById("healthDot"),txt=document.getElementById("healthText");
   const wsEl=document.getElementById("healthWS"),engEl=document.getElementById("healthEngines"),brEl=document.getElementById("healthBridge");
@@ -6759,6 +7404,8 @@ function connect(){
       else if(m.type==="config_update"){if(m.payload.automation_mode){state.automationMode=m.payload.automation_mode;updateAutomationModeUI();}if(m.payload.model_tier){_modelTier=m.payload.model_tier;updateModelTierUI();}if(m.payload.computer_use_api){_computerUseApi=m.payload.computer_use_api;updateApiPathUI();}if(m.payload.scaffolding_profile){_scaffoldingProfile=m.payload.scaffolding_profile;updateScaffoldingUI();}}
       else if(m.type==="workflow_update"){state.workflows=m.payload;renderWorkflows();updateTabBadges();}
       else if(m.type==="routing_info"){state.routingInfo[m.payload.task_id]={engine:m.payload.engine_display,reason:m.payload.reason};render();}
+      else if(m.type==="task_plan"){handleTaskPlan(m.payload);}
+      else if(m.type==="step_plan_progress"){handleStepPlanProgress(m.payload);}
       else if(m.type==="recording_action"){handleRecordingAction(m.payload);}
       else if(m.type==="recording_status"){handleRecordingStatus(m.payload);updateChatRecordBtn(!!m.payload.active);}
       else if(m.type==="recording_result"){handleRecordingResult(m.payload);handleChatRecordingResult(m.payload);}
@@ -6992,6 +7639,57 @@ function handleStepUpdate(p){
   // Also add to activity feed
   addActivity({timestamp:new Date().toISOString(),event_type:"step",detail:"Step "+p.step+": "+p.action});
 }
+// ── Multi-step task plan display ──────────────────────────────────
+function handleTaskPlan(p){
+  if(!p||!p.task_id||!p.steps)return;
+  const engineColors={browser_use:'#5865f2',computer_use:'#ed4245',openclaw:'#57f287'};
+  state.routingInfo[p.task_id]={engine:'Multi-Engine ('+p.steps.length+' steps)',reason:p.reason||'task planner'};
+  // Store plan for rendering
+  if(!state._taskPlans)state._taskPlans={};
+  state._taskPlans[p.task_id]=p.steps;
+  render();
+  // Show plan in steps container
+  const el=document.getElementById('steps-'+p.task_id);
+  if(el){
+    el.innerHTML='<div style="padding:8px 12px;background:rgba(88,101,242,0.06);border-radius:8px;margin-top:8px">'
+      +'<div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">TASK PLAN</div>'
+      +p.steps.map(s=>{
+        const c=engineColors[s.engine]||'var(--accent)';
+        return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px">'
+          +'<span style="background:'+c+';color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">'+s.step+'/'+s.total+'</span>'
+          +'<span style="color:var(--fg)">'+esc(s.instruction)+'</span>'
+          +'<span style="color:var(--muted);margin-left:auto;font-size:10px;white-space:nowrap">'+esc(s.engine_display)+'</span>'
+          +'</div>';
+      }).join('')
+      +'</div>';
+  }
+}
+function handleStepPlanProgress(p){
+  if(!p||!p.task_id)return;
+  const el=document.getElementById('steps-'+p.task_id);
+  if(!el)return;
+  const engineColors={browser_use:'#5865f2',computer_use:'#ed4245',openclaw:'#57f287'};
+  const plans=state._taskPlans&&state._taskPlans[p.task_id];
+  if(!plans)return;
+  // Update plan display with current step status
+  el.innerHTML='<div style="padding:8px 12px;background:rgba(88,101,242,0.06);border-radius:8px;margin-top:8px">'
+    +'<div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">TASK PLAN</div>'
+    +plans.map(s=>{
+      const c=engineColors[s.engine]||'var(--accent)';
+      const isActive=s.step===p.step;
+      const isDone=s.step<p.step||(s.step===p.step&&p.status==='complete');
+      const icon=isDone?'&#10003;':isActive?'&#9654;':'&#9679;';
+      const opacity=isDone?'0.6':isActive?'1':'0.4';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;opacity:'+opacity+'">'
+        +'<span style="background:'+c+';color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">'+icon+'</span>'
+        +'<span style="color:var(--fg)">'+esc(s.instruction)+'</span>'
+        +'<span style="color:var(--muted);margin-left:auto;font-size:10px;white-space:nowrap">'
+        +(isActive&&p.status==='running'?'<span style="color:'+c+'">Running...</span>':esc(s.engine_display))
+        +'</span>'
+        +'</div>';
+    }).join('')
+    +'</div>';
+}
 // ── Task Replay Viewer ────────────────────────────────────────────
 async function showReplay(taskId){
   try{
@@ -7137,7 +7835,7 @@ function toggleSection(id){
 function upsert(t){const i=state.tasks.findIndex(x=>x.id===t.id);const wasRunning=i>=0&&state.tasks[i].status==="running";if(i>=0)state.tasks[i]=t;else state.tasks.push(t);if(t.status==="running"&&!state.runningTaskId){state.runningTaskId=t.id;updateSubmitBtn();}if(state.runningTaskId===t.id&&(t.status==="complete"||t.status==="error"||t.status==="cancelled")){state.runningTaskId=null;updateSubmitBtn();}render();if(wasRunning&&t.status!=="running")refreshStats();}
 async function refreshStats(){try{const s=await api("GET","/api/stats");if(s)state.allTimeStats=s;renderStats();}catch(e){console.warn("stats refresh error:",e);}}
 function scrollToBottom(){const el=document.getElementById("taskList");if(el)requestAnimationFrame(()=>el.scrollTop=el.scrollHeight);}
-const ENGINE_DISPLAY={browser_use:"Browser",computer_use:"Computer",openclaw:"Chat",auto:"Auto",replay:"Replay"};
+const ENGINE_DISPLAY={browser_use:"Browser",computer_use:"Computer",openclaw:"Chat",auto:"Auto",replay:"Replay","multi-engine":"Multi-Engine"};
 const SLASH_ENGINE_MAP={"/browser":"browser_use","/computer":"computer_use","/chat":"openclaw"};
 const SLASH_COMMANDS=[
   {cmd:"/record",desc:"Start/stop recording desktop actions"},
@@ -7892,6 +8590,149 @@ async function saveTaskAsTemplate(taskId){
   }catch(e){alert("Error: "+e.message);}
 }
 
+// ── Planner ──
+var _phaseLabels={"demos":"First Demos","content":"Content & Publishing","observability":"Observability","reliability":"Reliability","benchmarks":"Benchmarks","benchmark-site":"Benchmark Website","custom":"Custom"};
+var _phaseOrder=["demos","content","observability","reliability","benchmarks","benchmark-site","custom"];
+var _collapsedPhases={};
+async function renderPlannerView(){
+  try{
+    var items=await api("GET","/api/planner");
+    state.plannerItems=items;
+    var el=document.getElementById("plannerPhases");
+    if(!items||!items.length){
+      el.innerHTML='<div class="planner-empty"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;display:block;margin:0 auto 12px"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>No planner items yet.<br><span style="font-size:11px;margin-top:4px;display:inline-block">Click <strong>+ Add Item</strong> to get started, or <strong>Reset</strong> to load defaults.</span></div>';
+      updatePlannerProgress();return;
+    }
+    var grouped={};
+    items.forEach(function(it){if(!grouped[it.phase])grouped[it.phase]=[];grouped[it.phase].push(it);});
+    var phases=Object.keys(grouped).sort(function(a,b){var ai=_phaseOrder.indexOf(a),bi=_phaseOrder.indexOf(b);return(ai<0?99:ai)-(bi<0?99:bi);});
+    var html="";
+    phases.forEach(function(phase){
+      var pitems=grouped[phase];
+      var done=pitems.filter(function(i){return i.status==="done"}).length;
+      var total=pitems.length;
+      var pct=total?Math.round(done/total*100):0;
+      var label=_phaseLabels[phase]||phase.charAt(0).toUpperCase()+phase.slice(1);
+      var phaseColors={"observability":"#5865f2","reliability":"#57a86d","demos":"#e67e22","benchmarks":"#9b59b6","benchmark-site":"#e74c3c","content":"#c49a3a"};
+      var barColor=pct===100?"var(--ok)":(phaseColors[phase]||"var(--accent)");
+      var collapsed=_collapsedPhases[phase]===true;
+      html+='<div class="planner-phase" data-phase="'+esc(phase)+'">';
+      html+='<div class="planner-phase-hdr'+(collapsed?" collapsed":"")+'" onclick="togglePhaseCollapse(this)">';
+      html+='<svg class="planner-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>';
+      html+='<span class="planner-phase-label">'+esc(label)+'</span>';
+      html+='<span class="planner-phase-count">'+done+' / '+total+'</span>';
+      html+='<div class="planner-phase-bar"><div class="planner-phase-bar-fill" style="width:'+pct+'%;background:'+barColor+'"></div></div>';
+      html+='</div>';
+      html+='<div class="planner-items-wrap"'+(collapsed?' style="display:none"':'')+'>';
+      pitems.forEach(function(it){
+        var ck=it.status==="done";
+        html+='<div class="planner-item'+(ck?" done":"")+'" id="pi-'+it.id+'">';
+        html+='<input type="checkbox" class="planner-check"'+(ck?" checked":"")+' onchange="togglePlannerItem(\\''+it.id+'\\',this.checked)">';
+        html+='<div class="planner-item-body">';
+        html+='<span class="planner-item-title">'+esc(it.title)+'</span>';
+        if(it.notes)html+='<div class="planner-item-notes" title="'+esc(it.notes)+'">'+esc(it.notes)+'</div>';
+        html+='</div>';
+        html+='<div class="planner-item-actions">';
+        html+='<button class="planner-act-btn" onclick="editPlannerNotes(\\''+it.id+'\\')" title="Edit notes"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
+        html+='<button class="planner-act-btn del" onclick="deletePlannerItem(\\''+it.id+'\\')" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>';
+        html+='</div>';
+        html+='</div>';
+      });
+      html+='</div></div>';
+    });
+    el.innerHTML=html;
+    updatePlannerProgress();
+  }catch(e){console.error("renderPlannerView error:",e);}
+}
+function togglePhaseCollapse(hdr){
+  var phase=hdr.parentElement.getAttribute("data-phase");
+  var wrap=hdr.nextElementSibling;
+  if(hdr.classList.contains("collapsed")){
+    hdr.classList.remove("collapsed");wrap.style.display="";_collapsedPhases[phase]=false;
+  }else{
+    hdr.classList.add("collapsed");wrap.style.display="none";_collapsedPhases[phase]=true;
+  }
+}
+function updatePlannerProgress(){
+  var items=state.plannerItems||[];
+  var done=items.filter(function(i){return i.status==="done"}).length;
+  var total=items.length;
+  var pct=total?Math.round(done/total*100):0;
+  var el=document.getElementById("plannerProgress");
+  if(el)el.textContent=done+" of "+total+" complete"+(total?" ("+pct+"%)":"");
+  var bar=document.getElementById("plannerProgressBar");
+  if(bar){bar.style.width=pct+"%";bar.style.background=pct===100?"var(--ok)":"var(--accent)";}
+  updatePlannerBadge();
+}
+function updatePlannerBadge(){
+  var items=state.plannerItems||[];
+  var pending=items.filter(function(i){return i.status!=="done"}).length;
+  var badge=document.getElementById("plannerBadge");
+  if(badge){badge.textContent=pending;badge.style.display=pending>0?"inline-flex":"none";}
+}
+async function togglePlannerItem(id,checked){
+  try{
+    await api("PUT","/api/planner/"+id,{status:checked?"done":"pending"});
+    var it=(state.plannerItems||[]).find(function(i){return i.id===id});
+    if(it)it.status=checked?"done":"pending";
+    renderPlannerView();
+  }catch(e){console.error(e);}
+}
+function showAddPlannerForm(){
+  var form=document.getElementById("addPlannerForm");
+  form.classList.toggle("visible");
+  if(form.classList.contains("visible")){setTimeout(function(){document.getElementById("plannerNewTitle").focus();},50);}
+}
+async function addPlannerItem(){
+  var title=document.getElementById("plannerNewTitle").value.trim();
+  var phase=document.getElementById("plannerNewPhase").value;
+  if(!title){alert("Title is required");return;}
+  try{
+    await api("POST","/api/planner",{title:title,phase:phase});
+    document.getElementById("plannerNewTitle").value="";
+    document.getElementById("addPlannerForm").classList.remove("visible");
+    renderPlannerView();
+  }catch(e){alert("Error: "+e.message);}
+}
+async function deletePlannerItem(id){
+  if(!confirm("Delete this planner item?"))return;
+  try{
+    await api("DELETE","/api/planner/"+id);
+    state.plannerItems=(state.plannerItems||[]).filter(function(i){return i.id!==id});
+    renderPlannerView();
+  }catch(e){console.error(e);}
+}
+async function editPlannerNotes(id){
+  var it=(state.plannerItems||[]).find(function(i){return i.id===id});
+  var notes=window.prompt("Notes:",it?it.notes||"":"");
+  if(notes===null)return;
+  try{
+    await api("PUT","/api/planner/"+id,{notes:notes});
+    if(it)it.notes=notes;
+    renderPlannerView();
+  }catch(e){console.error(e);}
+}
+async function seedPlanner(){
+  if(!confirm("Reset planner to defaults? This will delete all current items."))return;
+  try{
+    await api("POST","/api/planner/seed");
+    renderPlannerView();
+  }catch(e){alert("Error: "+e.message);}
+}
+async function analyzeFailure(taskId){
+  try{
+    const fa=await api("POST","/api/tasks/"+taskId+"/analyze");
+    const t=state.tasks.find(x=>x.id===taskId);
+    if(t){
+      if(!t.result)t.result={};
+      t.result.failure_summary=fa;
+    }
+    // Re-expand the row to show the analysis
+    _expandedHistoryRow=null;
+    toggleHistoryRow(taskId);
+  }catch(e){console.error("Failure analysis error:",e);}
+}
+
 // ── Output Routing ──
 
 function saveResultToFile(taskId){
@@ -7930,6 +8771,7 @@ async function switchView(view){
   const wv=document.getElementById("workflowsView");if(wv)wv.style.display=view==="workflows"?"flex":"none";
   const tv=document.getElementById("templatesView");if(tv)tv.style.display=view==="templates"?"flex":"none";
   const cv=document.getElementById("configView");if(cv)cv.style.display=view==="config"?"flex":"none";
+  const plv=document.getElementById("plannerView");if(plv)plv.style.display=view==="planner"?"flex":"none";
   // Update sidebar nav items
   document.querySelectorAll(".sidebar-nav-item").forEach(el=>{
     el.classList.toggle("active",el.id==="nav-"+view);
@@ -7940,6 +8782,7 @@ async function switchView(view){
   if(view==="history"){toggleHistoryTab('tasks');renderHistory();}
   if(view==="workflows")renderWorkflows();
   if(view==="templates")renderTemplatesMain();
+  if(view==="planner")renderPlannerView();
   if(view==="config"){refreshConfig();renderEngines();}
 }
 function toggleHistoryTab(tab){
@@ -8624,9 +9467,31 @@ function toggleHistoryRow(taskId){
   let html='<div class="history-detail">';
   if(t.result&&t.result.summary)html+='<div class="history-result">'+renderMarkdown(t.result.summary)+'</div>';
   if(t.error)html+='<div class="msg-error" style="margin-bottom:12px">'+esc(t.error)+'</div>';
+  // Failure analysis card for ERROR tasks
+  if(t.status==="error"&&t.result&&t.result.failure_summary&&t.result.failure_summary.failure_type){
+    const fa=t.result.failure_summary;
+    const typeColors={"stuck_loop":"var(--err)","action_repetition":"#c49a3a","progressive_stale":"#c49a3a","max_steps":"var(--accent)","unknown":"var(--muted)"};
+    const tc=typeColors[fa.failure_type]||"var(--muted)";
+    html+='<div style="background:rgba(255,70,70,0.06);border:1px solid rgba(255,70,70,0.15);border-radius:8px;padding:12px;margin-bottom:12px">';
+    html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:12px;font-weight:600;color:'+tc+'">'+esc(fa.failure_type.replace(/_/g," ").toUpperCase())+'</span>';
+    if(fa.stuck_at_step)html+='<span style="font-size:11px;color:var(--muted)">Stuck at step '+fa.stuck_at_step+'</span>';
+    html+='</div>';
+    html+='<div style="font-size:12px;color:var(--text);margin-bottom:6px">'+esc(fa.diagnosis)+'</div>';
+    html+='<div style="display:flex;gap:16px;font-size:11px;color:var(--muted)">';
+    html+='<span>Steps: '+fa.total_steps+'</span>';
+    if(fa.wasted_tokens>0)html+='<span>Wasted tokens: '+fa.wasted_tokens.toLocaleString()+'</span>';
+    if(fa.repeated_action)html+='<span>Repeated: '+esc(fa.repeated_action)+'</span>';
+    html+='</div></div>';
+  }
   html+='<div style="display:flex;gap:8px">';
   if(t.status==="complete"&&t.result){
     if(t.result.total_steps>0)html+='<button class="btn" onclick="event.stopPropagation();showReplay(\\''+taskId+'\\')" style="font-size:11px;padding:6px 12px;background:#232428;border:1px solid var(--border)">Replay Steps</button>';
+  }
+  if(t.status==="error"){
+    html+='<button class="btn" onclick="event.stopPropagation();showReplay(\\''+taskId+'\\')" style="font-size:11px;padding:6px 12px;background:#232428;border:1px solid var(--border)">View Steps</button>';
+    if(!t.result||!t.result.failure_summary||!t.result.failure_summary.failure_type){
+      html+='<button class="btn" onclick="event.stopPropagation();analyzeFailure(\\''+taskId+'\\')" style="font-size:11px;padding:6px 12px;background:rgba(255,70,70,0.1);border:1px solid rgba(255,70,70,0.2);color:var(--err)">Analyze Failure</button>';
+    }
   }
   html+='</div></div>';
   const tr=document.createElement("tr");tr.className="history-expanded";
@@ -8676,6 +9541,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     if(p.schedules){state.schedules=p.schedules;renderSchedules();updateTabBadges();}
     if(p.templates){state.templates=p.templates;renderTemplatesMain();}
     if(p.workflows){state.workflows=p.workflows;renderWorkflows();updateTabBadges();}
+    if(p.planner_items){state.plannerItems=p.planner_items;updatePlannerBadge();}
     if(p.config&&p.config.keys){
       try{
         const c=p.config;
@@ -8956,6 +9822,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <div onclick="switchView('history')" title="History">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
         </div>
+        <div onclick="switchView('planner')" title="Planner">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        </div>
       </div>
       <div class="sidebar-top-row">
         <button class="toggle-btn" onclick="toggleSidebar('left')" title="Toggle Sidebar" style="padding:4px;margin-left:auto;">
@@ -8997,6 +9866,11 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="sidebar-nav-item" onclick="switchView('templates')" id="nav-templates">
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
         <span>Templates</span>
+      </div>
+      <div class="sidebar-nav-item" onclick="switchView('planner')" id="nav-planner">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        <span>Planner</span>
+        <span id="plannerBadge" class="nav-badge" style="display:none">0</span>
       </div>
     </aside>
     <div class="sidebar-pull-tab" onclick="toggleSidebar('left')" title="Open sidebar">
@@ -9406,6 +10280,47 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
       </div>
+      <!-- Planner View -->
+      <div id="plannerView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
+        <div style="max-width:900px;margin:0 auto;width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
+            <div style="flex:1;min-width:0;">
+              <h3 style="font-size:18px;font-weight:700;margin-bottom:2px;letter-spacing:-0.3px">Planner</h3>
+              <p style="font-size:12px;color:var(--muted);margin-bottom:8px" id="plannerProgress">0 of 0 complete</p>
+              <div style="width:100%;height:4px;background:var(--border);border-radius:2px;overflow:hidden;max-width:300px;">
+                <div id="plannerProgressBar" style="height:100%;width:0%;background:var(--accent);border-radius:2px;transition:width 0.4s ease;"></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-shrink:0;margin-top:4px;">
+              <button class="btn" style="font-size:12px;padding:8px 14px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--muted)" onclick="seedPlanner()" title="Reset to defaults">Reset</button>
+              <button class="btn" style="font-size:12px;padding:8px 14px;" onclick="showAddPlannerForm()">+ Add Item</button>
+            </div>
+          </div>
+          <div id="addPlannerForm" class="planner-add-form">
+            <div style="display:flex;gap:8px;align-items:flex-end;">
+              <div style="flex:1;min-width:0;">
+                <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Title</label>
+                <input id="plannerNewTitle" placeholder="What needs to be done?" style="font-size:13px;padding:8px 12px;">
+              </div>
+              <div style="width:160px;flex-shrink:0;">
+                <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Phase</label>
+                <select id="plannerNewPhase" style="font-size:13px;padding:8px 12px;">
+                  <option value="demos">First Demos</option>
+                  <option value="content">Content & Publishing</option>
+                  <option value="observability">Observability</option>
+                  <option value="reliability">Reliability</option>
+                  <option value="benchmarks">Benchmarks</option>
+                  <option value="benchmark-site">Benchmark Website</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              <button class="btn" style="font-size:12px;padding:8px 16px;flex-shrink:0;" onclick="addPlannerItem()">Add</button>
+              <button class="btn" style="font-size:12px;padding:8px 12px;background:transparent;border:1px solid var(--border);color:var(--muted);flex-shrink:0;" onclick="document.getElementById('addPlannerForm').classList.remove('visible')">Cancel</button>
+            </div>
+          </div>
+          <div id="plannerPhases"><div class="planner-empty">Loading planner...</div></div>
+        </div>
+      </div>
     </main>
   </div>
   <!-- PiP Floating Panel -->
@@ -9546,6 +10461,16 @@ def create_app() -> FastAPI:
                 _tray_icon.stop()
             except Exception:
                 pass
+        # Cleanup Chrome process on shutdown (prevents orphan holding port/resources)
+        if _chrome_proc is not None and _chrome_proc.poll() is None:
+            try:
+                _chrome_proc.terminate()
+                _chrome_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    _chrome_proc.kill()
+                except Exception:
+                    pass
 
     app = FastAPI(title="ClawBridge", version="0.1.0", lifespan=lifespan)
 
@@ -9677,7 +10602,15 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
                 stats.update({"total_tasks": _sr[0], "total_cost_usd": round(_sr[2], 4), "total_tokens": _sr[1]})
         except Exception:
             pass
-        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates, "workflows": workflows, "csrf_token": csrf_token, "stats": stats}
+        # Load planner items for preload
+        try:
+            _plc = sqlite3.connect(Settings.db_path)
+            planner_items = [dict(zip(["id", "phase", "title", "description", "status", "position", "notes", "created_at", "updated_at"], r))
+                             for r in _plc.execute("SELECT id, phase, title, description, status, position, notes, created_at, updated_at FROM planner_items ORDER BY phase, position").fetchall()]
+            _plc.close()
+        except Exception:
+            planner_items = []
+        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates, "workflows": workflows, "csrf_token": csrf_token, "stats": stats, "planner_items": planner_items}
         preload = '<script>window.__PRELOAD__=' + _json.dumps(preload_data, default=str) + ';</script>'
         html = _dashboard_html()
         html = html.replace("</head>", preload + "\n</head>")
@@ -9811,6 +10744,11 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
         """Retrieve step-level trace data for task replay. Works even after server restart (reads from SQLite)."""
         steps = get_steps_for_task(task_id)
         return {"task_id": task_id, "steps": steps, "total_steps": len(steps)}
+
+    @app.post("/api/tasks/{task_id}/analyze")
+    async def analyze_task(task_id: str):
+        """Algorithmic failure analysis for a task. No LLM call."""
+        return analyze_task_failure(task_id)
 
     @app.get("/api/tasks/{task_id}/audit")
     async def get_task_audit(task_id: str):
@@ -10236,6 +11174,9 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
             "--no-default-browser-check",
             "--window-size=1300,950",
         ]
+        # Run headless if configured — user sees PiP live view in dashboard instead
+        if get_settings().browser_headless:
+            cmd.append("--headless=new")
         logging.info("Launching Chrome: %s", " ".join(cmd))
         _chrome_proc = subprocess.Popen(cmd)
         # Auto-set CDP mode so tasks use this Chrome
@@ -10712,6 +11653,66 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
         asyncio.create_task(_delete_temp_workflow(temp_wf.id))
         return {"workflow": temp_wf.model_dump(mode="json"), "task": result.model_dump(mode="json"),
                 "params": params, "substitutions": len(action_subs)}
+
+    # ── Planner API ────────────────────────────────────────────────
+    @app.get("/api/planner")
+    async def list_planner_items():
+        conn = sqlite3.connect(Settings.db_path)
+        rows = conn.execute("SELECT id, phase, title, description, status, position, notes, created_at, updated_at FROM planner_items ORDER BY phase, position").fetchall()
+        conn.close()
+        return [dict(zip(["id", "phase", "title", "description", "status", "position", "notes", "created_at", "updated_at"], r)) for r in rows]
+
+    @app.post("/api/planner")
+    async def create_planner_item(request: Request):
+        body = await request.json()
+        title = body.get("title", "").strip()
+        if not title:
+            raise HTTPException(400, "title is required")
+        phase = body.get("phase", "custom").strip()
+        desc = body.get("description", "")
+        _now = datetime.utcnow().isoformat()
+        _id = str(uuid.uuid4())[:8]
+        conn = sqlite3.connect(Settings.db_path)
+        max_pos = conn.execute("SELECT COALESCE(MAX(position), -1) FROM planner_items WHERE phase = ?", (phase,)).fetchone()[0]
+        conn.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, '', ?, ?)",
+                     (_id, phase, title, desc, max_pos + 1, _now, _now))
+        conn.commit()
+        conn.close()
+        return {"id": _id, "phase": phase, "title": title, "status": "pending"}
+
+    @app.put("/api/planner/{item_id}")
+    async def update_planner_item(item_id: str, request: Request):
+        body = await request.json()
+        conn = sqlite3.connect(Settings.db_path)
+        existing = conn.execute("SELECT id FROM planner_items WHERE id = ?", (item_id,)).fetchone()
+        if not existing:
+            conn.close()
+            raise HTTPException(404, "Item not found")
+        _now = datetime.utcnow().isoformat()
+        for field in ("status", "notes", "position", "title", "phase", "description"):
+            if field in body:
+                conn.execute(f"UPDATE planner_items SET {field} = ?, updated_at = ? WHERE id = ?", (body[field], _now, item_id))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+
+    @app.delete("/api/planner/{item_id}")
+    async def delete_planner_item(item_id: str):
+        conn = sqlite3.connect(Settings.db_path)
+        conn.execute("DELETE FROM planner_items WHERE id = ?", (item_id,))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+
+    @app.post("/api/planner/seed")
+    async def seed_planner_items():
+        conn = sqlite3.connect(Settings.db_path)
+        conn.execute("DELETE FROM planner_items")
+        conn.commit()
+        conn.close()
+        # Re-run init_db to re-seed (it only seeds when table is empty)
+        init_db()
+        return {"ok": True, "message": "Planner items re-seeded"}
 
     @app.post("/api/recording/start")
     async def start_recording():
@@ -11637,7 +12638,11 @@ def main() -> None:
 
     def _signal_handler(signum, frame):
         _cleanup()
-        raise SystemExit(0)
+        # Re-raise with default handler so uvicorn can shut down gracefully
+        # (release port, run lifespan teardown). raise SystemExit(0) kills
+        # the process before uvicorn finishes, leaving the port in TIME_WAIT.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)

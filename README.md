@@ -6,7 +6,7 @@ ClawBridge is a local-first AI agent platform that unifies multiple automation e
 
 Submit a task, pick an engine (or let Auto choose), and watch it run. Everything stays on your machine — or bridge to the cloud.
 
-**Version:** 0.5.1 | [Website](https://clawbridge.ai) | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
+**Version:** 0.5.2 | [Website](https://clawbridge.ai) | [Changelog](CHANGELOG.md) | [Discord](https://discord.gg/7QeQ3WsZ)
 
 ---
 
@@ -34,15 +34,9 @@ Download `ClawBridge-Setup.exe` and run it. The installer:
 
 After installation, launch ClawBridge from the Start Menu and open **http://127.0.0.1:8765** in your browser.
 
-### macOS Installer
+### macOS Installer (Coming Soon)
 
-Download the `.dmg` for your architecture (Apple Silicon or Intel) from the [download page](https://clawbridge.ai/download/) or [GitHub Releases](https://github.com/NickRomanek/clawbridge/releases/latest).
-
-1. Open the `.dmg` and drag ClawBridge to Applications
-2. Launch ClawBridge — on first run, grant **Accessibility** and **Screen Recording** permissions when prompted
-3. The dashboard opens automatically at **http://127.0.0.1:8765**
-
-**Note**: macOS requires Accessibility permission (System Settings > Privacy & Security > Accessibility) for desktop automation and Screen Recording permission for screenshot capture. The dashboard shows a banner if permissions are missing.
+macOS support is in development. The platform abstraction layer is complete, but the macOS build is not yet production-ready. Stay tuned for updates.
 
 ### Quick Start (Single File)
 
@@ -121,7 +115,7 @@ ClawBridge has two deployment forms that share the same logic:
 
 | Form | File | Use Case |
 |------|------|----------|
-| **Monolith** | `clawbridge.py` (~11,300 lines) | Primary. Single file, easy to share/deploy |
+| **Monolith** | `clawbridge.py` (~12,700 lines) | Primary. Single file, easy to share/deploy |
 | **Package** | `clawbridge/` directory | Modular. For development, testing, extensibility |
 
 ### How It Works
@@ -461,7 +455,7 @@ This enables the **bridge architecture**: local machines provide the "hands" (de
 ## Project Structure
 
 ```
-clawbridge.py                 # Monolith — primary entry point (~11,300 lines)
+clawbridge.py                 # Monolith — primary entry point (~12,700 lines)
 clawbridge_mcp.py             # MCP server (stdio/HTTP proxy to REST API)
 clawbridge/
   config.py                   # Settings & BYOK key management
@@ -563,6 +557,10 @@ See `.mcp.json` for project-level registration.
 - [x] macOS DMG distribution for arm64 and x64 (v0.5.0)
 - [x] App-mode browser launch (chromeless window) (v0.5.0)
 - [x] Scaffolding profile system (full/standard/minimal/raw) (v0.5.0)
+- [x] Multi-engine task orchestration with LLM planner (v0.5.2)
+- [x] Hybrid DOM + Visual engine (CDP bridge tools on computer-use) (v0.5.2)
+- [x] Auto-launch Chrome with CDP for browser-use (anti-bot avoidance) (v0.5.2)
+- [x] Planner sanity checks (URL-in-prompt always routes to browser) (v0.5.2)
 
 ### What's Next
 
