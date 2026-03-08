@@ -5,6 +5,26 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-03-08
+
+### Fixed
+- **OpenClaw gateway startup**: `--host` is not a valid OpenClaw flag. Changed to `--bind loopback --allow-unconfigured --auth none --dev`. The wrong flag silently killed the gateway, causing 30s timeouts on every chat task.
+- **OpenClaw model default**: Unconfigured gateway has no default model. Now defaults to `openrouter/anthropic/claude-haiku-4-5` when `OPENCLAW_MODEL` is empty.
+- **Bundled OpenClaw binary**: Installer environments have `nodejs/openclaw.CMD` next to clawbridge.py. `initialize()` now checks this path when `shutil.which()` fails, and adds the nodejs dir to PATH.
+- **Dashboard JS crash**: Broken regex (`\n` in Python string → literal newline in JS) killed the entire `<script>` block. All JS including WebSocket connection was non-functional on fresh installs.
+- **Loading page stuck**: Added `/startup-status` endpoint to FastAPI so loading page transitions correctly even if it misses the stdlib server's 100% progress update.
+- **Loading server crash**: Wrapped handler in try/except for `ConnectionAbortedError` on Windows.
+
+### Changed
+- Gateway poll timeout reduced from 30s to 15s.
+- Engine error messages now redacted via `safety_redact()` in all 3 engines.
+- OpenClaw `run_task()` now guards against `NO_API_KEY` engine status.
+- SQLite initialized with WAL mode for better concurrent write performance.
+- Webhook endpoint added to rate limiting (20/60s with prefix matching).
+- OpenClaw checked by default in installer wizard.
+
+---
+
 ## [0.5.4] - 2026-03-07
 
 ### Fixed
