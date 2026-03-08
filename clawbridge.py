@@ -2837,7 +2837,7 @@ class OpenClawEngine(EngineBase):
             if settings.model_tier == "economy" and settings.economy_model:
                 model = settings.economy_model
             else:
-                model = settings.openclaw_model or None  # None = use gateway's configured default model
+                model = settings.openclaw_model or "openrouter/anthropic/claude-haiku-4-5"  # fallback when no model configured
             payload = {
                 "messages": messages,
                 "stream": False,
