@@ -2741,8 +2741,8 @@ class OpenClawEngine(EngineBase):
         port = settings.openclaw_gateway_port
         import httpx
         self._http_client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=180.0)
-        self._status = EngineStatus.AVAILABLE
-        self._error_hint = ""
+        self._status = EngineStatus.STARTING
+        self._error_hint = "Gateway starting..."
         # Read gateway auth token from openclaw.json (fallback when OPENCLAW_API_KEY not set)
         try:
             oc_config_path = os.path.join(os.path.expanduser("~"), ".openclaw", "openclaw.json")
@@ -2756,6 +2756,30 @@ class OpenClawEngine(EngineBase):
         except Exception as e:
             logging.debug("OpenClaw: could not read gateway token from openclaw.json: %s", e)
         logging.info("OpenClaw engine initialized (binary=%s, node=%s, port=%d)", self._openclaw_bin, self._node_version, port)
+        # Proactively start the gateway so status reflects reality
+        asyncio.create_task(self._warmup_gateway())
+
+    async def _warmup_gateway(self) -> None:
+        """Start gateway proactively during init so status reflects reality."""
+        try:
+            ready = await self._ensure_gateway()
+            if ready:
+                self._status = EngineStatus.AVAILABLE
+                self._error_hint = ""
+            else:
+                self._status = EngineStatus.ERROR
+                self._error_hint = "Gateway failed to start"
+            # Broadcast updated status to dashboard
+            try:
+                mgr = get_manager()
+                if mgr._broadcast:
+                    await mgr._broadcast({"type": "engine_status", "payload": await mgr.engine_infos()})
+            except Exception:
+                pass
+        except Exception as e:
+            self._status = EngineStatus.ERROR
+            self._error_hint = f"Gateway startup error: {e}"
+            logging.warning("OpenClaw: warmup failed: %s", e)
 
     def _auth_headers(self) -> dict:
         """Auth headers for gateway requests (explicit key or auto-read token)."""
@@ -2946,7 +2970,7 @@ class OpenClawEngine(EngineBase):
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             # Poll for gateway readiness — use /v1/models to confirm API layer is up
-            for _ in range(15):
+            for _ in range(30):
                 await asyncio.sleep(1)
                 try:
                     resp = await self._http_client.get("/v1/models", timeout=3.0, headers=_hdr)
@@ -2955,7 +2979,7 @@ class OpenClawEngine(EngineBase):
                         return True
                 except Exception:
                     continue
-            logging.warning("OpenClaw gateway did not become ready after 15s")
+            logging.warning("OpenClaw gateway did not become ready after 30s")
         except Exception as e:
             logging.warning("Failed to start OpenClaw gateway: %s", e)
         return False
@@ -7513,7 +7537,7 @@ function updateSystemHealth(){
   if(state.bridgeActive){brEl.textContent="Active";brEl.className="health-value h-ok";}
   else{brEl.textContent="Offline";brEl.className="health-value";brEl.style.color="var(--muted)";}
   // Engines
-  const avail=state.engines.filter(e=>e.status==="available").length;
+  const avail=state.engines.filter(e=>e.status==="available"||e.status==="running").length;
   const total=state.engines.length;
   engEl.textContent=avail+" / "+total;
   engEl.className=avail>0?"health-value h-ok":"health-value h-warn";
@@ -8327,7 +8351,7 @@ function renderEngines(){
   const c=document.getElementById("engineList");
   if(!state.engines.length){c.innerHTML='<p class="muted">No engines</p>';return;}
   c.innerHTML=state.engines.map(e=>{
-    const sc=e.status==="available"?"color:var(--ok)":e.status==="no_api_key"?"color:#c49a3a":e.status==="error"?"color:var(--err)":"color:var(--muted)";
+    const sc=e.status==="available"?"color:var(--ok)":e.status==="starting"?"color:#c49a3a":e.status==="no_api_key"?"color:#c49a3a":e.status==="error"?"color:var(--err)":"color:var(--muted)";
     const dn=ENGINE_DISPLAY[e.name]||e.display_name;
     let extra="";
     if(e.model&&e.status==="available"){const sm=_shortModel(e.model);const ap=_apiLabel(e.api_path);extra+='<div style="font-family:monospace;font-size:9px;color:var(--muted);margin-top:1px">'+esc(sm)+(ap?" via "+esc(ap):"")+'</div>';}
