@@ -61,3 +61,5 @@ NOTE: `npm run build` runs `astro check && astro build` — the type checker has
 - **v0.5.5**: `npm run build` fails due to pre-existing TS errors in download.astro. Use `npx astro build` directly.
 - **Python `\n` in JS**: When adding JS regexes in Python strings, use `\\n` not `\n`. The `\n` becomes a literal newline that breaks the `<script>` block.
 - **Installer filename**: Must always be `ClawBridge-Setup.exe` — no version suffix.
+- **v0.5.5**: `--host 127.0.0.1` is NOT a valid OpenClaw flag. Use `--bind loopback` instead. The wrong flag silently kills the gateway, causing 30s timeouts on every chat task.
+- **OpenClaw gateway flags**: Full command is `openclaw gateway --port 18789 --bind loopback --allow-unconfigured --auth none --dev`. Always test gateway startup after changes.

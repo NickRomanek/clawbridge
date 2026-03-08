@@ -2698,6 +2698,14 @@ class OpenClawEngine(EngineBase):
     async def initialize(self) -> None:
         import shutil
         self._openclaw_bin = shutil.which("openclaw") or shutil.which("openclaw.cmd")
+        # Also check bundled nodejs dir next to this script (installed environments)
+        if not self._openclaw_bin:
+            _bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nodejs", "openclaw.CMD")
+            if os.path.isfile(_bundled):
+                self._openclaw_bin = _bundled
+                _nodejs_dir = os.path.dirname(_bundled)
+                if _nodejs_dir not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = _nodejs_dir + os.pathsep + os.environ.get("PATH", "")
         if not self._openclaw_bin:
             self._status = EngineStatus.NOT_INSTALLED
             self._error_hint = "Requires Node.js >= 22. Click Install or run: npm install -g openclaw@latest"
@@ -2784,14 +2792,14 @@ class OpenClawEngine(EngineBase):
             env["OPENROUTER_API_KEY"] = settings.openrouter_api_key
         try:
             logging.info("Starting OpenClaw gateway...")
-            cmd = [self._openclaw_bin, "gateway", "--port", str(settings.openclaw_gateway_port), "--host", "127.0.0.1"]
+            cmd = [self._openclaw_bin, "gateway", "--port", str(settings.openclaw_gateway_port), "--bind", "loopback", "--allow-unconfigured", "--auth", "none", "--dev"]
             self._gateway_proc = subprocess.Popen(
                 cmd,
                 env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             # Poll for gateway readiness
-            for _ in range(30):
+            for _ in range(15):
                 await asyncio.sleep(1)
                 try:
                     resp = await self._http_client.get("/", timeout=3.0, headers=_hdr)
@@ -2800,7 +2808,7 @@ class OpenClawEngine(EngineBase):
                         return True
                 except Exception:
                     continue
-            logging.warning("OpenClaw gateway did not become ready after 30s")
+            logging.warning("OpenClaw gateway did not become ready after 15s")
         except Exception as e:
             logging.warning("Failed to start OpenClaw gateway: %s", e)
         return False
