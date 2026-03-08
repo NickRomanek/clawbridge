@@ -62,6 +62,7 @@ _LOADING_PAGE_HTML = b'''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="refresh" content="2">
 <title>ClawBridge</title>
 <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEuUlEQVR4nO1Wa0xTZxj+vsOhRdrCWstVLrZcS4EOKSow5DqyONymWROzxF0cmzOZDnQzmVtyWrf9MM4L29wwG/7gJyUDSUQMmchmGMx1AdIBMhBEoKU3W0tp6eV8yykwi6MtaJwu8UnOj/Od9zzP817Odz4AnuL/DAIhjCAI7D8VRQhBHw/hQxMiHySez9KIBlrToDrjR8WYoII4F9yAUMCDGMchhMhz4f57DwY3wYHWYXouy1nJYjONc/NW+qzdzs5LiFW3fVFnRAi1uoNW4PDGiy858yrsAalUCtV31uU4thcmdM2Y8i2zloBJjT7IiWN95MRkS1bFe4ng4rm/wBqArUYYUIMGIWpR6jYFOhxB9b+P8Hq6rhvi1jNGDXrj98quP2Jwgahkc3rKG3HZO6OWkl6VAbAaSKWUSSiIiNTqjKYtxhnVevPsXJcuOHIos7goPSUmLN5m0Lw5b7EkTTANWolEQs2D/8QAALjbqr8qSKVUNuTt6cmI8MTkOGWP0hbLYb49MzJoZVhnGeO9/TEkl9NE50Voy8JF0XL5VxMAUK31X13cv0cEgQySZWWSUDugpYOt5SmpM2Y4rTdFD1xutVMjFMzm6jbmZDIsPEEC7D0rkjRIptL+lCKZbIHgIVsAKQLMTGPtFL5fLTY2N124Na16NiEtLlD82uvohQN78cTM1DBF02U+Z0p1aePBw9vHarBymUxGAuS/C7g/9fj4Qjqd7nwJ40a/S6qnOiYY7D3sJFYIZ+bGkTktbwfUzRvUPT9fYz5XfqJfZ95SEmZEGJt7UJT9orUPws7FYfTqBPoSp15MyijlM7kRL9+dUo852FEnowpK+EKnuur8mU9qEJFGC5AN2EkAgOTwqZM38fBDd69cuEbDyNPBDJqANA2fVigUc0tc1Cd//7xhPtOHEISxGLbCrSKytuZjI0QYP8Zp+a7u9NFLV7WzX7d/2P9Lm8n+U6/J+lnDl9V1cVb98LydjFR2N44LU5PwsLA81+I+g7wNO+5Dn3IMng/M0vRPTNvYz5RakzdlaW0MblTlmeZaZnZOQYZ4A+5CAeDir7fzbcPKbSy+ABParOpe5SBXr9er2trOzkMpB/PVAmxRyVsrMFmnzHlz+IZGnCtWqJTdQ2DesI2WnFVclL3BnLIOXMlkgU6RmEc3MKNyTarx2JHe679VHfumf2hgcNBXdZcZgF72AYlE4jbGZgRrPjj2baMwU+SgR6dzdpXFj74SDDYXQFiaC2HRWxz4TvGOnEAdDCFLSvMEvKiIo/zo0BE3icy9ifk2sASEUABC6J81uVzuov73HR27u3VTt1zaaVWqy2HW5NPApxDCkQaEaBKEAiCEP/CCQCM0G52q0VFhILKq2tubVQtnheXJeVb7X5WnxD0N3AsiMISUtD37jrRU7Pv8Tkh5NWchjsAIogOnDib7T8h37a46jvZW7j+EUQwL27FfYJ43EEKSujydUe1BSIogTLfX1x5/NSbEJS+NCYqm4giCirhKyiAk1aN9zlBs7qP687WnSBJAIJdTX+eDAa0wlMtMrZTJvcW1n4pWC7eJhdKuJAILCQJf1dHtUQGtQfSxGASP2h163FkhhOCTXdqneBLxNxgGLw4/MHD9AAAAAElFTkSuQmCC">
 <style>
@@ -136,6 +137,10 @@ body{background:#18191c;color:#dbdee1;display:flex;justify-content:center;
       }
     }).catch(function(){setTimeout(pollHealth,300)});
   }
+
+  // Cancel the meta-refresh fallback now that JS is running
+  var mr=document.querySelector('meta[http-equiv="refresh"]');
+  if(mr) mr.remove();
 
   pollStatus();
 })();
@@ -223,6 +228,8 @@ try:
         except Exception:
             pass
         _time_wait.sleep(0.2)
+    # Extra settle time: ensure loading server thread is fully ready for browser request
+    _time_wait.sleep(0.3)
     print(f"  Loading page active on http://127.0.0.1:{_loading_port}")
 except OSError:
     _loading_server = None  # Port in use — skip (uvicorn will report the error later)
@@ -2752,7 +2759,7 @@ class OpenClawEngine(EngineBase):
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     def _configure_openclaw_gateway(self, settings) -> None:
-        """Ensure ~/.openclaw/openclaw.json has chat endpoint enabled and API keys."""
+        """Ensure OpenClaw gateway config has chat endpoint enabled, auth profiles, and default model."""
         import stat
         oc_dir = os.path.join(os.path.expanduser("~"), ".openclaw")
         oc_path = os.path.join(oc_dir, "openclaw.json")
@@ -2761,49 +2768,90 @@ class OpenClawEngine(EngineBase):
             # Restrict directory to owner only on POSIX (API keys stored inside)
             if sys.platform != "win32":
                 os.chmod(oc_dir, stat.S_IRWXU)
+
+            # ── 1. openclaw.json: enable chatCompletions + set default model ──
             cfg = {}
             if os.path.isfile(oc_path):
                 with open(oc_path, "r", encoding="utf-8") as f:
                     cfg = json.loads(f.read())
                 if not isinstance(cfg, dict):
                     cfg = {}
-            changed = False
-            # Enable /v1/chat/completions endpoint (deep-merge, don't overwrite)
+            cfg_changed = False
+            # Enable /v1/chat/completions endpoint
             gw = cfg.setdefault("gateway", {})
             http = gw.setdefault("http", {})
             endpoints = http.setdefault("endpoints", {})
             cc = endpoints.setdefault("chatCompletions", {})
             if not cc.get("enabled"):
                 cc["enabled"] = True
-                changed = True
-            # Inject API keys into env block (only if non-empty and not already set)
-            env_block = cfg.setdefault("env", {})
-            for key_name, key_val in [
-                ("ANTHROPIC_API_KEY", settings.anthropic_api_key),
-                ("OPENAI_API_KEY", settings.openai_api_key),
-                ("OPENROUTER_API_KEY", settings.openrouter_api_key),
+                cfg_changed = True
+            # Set default agent model based on available keys
+            agents = cfg.setdefault("agents", {})
+            defaults = agents.setdefault("defaults", {})
+            if not defaults.get("model"):
+                # Pick a model that matches the available API key
+                if settings.openrouter_api_key:
+                    defaults["model"] = "openrouter/anthropic/claude-sonnet-4"
+                elif settings.anthropic_api_key:
+                    defaults["model"] = "anthropic/claude-sonnet-4"
+                elif settings.openai_api_key:
+                    defaults["model"] = "openai/gpt-4o"
+                cfg_changed = True
+            if cfg_changed:
+                self._atomic_json_write(oc_dir, oc_path, cfg)
+                logging.info("OpenClaw: updated %s (chatCompletions, default model)", oc_path)
+
+            # ── 2. auth-profiles.json: write API keys to per-agent auth store ──
+            auth_dir = os.path.join(oc_dir, "agents", "main", "agent")
+            auth_path = os.path.join(auth_dir, "auth-profiles.json")
+            os.makedirs(auth_dir, exist_ok=True)
+            if sys.platform != "win32":
+                # Secure the entire agents tree
+                for _d in [os.path.join(oc_dir, "agents"), os.path.join(oc_dir, "agents", "main"),
+                           os.path.join(oc_dir, "agents", "main", "agent")]:
+                    if os.path.isdir(_d):
+                        os.chmod(_d, stat.S_IRWXU)
+            auth_cfg = {}
+            if os.path.isfile(auth_path):
+                with open(auth_path, "r", encoding="utf-8") as f:
+                    auth_cfg = json.loads(f.read())
+                if not isinstance(auth_cfg, dict):
+                    auth_cfg = {}
+            profiles = auth_cfg.setdefault("profiles", {})
+            auth_changed = False
+            # Map ClawBridge API keys to OpenClaw auth profiles
+            for provider, key_val in [
+                ("openrouter", settings.openrouter_api_key),
+                ("anthropic", settings.anthropic_api_key),
+                ("openai", settings.openai_api_key),
             ]:
-                if key_val and not env_block.get(key_name):
-                    env_block[key_name] = key_val
-                    changed = True
-            if changed:
-                import tempfile
-                fd, tmp_path = tempfile.mkstemp(dir=oc_dir, suffix=".json")
-                try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        f.write(json.dumps(cfg, indent=2))
-                    if sys.platform != "win32":
-                        os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-                    os.replace(tmp_path, oc_path)
-                except Exception:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-                    raise
-                logging.info("OpenClaw: updated %s (enabled chatCompletions, synced API keys)", oc_path)
+                if key_val and provider not in profiles:
+                    profiles[provider] = {"provider": provider, "apiKey": key_val}
+                    auth_changed = True
+            if auth_changed:
+                self._atomic_json_write(auth_dir, auth_path, auth_cfg)
+                logging.info("OpenClaw: wrote auth profiles to %s", auth_path)
+
         except Exception as e:
             logging.warning("OpenClaw: failed to configure gateway config: %s", e)
+
+    @staticmethod
+    def _atomic_json_write(parent_dir: str, target_path: str, data: dict) -> None:
+        """Atomically write JSON with tight file permissions on POSIX."""
+        import stat, tempfile
+        fd, tmp_path = tempfile.mkstemp(dir=parent_dir, suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(data, indent=2))
+            if sys.platform != "win32":
+                os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+            os.replace(tmp_path, target_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _kill_port_process(self, port: int) -> None:
         """Kill any process listening on *port* (except our own tracked gateway)."""
