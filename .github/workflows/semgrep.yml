@@ -1,0 +1,43 @@
+name: Security Scan (Semgrep)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep (SAST + Secrets)
+        run: |
+          semgrep scan \
+            --config auto \
+            --config p/python \
+            --config p/secrets \
+            --config p/owasp-top-ten \
+            --error \
+            --severity ERROR \
+            --json --output semgrep-results.json \
+            --text \
+            clawbridge.py clawbridge_mcp.py
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: semgrep-results.json
+          retention-days: 30

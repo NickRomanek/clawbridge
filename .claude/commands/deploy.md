@@ -4,8 +4,9 @@ Run the complete ClawBridge release process. This is the ONLY way to deploy — 
 
 ### Pre-flight checks
 
-1. Run smoke tests against the running server: `python tests/smoke_test.py`
-2. If tests fail, STOP and fix before deploying.
+1. Confirm `/e2e` and `/security` have been run this session (or run them now).
+2. Run smoke tests against the running server: `python tests/smoke_test.py`
+3. If any tests or security checks fail, STOP and fix before deploying.
 
 ### Version bump
 
