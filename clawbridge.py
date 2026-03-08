@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.5.8"
+__version__ = "0.5.9"
 
 import hmac
 import os
