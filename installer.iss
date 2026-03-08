@@ -7,7 +7,7 @@
 ; Expects dist\ClawBridge\ to exist (run build.py first).
 
 #define MyAppName "ClawBridge"
-#define MyAppVersion "0.5.10"
+#define MyAppVersion "0.5.11"
 #define MyAppPublisher "ClawBridge"
 #define MyAppURL "https://clawbridge.ai"
 #define MyAppExeName "ClawBridge.vbs"
@@ -32,7 +32,7 @@ SolidCompression=yes
 MinVersion=10.0
 ; Admin not required (installs to user folder by default)
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+PrivilegesRequiredOverridesAllowed=commandline
 ; Appearance
 WizardStyle=modern
 SetupIconFile=clawbridge.ico
