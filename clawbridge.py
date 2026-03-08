@@ -142,6 +142,9 @@ body{background:#18191c;color:#dbdee1;display:flex;justify-content:center;
   var mr=document.querySelector('meta[http-equiv="refresh"]');
   if(mr) mr.remove();
 
+  // Ensure the page title is set (some browsers show URL until JS runs)
+  document.title="ClawBridge";
+
   pollStatus();
 })();
 </script>
@@ -228,8 +231,9 @@ try:
         except Exception:
             pass
         _time_wait.sleep(0.2)
-    # Extra settle time: ensure loading server thread is fully ready for browser request
-    _time_wait.sleep(0.3)
+    # Extra settle time: ensure loading server thread is fully ready for browser request.
+    # On fresh installs the system may be busy (Defender scanning, etc.), so allow more time.
+    _time_wait.sleep(1.0)
     print(f"  Loading page active on http://127.0.0.1:{_loading_port}")
 except OSError:
     _loading_server = None  # Port in use — skip (uvicorn will report the error later)
@@ -2788,14 +2792,16 @@ class OpenClawEngine(EngineBase):
             # Set default agent model based on available keys
             agents = cfg.setdefault("agents", {})
             defaults = agents.setdefault("defaults", {})
-            if not defaults.get("model"):
-                # Pick a model that matches the available API key
-                if settings.openrouter_api_key:
-                    defaults["model"] = "openrouter/anthropic/claude-sonnet-4"
-                elif settings.anthropic_api_key:
-                    defaults["model"] = "anthropic/claude-sonnet-4"
-                elif settings.openai_api_key:
-                    defaults["model"] = "openai/gpt-4o"
+            # Pick a model that matches the available API key (update if key changed)
+            desired_model = None
+            if settings.openrouter_api_key:
+                desired_model = "openrouter/anthropic/claude-sonnet-4"
+            elif settings.anthropic_api_key:
+                desired_model = "anthropic/claude-sonnet-4"
+            elif settings.openai_api_key:
+                desired_model = "openai/gpt-4o"
+            if desired_model and defaults.get("model") != desired_model:
+                defaults["model"] = desired_model
                 cfg_changed = True
             if cfg_changed:
                 self._atomic_json_write(oc_dir, oc_path, cfg)
@@ -2825,9 +2831,11 @@ class OpenClawEngine(EngineBase):
                 ("anthropic", settings.anthropic_api_key),
                 ("openai", settings.openai_api_key),
             ]:
-                if key_val and provider not in profiles:
-                    profiles[provider] = {"provider": provider, "apiKey": key_val}
-                    auth_changed = True
+                if key_val:
+                    existing = profiles.get(provider, {})
+                    if existing.get("apiKey") != key_val:
+                        profiles[provider] = {"provider": provider, "apiKey": key_val}
+                        auth_changed = True
             if auth_changed:
                 self._atomic_json_write(auth_dir, auth_path, auth_cfg)
                 logging.info("OpenClaw: wrote auth profiles to %s", auth_path)
