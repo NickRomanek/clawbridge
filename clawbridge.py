@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.5.4"
+__version__ = "0.5.5"
 
 import hmac
 import os
@@ -1765,6 +1765,8 @@ def get_workflow_manager() -> WorkflowManager:
 def init_db():
     """Initialize SQLite database for task persistence."""
     conn = sqlite3.connect(Settings.db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
                  (id TEXT PRIMARY KEY, prompt TEXT, engine TEXT, status TEXT,
@@ -2665,7 +2667,7 @@ class BrowserUseEngine(EngineBase):
             task.status = TaskStatus.COMPLETE
         except Exception as e:
             task.status = TaskStatus.ERROR
-            task.error = str(e)
+            task.error = safety_redact(str(e))
         finally:
             self._status = EngineStatus.AVAILABLE
         task.updated_at = datetime.now(timezone.utc)
@@ -2782,7 +2784,7 @@ class OpenClawEngine(EngineBase):
             env["OPENROUTER_API_KEY"] = settings.openrouter_api_key
         try:
             logging.info("Starting OpenClaw gateway...")
-            cmd = [self._openclaw_bin, "gateway", "--port", str(settings.openclaw_gateway_port)]
+            cmd = [self._openclaw_bin, "gateway", "--port", str(settings.openclaw_gateway_port), "--host", "127.0.0.1"]
             self._gateway_proc = subprocess.Popen(
                 cmd,
                 env=env,
@@ -2804,7 +2806,7 @@ class OpenClawEngine(EngineBase):
         return False
 
     async def run_task(self, task: Task) -> Task:
-        if self._status in (EngineStatus.NOT_INSTALLED, EngineStatus.ERROR, EngineStatus.STOPPED):
+        if self._status in (EngineStatus.NOT_INSTALLED, EngineStatus.ERROR, EngineStatus.STOPPED, EngineStatus.NO_API_KEY):
             task.status = TaskStatus.ERROR
             task.error = f"OpenClaw engine not available ({self._error_hint or 'unknown'})"
             return task
@@ -2871,7 +2873,7 @@ class OpenClawEngine(EngineBase):
             task.status = TaskStatus.COMPLETE
         except Exception as e:
             task.status = TaskStatus.ERROR
-            task.error = str(e)
+            task.error = safety_redact(str(e))
         finally:
             self._status = EngineStatus.AVAILABLE
         task.updated_at = datetime.now(timezone.utc)
@@ -5953,7 +5955,7 @@ class ComputerUseEngine(EngineBase):
                 except Exception:
                     pass
         except Exception as e:
-            task.status = TaskStatus.ERROR; task.error = str(e)
+            task.status = TaskStatus.ERROR; task.error = safety_redact(str(e))
         finally:
             self._status = EngineStatus.AVAILABLE
             # Clean up CDP bridge connection
@@ -10602,16 +10604,26 @@ def create_app() -> FastAPI:
     _RATE_LIMIT_PATHS: dict[str, tuple[int, float]] = {
         "/api/auth/login": (5, 60.0),   # 5 per 60s
         "/api/tasks": (10, 60.0),        # 10 per 60s
+        "/api/webhook/": (20, 60.0),     # 20 per 60s
     }
 
     class RateLimitMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
-            if request.method == "POST" and request.url.path in _RATE_LIMIT_PATHS:
-                max_req, window = _RATE_LIMIT_PATHS[request.url.path]
-                client_ip = request.client.host if request.client else "unknown"
-                key = f"rl:{request.url.path}:{client_ip}"
-                if not _rate_limit(key, max_req, window):
-                    return JSONResponse({"error": "Too many requests. Try again later."}, status_code=429, headers={"Retry-After": str(int(window))})
+            if request.method == "POST":
+                path = request.url.path
+                # Check exact match first, then prefix match (for /api/webhook/{id})
+                limit = _RATE_LIMIT_PATHS.get(path)
+                if not limit:
+                    for prefix, lim in _RATE_LIMIT_PATHS.items():
+                        if prefix.endswith("/") and path.startswith(prefix):
+                            limit = lim
+                            break
+                if limit:
+                    max_req, window = limit
+                    client_ip = request.client.host if request.client else "unknown"
+                    key = f"rl:{path}:{client_ip}"
+                    if not _rate_limit(key, max_req, window):
+                        return JSONResponse({"error": "Too many requests. Try again later."}, status_code=429, headers={"Retry-After": str(int(window))})
             return await call_next(request)
 
     app.add_middleware(RateLimitMiddleware)
