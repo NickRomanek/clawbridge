@@ -46,7 +46,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "startuptask"; Description: "Start ClawBridge when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked
-Name: "installopenclaw"; Description: "Install OpenClaw AI engine (adds memory && skills support, can also install later from dashboard)"; GroupDescription: "Optional Engines:"; Flags: unchecked
+Name: "installopenclaw"; Description: "Install OpenClaw AI engine (adds memory && skills support, can also install later from dashboard)"; GroupDescription: "Optional Engines:"
 
 [Files]
 ; Bundle everything from the portable build
