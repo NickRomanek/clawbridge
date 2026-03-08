@@ -2706,6 +2706,8 @@ class OpenClawEngine(EngineBase):
         self._gateway_proc = None
         self._node_version = None
         self._gateway_token = None  # Auto-read from ~/.openclaw/openclaw.json
+        self._gateway_lock = None  # asyncio.Lock — created on first use
+        self._gateway_ready = None  # asyncio.Event — set when gateway is confirmed ready
 
     async def initialize(self) -> None:
         import shutil
@@ -2766,9 +2768,11 @@ class OpenClawEngine(EngineBase):
             if ready:
                 self._status = EngineStatus.AVAILABLE
                 self._error_hint = ""
+                logging.info("OpenClaw: gateway warmup complete — available")
             else:
                 self._status = EngineStatus.ERROR
                 self._error_hint = "Gateway failed to start"
+                logging.warning("OpenClaw: gateway warmup failed")
             # Broadcast updated status to dashboard
             try:
                 mgr = get_manager()
@@ -2918,14 +2922,45 @@ class OpenClawEngine(EngineBase):
             logging.debug("OpenClaw: port cleanup on %d failed: %s", port, e)
 
     async def _ensure_gateway(self) -> bool:
-        """Check if OpenClaw gateway is running; start it if not."""
+        """Check if OpenClaw gateway is running; start it if not.
+
+        Uses a lock to prevent concurrent startup attempts from competing
+        (e.g. warmup vs run_task calling this simultaneously).
+        """
         if not self._http_client:
             return False
+        # Lazy-init lock/event (must be on running event loop)
+        if self._gateway_lock is None:
+            self._gateway_lock = asyncio.Lock()
+            self._gateway_ready = asyncio.Event()
+        # If gateway is already confirmed ready, fast-path
+        if self._gateway_ready.is_set():
+            # Quick health check to confirm it's still alive
+            try:
+                resp = await self._http_client.get("/v1/models", timeout=3.0, headers=self._auth_headers())
+                if resp.status_code in (200, 401):
+                    return True
+            except Exception:
+                self._gateway_ready.clear()  # Gateway died, fall through to restart
+        # If another coroutine is already starting the gateway, wait for it
+        if self._gateway_lock.locked():
+            try:
+                await asyncio.wait_for(self._gateway_ready.wait(), timeout=45)
+                return self._gateway_ready.is_set()
+            except asyncio.TimeoutError:
+                return False
+        async with self._gateway_lock:
+            return await self._start_gateway()
+
+    async def _start_gateway(self) -> bool:
+        """Internal: actually start the gateway (called under lock)."""
         _hdr = self._auth_headers()
         # Try connecting to the gateway root (serves web UI)
         try:
             resp = await self._http_client.get("/", timeout=3.0, headers=_hdr)
             if resp.status_code == 200:
+                if self._gateway_ready:
+                    self._gateway_ready.set()
                 return True
         except Exception:
             pass
@@ -2933,6 +2968,8 @@ class OpenClawEngine(EngineBase):
         try:
             resp = await self._http_client.get("/v1/models", timeout=3.0, headers=_hdr)
             if resp.status_code in (200, 401):  # 401 = running but needs auth
+                if self._gateway_ready:
+                    self._gateway_ready.set()
                 return True
         except Exception:
             pass
@@ -2976,6 +3013,8 @@ class OpenClawEngine(EngineBase):
                     resp = await self._http_client.get("/v1/models", timeout=3.0, headers=_hdr)
                     if resp.status_code in (200, 401):
                         logging.info("OpenClaw gateway started successfully")
+                        if self._gateway_ready:
+                            self._gateway_ready.set()
                         return True
                 except Exception:
                     continue
