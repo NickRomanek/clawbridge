@@ -2753,14 +2753,20 @@ class OpenClawEngine(EngineBase):
 
     def _configure_openclaw_gateway(self, settings) -> None:
         """Ensure ~/.openclaw/openclaw.json has chat endpoint enabled and API keys."""
+        import stat
         oc_dir = os.path.join(os.path.expanduser("~"), ".openclaw")
         oc_path = os.path.join(oc_dir, "openclaw.json")
         try:
             os.makedirs(oc_dir, exist_ok=True)
+            # Restrict directory to owner only on POSIX (API keys stored inside)
+            if sys.platform != "win32":
+                os.chmod(oc_dir, stat.S_IRWXU)
             cfg = {}
             if os.path.isfile(oc_path):
                 with open(oc_path, "r", encoding="utf-8") as f:
                     cfg = json.loads(f.read())
+                if not isinstance(cfg, dict):
+                    cfg = {}
             changed = False
             # Enable /v1/chat/completions endpoint (deep-merge, don't overwrite)
             gw = cfg.setdefault("gateway", {})
@@ -2781,8 +2787,20 @@ class OpenClawEngine(EngineBase):
                     env_block[key_name] = key_val
                     changed = True
             if changed:
-                with open(oc_path, "w", encoding="utf-8") as f:
-                    f.write(json.dumps(cfg, indent=2))
+                import tempfile
+                fd, tmp_path = tempfile.mkstemp(dir=oc_dir, suffix=".json")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(json.dumps(cfg, indent=2))
+                    if sys.platform != "win32":
+                        os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+                    os.replace(tmp_path, oc_path)
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
                 logging.info("OpenClaw: updated %s (enabled chatCompletions, synced API keys)", oc_path)
         except Exception as e:
             logging.warning("OpenClaw: failed to configure gateway config: %s", e)
@@ -2798,8 +2816,10 @@ class OpenClawEngine(EngineBase):
                     creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
                 )
                 for _line in _netstat.stdout.splitlines():
-                    if f":{port}" in _line and "LISTENING" in _line:
-                        _pid = int(_line.strip().split()[-1])
+                    _parts = _line.split()
+                    # Match exact port: local addr field ends with ":PORT"
+                    if len(_parts) >= 5 and _parts[1].endswith(f":{port}") and _parts[3] == "LISTENING":
+                        _pid = int(_parts[4])
                         if _pid > 0 and _pid != own_pid:
                             _sp.run(
                                 ["taskkill", "/F", "/PID", str(_pid)],
