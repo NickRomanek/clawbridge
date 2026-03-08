@@ -274,7 +274,7 @@ def _open_app_mode(url: str) -> None:
     for exe in candidates:
         if os.path.isfile(exe):
             try:
-                subprocess.Popen([exe, f"--app={url}"], **popen_kwargs)
+                subprocess.Popen([exe, f"--app={url}"], **popen_kwargs)  # nosemgrep: dangerous-subprocess-use-tainted-env-args  # url is always http://127.0.0.1:PORT
                 return
             except Exception:
                 continue
@@ -11935,9 +11935,13 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
             conn.close()
             raise HTTPException(404, "Item not found")
         _now = datetime.utcnow().isoformat()
-        for field in ("status", "notes", "position", "title", "phase", "description"):
+        _ALLOWED_FIELDS = {"status", "notes", "position", "title", "phase", "description"}
+        for field in _ALLOWED_FIELDS:
             if field in body:
-                conn.execute(f"UPDATE planner_items SET {field} = ?, updated_at = ? WHERE id = ?", (body[field], _now, item_id))
+                conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query  # field is from hardcoded allowlist
+                    f"UPDATE planner_items SET {field} = ?, updated_at = ? WHERE id = ?",
+                    (body[field], _now, item_id),
+                )
         conn.commit()
         conn.close()
         return {"ok": True}
