@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 import hmac
 import os
@@ -152,7 +152,6 @@ class _LoadingHandler(BaseHTTPRequestHandler):
             body = _json.dumps(_startup_status).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1857,38 +1856,36 @@ def init_db():
         _now = datetime.utcnow().isoformat()
         # (id, phase, title, notes, position, status)
         _seed_items = [
-            # Observability — get data on how well things work
-            ("obs-1", "observability", "Run first benchmark baseline", "python -m benchmarks run --tags smoke to start small, then full suite", 0, "pending"),
-            ("obs-2", "observability", "Review benchmark results and identify failure patterns", "Look for: which engines fail most, which task types struggle, cost per task", 1, "pending"),
-            ("obs-3", "observability", "Failure analysis endpoint + auto-populate on error", "analyze_task_failure() detects repeated actions, stale loops, max-steps. Auto-stored in task result.", 2, "done"),
-            ("obs-4", "observability", "Failure timeline view in dashboard history", "Color-coded step timeline (green/yellow/red), diagnosis text, token waste count on error tasks", 3, "done"),
-            # Reliability — make tasks actually succeed
-            ("rel-1", "reliability", "Post-action hint when screen unchanged", "Injects 'screen appears unchanged' note at first stale occurrence. Zero-cost (no API call).", 0, "done"),
-            ("rel-2", "reliability", "Action-repetition detection (3 identical actions)", "Tracks last 3 actions. Same action at same coordinates 3x fast-tracks stale counter + warning.", 1, "done"),
-            ("rel-3", "reliability", "Earlier diagnostic trigger (stale=2 for full+standard)", "Haiku diagnostic fires at stale=2 instead of 3, now works for standard profile too (~$0.001).", 2, "done"),
-            ("rel-4", "reliability", "Test scaffolding profiles against same benchmark tasks", "Run same 10 tasks on full/standard/minimal/raw. Compare success rate, cost, steps. Find sweet spot.", 3, "pending"),
-            # Benchmarks — build the test suite
-            ("bench-1", "benchmarks", "Fix any broken benchmark tasks, get clean first run", "Check tasks/*.json for invalid selectors, dead URLs. Goal: all tasks run without crashes.", 0, "pending"),
-            ("bench-2", "benchmarks", "Add practical tasks: price comparison, coupon finding, job search", "Tasks real users would pay for. Compare prices on 3 sites, find coupons on RetailMeNot, Indeed job search.", 1, "pending"),
-            ("bench-3", "benchmarks", "Add creative tasks: Canva, PowerPoint, Clipchamp, Paint", "Tasks that show visual reasoning. Create a presentation, design a social post, edit a video title card.", 2, "pending"),
-            ("bench-4", "benchmarks", "Add 'can it do this?' tasks: reservations, gov sites, support tickets", "The tasks people wonder about. Restaurant booking, DMV appointment, filing a support ticket.", 3, "pending"),
-            ("bench-5", "benchmarks", "Set up Android Studio emulator for mobile tasks", "Install Android Studio, create Pixel emulator. Goal: ClawBridge can see and control the emulator window.", 4, "pending"),
-            ("bench-6", "benchmarks", "Test computer-use on Android emulator window", "Try: open Settings, use Chrome, install app from Play Store. Document what works and what doesn't.", 5, "pending"),
-            ("bench-7", "benchmarks", "Cross-tool comparison: ClawBridge vs browser-use library", "Same 10 browser tasks. Measure: success rate, avg steps, cost, time. Be fair and honest.", 6, "pending"),
-            ("bench-8", "benchmarks", "Cross-tool comparison: ClawBridge vs Claude Cowork", "Same 10 tasks (mix of browser + desktop). Document differences in approach and capability.", 7, "pending"),
-            # Content — show the world, YouTube-first strategy
-            ("cont-1", "content", "Record first demo: AI completes a real task end-to-end", "Use OBS or Windows Game Bar. Show: open dashboard -> type task -> watch it run -> success. Pick something relatable (book a reservation, compare prices, fill a form). 30-60s. Don't overthink it.", 0, "pending"),
-            ("cont-2", "content", "Record comparison: AI vs doing it manually", "Side-by-side or before/after. You do a task manually (timed), then ClawBridge does it. Show the speed difference. This is your hook content.", 1, "pending"),
-            ("cont-3", "content", "Create YouTube channel", "Name: 'Computer Use Lab' or your own brand. Professional banner, about section, links to clawbridge.ai and GitHub. This is your main platform.", 2, "pending"),
-            ("cont-4", "content", "Upload first 2 videos to YouTube + cross-post clips", "Title formula: 'I Made AI [Do X] on My Desktop'. Add timestamps, description, tags. Cross-post 30s clips to Twitter/X (native upload, full link in reply).", 3, "pending"),
-            ("cont-5", "content", "Run full benchmark suite and build comparison data", "python -m benchmarks run + benchmarks report. Also test same tasks on Claude Cowork manually. Build a spreadsheet with success/cost/time columns.", 4, "pending"),
-            ("cont-6", "content", "Record THE comparison video: 'I tested N tools on the same tasks'", "This is your breakout content. Same 10 tasks on ClawBridge, Cowork, raw browser-use. Show each attempt. Results table at end. Be fair, show failures too. 5-10 min YouTube, 60s highlight clip for socials.", 5, "pending"),
-            ("cont-7", "content", "Write first blog post with benchmark charts", "Data-driven comparison. Include bar charts, cost table, embed video. Publish to clawbridge.ai/blog. SEO title: 'Computer Use Tools Compared: [Year] Benchmark Results'.", 6, "pending"),
-            ("cont-8", "content", "Post to Reddit with genuine findings", "r/selfhosted, r/automation, r/Python, r/artificial. Title: 'I tested N computer use tools - here are the results'. Share real data, not promo. Link to blog/video.", 7, "pending"),
-            ("cont-9", "content", "Set up weekly content rhythm", "Tuesday = record, Wednesday = edit + post. 1 YouTube video/week, 1 blog every 2 weeks. Consistency beats quality early on. Repurpose: YouTube -> Twitter clip -> blog embed.", 8, "pending"),
-            ("cont-10", "content", "Product Hunt launch", "Prepare: 5 screenshots, demo GIF, tagline, maker comment. Launch Tuesday 12:01 AM PT. Have supporters ready to upvote + comment early.", 9, "pending"),
-            ("cont-11", "content", "Record mobile automation demo (Android emulator)", "Unique content nobody else has. Show ClawBridge controlling Android apps via emulator. Great for 'Can AI use your phone?' angle.", 10, "pending"),
-            ("cont-12", "content", "Open-source the benchmark suite", "Separate repo. Credibility builder, community contributions. Include runner, scorer, test sites, tasks. MIT license.", 11, "pending"),
+            # ── MEASURE: Run real tasks, collect data (Sprint 1, ~1 week) ──
+            ("meas-1", "measure", "Pick 10 benchmark tasks across 3 categories", "Browser (price lookup, weather, news summary), Desktop (Notepad, file rename, settings change), Interactive (form fill, login flow, search+click). These 10 become your standard test set for all comparisons.", 0, "pending"),
+            ("meas-2", "measure", "Run all 10 tasks, record each one", "Screen-record with OBS/Game Bar while running. Each recording = raw video content. Note cost, time, pass/fail in a spreadsheet. This is your baseline.", 1, "pending"),
+            ("meas-3", "measure", "Run same 10 on Claude Cowork (or other tool)", "Fair comparison. Same tasks, same machine. Record these too. You now have 20 videos and a comparison dataset.", 2, "pending"),
+            ("meas-4", "measure", "Review failures and identify top 3 fixable issues", "Use failure analysis in dashboard. Look for: stuck loops, wrong element clicked, navigation failures. Pick the 3 that would flip the most fails to passes.", 3, "pending"),
+            # ── FIX: Improve success rate based on data (Sprint 2, ~1 week) ──
+            ("fix-1", "fix", "Fix top failure: the one that affects the most tasks", "Could be: element matching, stale detection, navigation timing, focus management. Fix it, re-run the failing tasks to verify.", 0, "pending"),
+            ("fix-2", "fix", "Fix second failure", "Same pattern: fix, re-run, verify. Update the spreadsheet with new results.", 1, "pending"),
+            ("fix-3", "fix", "Fix third failure", "After 3 fixes, re-run all 10 tasks. Compare before/after success rate. This delta is your story.", 2, "pending"),
+            ("fix-4", "fix", "Test scaffolding profiles on the same 10 tasks", "Run on full/standard/minimal/raw. Compare success rate, cost, steps. Find the sweet spot. Another video per profile = 4 more videos.", 3, "pending"),
+            # ── SHOW: Turn data into content (Sprint 3, ~1 week) ──
+            ("show-1", "show", "Create YouTube channel + social accounts", "Keep it simple. Banner, about section, links to clawbridge.ai and GitHub. Don't spend more than 30 min on this.", 0, "pending"),
+            ("show-2", "show", "Publish your best 5-10 task recordings as short videos", "Trim to 60-90s each. Title: 'AI does [X] on my desktop'. Publish daily over 1-2 weeks. Cross-post 30s clips to Twitter/X. Volume > polish.", 1, "pending"),
+            ("show-3", "show", "Write blog post with benchmark comparison table", "The spreadsheet data becomes a blog post. Bar charts for success rate, cost table, embedded videos. SEO title: 'Computer Use Agents Compared: [Year] Benchmarks'.", 2, "pending"),
+            ("show-4", "show", "Post comparison findings to Reddit", "r/selfhosted, r/automation, r/Python, r/artificial. Title: 'I tested N computer-use tools on the same tasks'. Share real data, show failures too. Link to blog.", 3, "pending"),
+            # ── SHIP: Release and distribute (Sprint 4, ~1 week) ──
+            ("ship-1", "ship", "Cut a release with all fixes from the FIX sprint", "Version bump, changelog, build installer, tag, push. The fixes from Sprint 2 become a real release.", 0, "pending"),
+            ("ship-2", "ship", "Product Hunt launch", "5 screenshots, demo GIF, tagline, maker comment. Use your best benchmark video as the hero. Launch Tuesday 12:01 AM PT.", 1, "pending"),
+            ("ship-3", "ship", "Open-source the benchmark suite", "Separate repo. Tasks, runner, scorer. Credibility builder. Others can run your benchmarks on their setups.", 2, "pending"),
+            # ── GROW: Repeat the loop, expand scope (ongoing) ──
+            ("grow-1", "grow", "Add 5 more ambitious tasks to the benchmark set", "Canva design, PowerPoint creation, multi-site price comparison, job application, support ticket. These are 'can it actually do this?' tasks.", 0, "pending"),
+            ("grow-2", "grow", "Record the comparison video: same tasks across tools", "This is your breakout content. Same 10+ tasks on multiple tools. Results table at end. Be fair. 5-10 min YouTube + 60s highlight.", 1, "pending"),
+            ("grow-3", "grow", "Explore Android emulator automation", "Install Android Studio, create Pixel emulator. If ClawBridge can see the emulator window, this is unique content nobody else has.", 2, "pending"),
+            # ── DONE: Completed milestones ──
+            ("done-1", "done", "Failure analysis endpoint + auto-populate on error", "analyze_task_failure() detects repeated actions, stale loops, max-steps. Auto-stored in task result.", 0, "done"),
+            ("done-2", "done", "Failure timeline view in dashboard history", "Color-coded step timeline, diagnosis text, token waste count on error tasks.", 1, "done"),
+            ("done-3", "done", "Post-action hint when screen unchanged", "Zero-cost stale detection at first occurrence.", 2, "done"),
+            ("done-4", "done", "Action-repetition detection (3 identical actions)", "Fast-tracks stale counter when same action repeated at same coordinates.", 3, "done"),
+            ("done-5", "done", "Earlier diagnostic trigger (stale=2)", "Haiku diagnostic fires at stale=2 for full+standard profiles.", 4, "done"),
+            ("done-6", "done", "Security hardening (WS origin, CORS, rate limit, host guard)", "v0.5.3: WebSocket origin validation, CORS middleware, rate limiting, host binding safety.", 5, "done"),
         ]
         for _id, _phase, _title, _notes, _pos, _status in _seed_items:
             c.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?)",
@@ -2310,6 +2307,7 @@ class BrowserUseEngine(EngineBase):
     on_step: Callable[[dict], Any] | None = None  # receives step metadata dict
     _active_model: str = ""
     _active_provider: str = ""
+    _auto_chrome_proc: subprocess.Popen | None = None  # Track auto-launched Chrome for CDP
 
     async def get_info(self) -> dict:
         info = await super().get_info()
@@ -2365,7 +2363,7 @@ class BrowserUseEngine(EngineBase):
                             cmd.append("--headless=new")
                         logging.info("browser-use: auto-launching Chrome with CDP: %s", " ".join(cmd))
                         import subprocess
-                        subprocess.Popen(cmd)
+                        BrowserUseEngine._auto_chrome_proc = subprocess.Popen(cmd)
                         # Wait for CDP to become ready
                         import httpx
                         for _ in range(10):
@@ -4301,50 +4299,51 @@ class ComputerUseEngine(EngineBase):
                 _pag.write(url, interval=0.01)
                 await asyncio.sleep(0.2)
                 _pag.press("enter")
-            elif _s.browser_mode == "cdp":
-                # Navigate via CDP Chrome (the instance launched with user logins)
+            else:
+                # Always try CDP first — browser-use auto-launches Chrome with CDP,
+                # so we should reuse it instead of opening the system default browser.
                 cdp_base = _s.browser_cdp_url or "http://localhost:9222"
-                logging.info("Pre-navigation: Opening %s via CDP (%s)", nav_url, cdp_base)
+                cdp_opened = False
                 try:
                     import httpx
-                    async with httpx.AsyncClient(timeout=5) as _http:
+                    async with httpx.AsyncClient(timeout=3) as _http:
                         from urllib.parse import quote
                         r = await _http.put(f"{cdp_base}/json/new?{quote(nav_url, safe='')}")
-                        if r.status_code != 200:
-                            logging.warning("Pre-navigation: CDP /json/new returned %d, falling back", r.status_code)
-                            webbrowser.open_new(nav_url)
+                        if r.status_code == 200:
+                            cdp_opened = True
+                            logging.info("Pre-navigation: Opened %s via CDP (%s)", nav_url, cdp_base)
+                        else:
+                            logging.debug("Pre-navigation: CDP /json/new returned %d", r.status_code)
                 except Exception as e:
-                    logging.warning("Pre-navigation: CDP unreachable (%s), falling back to webbrowser", e)
-                    webbrowser.open_new(nav_url)
-                # Bring CDP Chrome window to foreground
-                await asyncio.sleep(1.5)
-                focused_ok = await self._bring_app_to_foreground("chrome")
-                if not focused_ok:
-                    _pag.hotkey("alt", "tab")
-                    await asyncio.sleep(0.5)
-            else:
-                # Default / user_data_dir: open in existing browser window (new tab)
-                logging.info("Pre-navigation: Calling OS webbrowser.open_new_tab(%s)", url)
-                webbrowser.open_new_tab(nav_url)
-                # Wait for browser to open, then force the correct window to foreground
-                await asyncio.sleep(2.0)
-                # Focus by domain name so we get the target window, not the dashboard
-                try:
-                    from urllib.parse import urlparse
-                    _parsed = urlparse(nav_url)
-                    domain = _parsed.hostname or ""
-                    if domain.startswith("www."):
-                        domain = domain[4:]
-                    # Use the short domain name (e.g., "espn" from "espn.com")
-                    focus_keyword = domain.split(".")[0] if domain else "browser"
-                    focused_ok = await self._bring_app_to_foreground(focus_keyword)
-                    if not focused_ok:
-                        # Fallback: try Alt+Tab to get to the most recent window
-                        logging.info("Pre-navigation: domain focus failed for '%s', trying Alt+Tab", focus_keyword)
-                        _pag.hotkey("alt", "tab")
-                        await asyncio.sleep(0.5)
-                except Exception as e:
-                    logging.debug("Pre-navigation focus failed: %s", e)
+                    logging.debug("Pre-navigation: CDP unavailable (%s)", e)
+
+                if cdp_opened:
+                    # Bring CDP Chrome window to foreground (skip if headless)
+                    if not _s.browser_headless:
+                        await asyncio.sleep(1.5)
+                        focused_ok = await self._bring_app_to_foreground("chrome")
+                        if not focused_ok:
+                            _pag.hotkey("alt", "tab")
+                            await asyncio.sleep(0.5)
+                else:
+                    # CDP unavailable — fall back to system browser as last resort
+                    logging.info("Pre-navigation: No CDP available, using webbrowser.open_new_tab(%s)", url)
+                    webbrowser.open_new_tab(nav_url)
+                    await asyncio.sleep(2.0)
+                    try:
+                        from urllib.parse import urlparse
+                        _parsed = urlparse(nav_url)
+                        domain = _parsed.hostname or ""
+                        if domain.startswith("www."):
+                            domain = domain[4:]
+                        focus_keyword = domain.split(".")[0] if domain else "browser"
+                        focused_ok = await self._bring_app_to_foreground(focus_keyword)
+                        if not focused_ok:
+                            logging.info("Pre-navigation: domain focus failed for '%s', trying Alt+Tab", focus_keyword)
+                            _pag.hotkey("alt", "tab")
+                            await asyncio.sleep(0.5)
+                    except Exception as e:
+                        logging.debug("Pre-navigation focus failed: %s", e)
 
             # Allow time for page to load
             await asyncio.sleep(1.5)
@@ -6084,17 +6083,18 @@ class TaskManager:
             "Given a user task, decompose it into 1-3 sequential steps.\n"
             "For each step, assign the best engine.\n\n"
             "Engines:\n"
-            "- BROWSER: Fast web navigation, search, content extraction via DOM access. "
-            "Use for web research, reading pages, scraping, searching. 5-10x faster than COMPUTER for web tasks.\n"
-            "- COMPUTER: Desktop app control, complex web interactions needing logged-in sessions, "
-            "visual reasoning, mouse/keyboard automation. Use for desktop apps, filling forms with saved logins, "
-            "clicking through complex UIs.\n"
+            "- BROWSER: Uses real Chrome with CDP (user sessions/logins preserved). "
+            "Best for ALL web tasks: navigation, search, reading, form filling, email, shopping, social media. "
+            "5-10x faster and cheaper than COMPUTER for web tasks.\n"
+            "- COMPUTER: Desktop app control via screenshots + mouse/keyboard. "
+            "Use ONLY for native desktop apps (not websites). Examples: Notepad, Excel, Photoshop, file manager.\n"
             "- CHAT: Questions, summarization, analysis, reasoning. No automation needed. Fastest, cheapest.\n\n"
             "Rules:\n"
             "- MOST tasks are 1 step. Only split when genuinely needed (e.g. web research + summarization).\n"
             "- If the prompt contains a URL or domain name (e.g. wikipedia.org, google.com), it is ALWAYS a web task. Use BROWSER, never CHAT.\n"
             "- 'Go to X' or 'tell me about X from Y.com' = BROWSER, not CHAT.\n"
-            "- Use BROWSER for web research/reading (NOT COMPUTER) unless login/extensions are needed.\n"
+            "- ALL web interactions go to BROWSER — including email, login, forms, purchases, social media.\n"
+            "- COMPUTER is ONLY for native desktop apps that are not websites.\n"
             "- Use CHAT ONLY for pure reasoning/summarization that doesn't need a browser or any website.\n"
             "- Never exceed 3 steps.\n"
             "- Each step instruction should be self-contained and actionable.\n"
@@ -6387,11 +6387,7 @@ class TaskManager:
                             "password", "checkout", "purchase", "buy", "add to cart")
         is_interactive = prompt_lower and any(kw in prompt_lower for kw in _interactive_kws)
 
-        if is_web_search and is_interactive and not is_desktop:
-            # Interactive web: prefer computer-use (real browser with logins/extensions)
-            priority = [EngineName.COMPUTER_USE, EngineName.BROWSER_USE, EngineName.OPENCLAW]
-            reason = "interactive web task -> real browser (computer-use)"
-        elif is_web_search and not is_desktop:
+        if is_web_search and not is_desktop:
             # Web research/reading: prefer browser-use (DOM access, 5-10x faster)
             priority = [EngineName.BROWSER_USE, EngineName.COMPUTER_USE, EngineName.OPENCLAW]
             reason = "web research -> browser-use (DOM access, fast)"
@@ -7234,8 +7230,9 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .pip-titlebar svg{width:14px;height:14px;color:var(--muted);flex-shrink:0;}
 .pip-title{font-size:11px;font-weight:600;color:var(--text);white-space:nowrap;}
 #pipStatus{font-size:9px;color:var(--muted);margin-left:auto;white-space:nowrap;}
-.pip-minimize{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;display:flex;align-items:center;transition:color 0.15s;flex-shrink:0;}
-.pip-minimize:hover{color:var(--text);}
+.pip-minimize,.pip-headless-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;display:flex;align-items:center;transition:color 0.15s;flex-shrink:0;}
+.pip-minimize:hover,.pip-headless-btn:hover{color:var(--text);}
+.pip-headless-btn.headless-active{color:var(--accent);}
 .pip-body{flex:1;background:#111214;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;min-height:0;}
 .pip-body #liveImage{width:100%;height:100%;object-fit:contain;display:block;cursor:pointer;}
 .pip-body #liveImage[src=""]{display:none;}
@@ -7293,12 +7290,12 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .update-banner .dismiss:hover{color:var(--text);background:rgba(255,255,255,0.1);}
 /* Planner */
 .planner-phase{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:12px;overflow:hidden;}
-.planner-phase[data-phase="observability"]{border-left:3px solid #5865f2;}
-.planner-phase[data-phase="reliability"]{border-left:3px solid #57a86d;}
-.planner-phase[data-phase="benchmarks"]{border-left:3px solid #9b59b6;}
-.planner-phase[data-phase="demos"]{border-left:3px solid #e67e22;}
-.planner-phase[data-phase="benchmark-site"]{border-left:3px solid #e74c3c;}
-.planner-phase[data-phase="content"]{border-left:3px solid #c49a3a;}
+.planner-phase[data-phase="measure"]{border-left:3px solid #5865f2;}
+.planner-phase[data-phase="fix"]{border-left:3px solid #57a86d;}
+.planner-phase[data-phase="show"]{border-left:3px solid #e67e22;}
+.planner-phase[data-phase="ship"]{border-left:3px solid #9b59b6;}
+.planner-phase[data-phase="grow"]{border-left:3px solid #c49a3a;}
+.planner-phase[data-phase="done"]{border-left:3px solid #949ba4;}
 .planner-phase[data-phase="custom"]{border-left:3px solid #949ba4;}
 .planner-phase-hdr{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none;transition:background 0.15s;}
 .planner-phase-hdr:hover{background:rgba(255,255,255,0.03);}
@@ -7413,6 +7410,7 @@ function connect(){
       else if(m.type==="replay_started"){addActivity({timestamp:new Date().toISOString(),event_type:"replay",detail:"Replaying workflow: "+(m.payload.workflow||"")});}
       else if(m.type==="emergency_stop"){handleEmergencyStop(m.payload);}
       else if(m.type==="stop_all"){handleEmergencyStop(m.payload);}
+      else if(m.type==="headless_changed"){_headlessState=!!m.payload.headless;updateHeadlessIcon();}
     }catch(err){console.error("[ClawBridge] WS message parse error:",err);}
   };
 }
@@ -7622,6 +7620,47 @@ function showLastSession(){
   const el=document.getElementById("lastSessionTime");
   const ts=localStorage.getItem("last_browser_session");
   if(el&&ts){el.textContent="Last session: "+new Date(ts).toLocaleString();}
+}
+// ── Headless toggle ─────────────────────────────────────────────────
+let _headlessState=null; // null=unknown, true=headless, false=visible
+async function initHeadlessState(){
+  try{
+    const r=await fetch('/api/browser/status');
+    const d=await r.json();
+    _headlessState=!!d.headless;
+    updateHeadlessIcon();
+  }catch(e){}
+}
+function updateHeadlessIcon(){
+  const btn=document.getElementById('pipHeadlessBtn');
+  const eyeOn=document.getElementById('pipEyeOpen');
+  const eyeOff=document.getElementById('pipEyeOff');
+  if(!btn||!eyeOn||!eyeOff)return;
+  if(_headlessState){
+    // Headless ON: show eye-off (slashed), accent color
+    eyeOn.style.display='none';eyeOff.style.display='block';
+    btn.classList.add('headless-active');
+    btn.title='Browser hidden (headless) - click to show';
+  }else{
+    // Headless OFF: show eye-open
+    eyeOn.style.display='block';eyeOff.style.display='none';
+    btn.classList.remove('headless-active');
+    btn.title='Browser visible - click to hide (headless)';
+  }
+}
+async function toggleHeadless(){
+  if(_headlessState===null)return; // state not yet loaded
+  const btn=document.getElementById('pipHeadlessBtn');
+  if(btn)btn.style.opacity='0.5';
+  try{
+    const r=await fetch('/api/browser/headless',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({headless:!_headlessState})});
+    const d=await r.json();
+    if(d.status==='ok'){
+      _headlessState=d.headless;
+      updateHeadlessIcon();
+    }
+  }catch(e){console.error('Headless toggle failed:',e);}
+  if(btn)btn.style.opacity='1';
 }
 // ── Step-level streaming handler ────────────────────────────────────
 function handleStepUpdate(p){
@@ -8591,8 +8630,8 @@ async function saveTaskAsTemplate(taskId){
 }
 
 // ── Planner ──
-var _phaseLabels={"demos":"First Demos","content":"Content & Publishing","observability":"Observability","reliability":"Reliability","benchmarks":"Benchmarks","benchmark-site":"Benchmark Website","custom":"Custom"};
-var _phaseOrder=["demos","content","observability","reliability","benchmarks","benchmark-site","custom"];
+var _phaseLabels={"measure":"Measure","fix":"Fix","show":"Show","ship":"Ship","grow":"Grow","done":"Done","custom":"Custom"};
+var _phaseOrder=["measure","fix","show","ship","grow","done","custom"];
 var _collapsedPhases={};
 async function renderPlannerView(){
   try{
@@ -8613,7 +8652,7 @@ async function renderPlannerView(){
       var total=pitems.length;
       var pct=total?Math.round(done/total*100):0;
       var label=_phaseLabels[phase]||phase.charAt(0).toUpperCase()+phase.slice(1);
-      var phaseColors={"observability":"#5865f2","reliability":"#57a86d","demos":"#e67e22","benchmarks":"#9b59b6","benchmark-site":"#e74c3c","content":"#c49a3a"};
+      var phaseColors={"measure":"#5865f2","fix":"#57a86d","show":"#e67e22","ship":"#9b59b6","grow":"#c49a3a","done":"#949ba4"};
       var barColor=pct===100?"var(--ok)":(phaseColors[phase]||"var(--accent)");
       var collapsed=_collapsedPhases[phase]===true;
       html+='<div class="planner-phase" data-phase="'+esc(phase)+'">';
@@ -9533,6 +9572,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   
   if(localStorage.getItem('sidebar_left')==='true') toggleSidebar('left');
   initPip();
+  initHeadlessState();
   // Use server-preloaded data for instant render (no fetch needed)
   if(window.__PRELOAD__){
     const p=window.__PRELOAD__;
@@ -10305,12 +10345,11 @@ document.addEventListener('DOMContentLoaded', () => {
               <div style="width:160px;flex-shrink:0;">
                 <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Phase</label>
                 <select id="plannerNewPhase" style="font-size:13px;padding:8px 12px;">
-                  <option value="demos">First Demos</option>
-                  <option value="content">Content & Publishing</option>
-                  <option value="observability">Observability</option>
-                  <option value="reliability">Reliability</option>
-                  <option value="benchmarks">Benchmarks</option>
-                  <option value="benchmark-site">Benchmark Website</option>
+                  <option value="measure">Measure</option>
+                  <option value="fix">Fix</option>
+                  <option value="show">Show</option>
+                  <option value="ship">Ship</option>
+                  <option value="grow">Grow</option>
                   <option value="custom">Custom</option>
                 </select>
               </div>
@@ -10329,6 +10368,10 @@ document.addEventListener('DOMContentLoaded', () => {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
       <span class="pip-title">Live View</span>
       <span id="pipStatus" style="font-size:9px;color:var(--muted)">Idle</span>
+      <button id="pipHeadlessBtn" class="pip-headless-btn" onclick="toggleHeadless()" title="Toggle browser visibility">
+        <svg id="pipEyeOpen" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+        <svg id="pipEyeOff" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+      </button>
       <button class="pip-minimize" onclick="minimizePip()" title="Minimize"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg></button>
     </div>
     <div class="pip-body">
@@ -10406,6 +10449,21 @@ def _validate_csrf_token(token: str) -> bool:
     return True
 
 # ---------------------------------------------------------------------------
+# Rate Limiting
+# ---------------------------------------------------------------------------
+_rate_limit_buckets: dict[str, list[float]] = {}
+
+def _rate_limit(key: str, max_requests: int, window_seconds: float) -> bool:
+    """Return True if request is allowed, False if rate-limited."""
+    now = time.time()
+    bucket = _rate_limit_buckets.setdefault(key, [])
+    _rate_limit_buckets[key] = [t for t in bucket if t > now - window_seconds]
+    if len(_rate_limit_buckets[key]) >= max_requests:
+        return False
+    _rate_limit_buckets[key].append(now)
+    return True
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
@@ -10461,23 +10519,36 @@ def create_app() -> FastAPI:
                 _tray_icon.stop()
             except Exception:
                 pass
-        # Cleanup Chrome process on shutdown (prevents orphan holding port/resources)
-        if _chrome_proc is not None and _chrome_proc.poll() is None:
-            try:
-                _chrome_proc.terminate()
-                _chrome_proc.wait(timeout=5)
-            except Exception:
+        # Cleanup Chrome processes on shutdown (prevents orphan holding port/resources)
+        for _proc in [_chrome_proc, BrowserUseEngine._auto_chrome_proc]:
+            if _proc is not None and _proc.poll() is None:
                 try:
-                    _chrome_proc.kill()
+                    _proc.terminate()
+                    _proc.wait(timeout=5)
                 except Exception:
-                    pass
+                    try:
+                        _proc.kill()
+                    except Exception:
+                        pass
 
     app = FastAPI(title="ClawBridge", version="0.1.0", lifespan=lifespan)
 
-    # ── Dashboard Authentication Middleware ──────────────────────────
+    # ── Security Response Headers ─────────────────────────────────────
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.requests import Request
     from starlette.responses import JSONResponse
+
+    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            response = await call_next(request)
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "same-origin"
+            return response
+
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # ── Dashboard Authentication Middleware ──────────────────────────
 
     class AuthMiddleware(BaseHTTPMiddleware):
         """Simple token-based auth. Disabled when DASHBOARD_TOKEN is empty."""
@@ -10510,6 +10581,38 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "Unauthorized. Set token via ?token= query param or Authorization header."}, status_code=401)
 
     app.add_middleware(AuthMiddleware)
+
+    # ── Rate Limiting Middleware ──────────────────────────────────────
+    _RATE_LIMIT_PATHS: dict[str, tuple[int, float]] = {
+        "/api/auth/login": (5, 60.0),   # 5 per 60s
+        "/api/tasks": (10, 60.0),        # 10 per 60s
+    }
+
+    class RateLimitMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            if request.method == "POST" and request.url.path in _RATE_LIMIT_PATHS:
+                max_req, window = _RATE_LIMIT_PATHS[request.url.path]
+                client_ip = request.client.host if request.client else "unknown"
+                key = f"rl:{request.url.path}:{client_ip}"
+                if not _rate_limit(key, max_req, window):
+                    return JSONResponse({"error": "Too many requests. Try again later."}, status_code=429, headers={"Retry-After": str(int(window))})
+            return await call_next(request)
+
+    app.add_middleware(RateLimitMiddleware)
+
+    # ── CORS Middleware ───────────────────────────────────────────────
+    from starlette.middleware.cors import CORSMiddleware
+    _s = get_settings()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            f"http://127.0.0.1:{_s.port}",
+            f"http://localhost:{_s.port}",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     def _login_page_html(redirect_to: str = "/") -> str:
         return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>ClawBridge Login</title>
@@ -11160,6 +11263,14 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
                 _chrome_proc.wait(timeout=5)
             except Exception:
                 pass
+        # Also kill auto-launched Chrome from browser-use engine
+        if BrowserUseEngine._auto_chrome_proc and BrowserUseEngine._auto_chrome_proc.poll() is None:
+            BrowserUseEngine._auto_chrome_proc.terminate()
+            try:
+                BrowserUseEngine._auto_chrome_proc.wait(timeout=5)
+            except Exception:
+                pass
+            BrowserUseEngine._auto_chrome_proc = None
         # Note: We do NOT kill all Chrome instances by image name -- that would
         # destroy the user's personal browser windows. We only kill our own PID above.
         # Chrome requires a NON-default user-data-dir for --remote-debugging-port.
@@ -11204,32 +11315,125 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
     @app.get("/api/browser/status")
     async def browser_status():
         nonlocal _chrome_proc
-        running = _chrome_proc is not None and _chrome_proc.poll() is None
+        # Check both manually launched and auto-launched Chrome
+        running = (_chrome_proc is not None and _chrome_proc.poll() is None) or \
+                  (BrowserUseEngine._auto_chrome_proc is not None and BrowserUseEngine._auto_chrome_proc.poll() is None)
+        active_pid = None
+        if _chrome_proc and _chrome_proc.poll() is None:
+            active_pid = _chrome_proc.pid
+        elif BrowserUseEngine._auto_chrome_proc and BrowserUseEngine._auto_chrome_proc.poll() is None:
+            active_pid = BrowserUseEngine._auto_chrome_proc.pid
         # Also try to ping the CDP endpoint
         cdp_reachable = False
-        if Settings.browser_mode == "cdp":
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=2) as client:
-                    r = await client.get(f"{Settings.browser_cdp_url}/json/version")
-                    cdp_reachable = r.status_code == 200
-            except Exception:
-                pass
-        return {"launched": running, "pid": _chrome_proc.pid if running else None, "cdp_reachable": cdp_reachable, "mode": Settings.browser_mode}
+        try:
+            import httpx
+            cdp_url = Settings.browser_cdp_url or "http://localhost:9222"
+            async with httpx.AsyncClient(timeout=2) as client:
+                r = await client.get(f"{cdp_url}/json/version")
+                cdp_reachable = r.status_code == 200
+        except Exception:
+            pass
+        return {"launched": running, "pid": active_pid, "cdp_reachable": cdp_reachable,
+                "mode": Settings.browser_mode, "headless": Settings.browser_headless}
 
     @app.post("/api/browser/stop")
     async def stop_chrome():
         nonlocal _chrome_proc
-        if _chrome_proc and _chrome_proc.poll() is None:
-            _chrome_proc.terminate()
-            _chrome_proc.wait(timeout=5)
-            _chrome_proc = None
+        cdp_port = int((Settings.browser_cdp_url or "http://localhost:9222").rsplit(":", 1)[-1].split("/")[0])
+        # Stop tracked Chrome processes
+        for _proc_ref in [_chrome_proc, BrowserUseEngine._auto_chrome_proc]:
+            if _proc_ref and _proc_ref.poll() is None:
+                _proc_ref.terminate()
+                try:
+                    _proc_ref.wait(timeout=5)
+                except Exception:
+                    pass
+        _chrome_proc = None
+        BrowserUseEngine._auto_chrome_proc = None
+        # Also kill untracked Chrome on CDP port
+        try:
+            if sys.platform == "win32":
+                _netstat = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=5)
+                for _line in _netstat.stdout.splitlines():
+                    if f":{cdp_port}" in _line and "LISTENING" in _line:
+                        _pid = int(_line.strip().split()[-1])
+                        if _pid > 0:
+                            subprocess.run(["taskkill", "/F", "/PID", str(_pid)], capture_output=True, timeout=5)
+            else:
+                _lsof = subprocess.run(["lsof", "-ti", f":{cdp_port}"], capture_output=True, text=True, timeout=5)
+                for _pid_str in _lsof.stdout.strip().split():
+                    subprocess.run(["kill", _pid_str], capture_output=True, timeout=5)
+        except Exception:
+            pass
         # Revert to default mode
         Settings.browser_mode = "default"
         os.environ["BROWSER_MODE"] = "default"
         await get_manager().init_engines()
         await _broadcast({"type": "engine_status", "payload": await get_manager().engine_infos()})
         return {"status": "ok"}
+
+    @app.post("/api/browser/headless")
+    async def toggle_headless(body: dict = {}):
+        """Toggle browser headless mode. Restarts Chrome if running."""
+        nonlocal _chrome_proc
+        new_headless = bool(body.get("headless", not Settings.browser_headless))
+        Settings.browser_headless = new_headless
+        os.environ["BROWSER_HEADLESS"] = "true" if new_headless else "false"
+        # Persist to .env
+        env_path = Path(".env")
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        found = False
+        val = "true" if new_headless else "false"
+        for i, line in enumerate(lines):
+            if line.strip().startswith("BROWSER_HEADLESS=") or line.strip().startswith("BROWSER_HEADLESS ="):
+                lines[i] = f"BROWSER_HEADLESS={val}"
+                found = True
+                break
+        if not found:
+            lines.append(f"BROWSER_HEADLESS={val}")
+        env_path.write_text("\n".join(lines) + "\n")
+        # Kill any Chrome on the CDP port — whether we launched it or not
+        cdp_port = int((Settings.browser_cdp_url or "http://localhost:9222").rsplit(":", 1)[-1].split("/")[0])
+        chrome_was_running = False
+        # Kill tracked processes first
+        for _proc_ref in [_chrome_proc, BrowserUseEngine._auto_chrome_proc]:
+            if _proc_ref and _proc_ref.poll() is None:
+                chrome_was_running = True
+                _proc_ref.terminate()
+                try:
+                    _proc_ref.wait(timeout=5)
+                except Exception:
+                    pass
+        _chrome_proc = None
+        BrowserUseEngine._auto_chrome_proc = None
+        # Also kill any untracked Chrome listening on the CDP port
+        try:
+            if sys.platform == "win32":
+                _netstat = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=5)
+                for _line in _netstat.stdout.splitlines():
+                    if f":{cdp_port}" in _line and "LISTENING" in _line:
+                        _pid = int(_line.strip().split()[-1])
+                        if _pid > 0:
+                            subprocess.run(["taskkill", "/F", "/PID", str(_pid)], capture_output=True, timeout=5)
+                            chrome_was_running = True
+            else:
+                _lsof = subprocess.run(["lsof", "-ti", f":{cdp_port}"], capture_output=True, text=True, timeout=5)
+                for _pid_str in _lsof.stdout.strip().split():
+                    subprocess.run(["kill", _pid_str], capture_output=True, timeout=5)
+                    chrome_was_running = True
+        except Exception as e:
+            logging.debug("Could not kill Chrome on port %d: %s", cdp_port, e)
+        # Reset browser mode so init_engines re-launches Chrome
+        Settings.browser_mode = "default"
+        os.environ["BROWSER_MODE"] = "default"
+        # Re-initialize engines (will auto-launch Chrome with new headless setting)
+        if chrome_was_running:
+            await asyncio.sleep(1)  # Give Chrome time to fully terminate
+        await get_manager().init_engines()
+        await _broadcast({"type": "engine_status", "payload": await get_manager().engine_infos()})
+        await _broadcast({"type": "headless_changed", "payload": {"headless": new_headless}})
+        logging.info("Browser headless mode %s", "enabled" if new_headless else "disabled")
+        return {"status": "ok", "headless": new_headless}
 
     @app.get("/api/config/audit")
     async def get_audit_events(limit: int = 50, task_id: str | None = None):
@@ -11784,6 +11988,14 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
+        # ── Origin check (block cross-origin WebSocket hijacking) ──
+        from urllib.parse import urlparse as _ws_urlparse
+        _ws_origin = websocket.headers.get("origin", "")
+        if _ws_origin:
+            _ws_parsed = _ws_urlparse(_ws_origin)
+            if _ws_parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+                await websocket.close(code=1008, reason="Origin not allowed")
+                return
         # ── Auth check (mirrors AuthMiddleware logic) ──
         token = get_settings().dashboard_token
         if token:
@@ -12591,6 +12803,20 @@ def main() -> None:
     import time as _time
 
     s = get_settings()
+
+    # ── Host binding safety check ─────────────────────────────────────
+    if s.host in ("0.0.0.0", "::"):
+        if not s.dashboard_token:
+            print()
+            print("  [FATAL] CLAWBRIDGE_HOST=%s exposes the dashboard to your network," % s.host)
+            print("          but DASHBOARD_TOKEN is not set. This is unsafe.")
+            print("          Either set DASHBOARD_TOKEN in .env or use 127.0.0.1 (default).")
+            sys.exit(1)
+        else:
+            print()
+            print("  [WARNING] Binding to %s -- dashboard is network-accessible." % s.host)
+            print("            DASHBOARD_TOKEN is set, but ensure your network is trusted.")
+
     print()
     print(f"  ClawBridge v{__version__}")
     print("  Dashboard: http://%s:%s" % (s.host, s.port))

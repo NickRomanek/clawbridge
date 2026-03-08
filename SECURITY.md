@@ -26,7 +26,12 @@ ClawBridge is a desktop automation agent that controls mouse, keyboard, and brow
 - Gateway localhost-only binding (127.0.0.1)
 - Minimal subprocess environment (no env variable leakage)
 - Audit logging of all task events
-- Dashboard authentication (token-based)
+- Dashboard authentication (token-based, CSRF protection)
+- WebSocket origin validation (blocks cross-origin hijacking)
+- CORS restricted to localhost origins only
+- Rate limiting on login and task submission endpoints
+- Security response headers (X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
+- Host binding guard (refuses 0.0.0.0 without auth token)
 
 ## Reporting a Vulnerability
 
@@ -46,9 +51,9 @@ We aim to acknowledge reports within 48 hours and provide a fix or mitigation pl
 
 | Version | Supported |
 |---------|-----------|
-| 0.3.x   | Yes       |
-| 0.2.x   | Yes       |
-| < 0.2   | No        |
+| 0.5.x   | Yes       |
+| 0.4.x   | Yes       |
+| < 0.4   | No        |
 
 ## Security Best Practices for Users
 

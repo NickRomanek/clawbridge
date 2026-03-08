@@ -5,6 +5,36 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-03-07
+
+### Added
+
+#### Network Security
+- **WebSocket origin validation**: `/ws` handler checks `Origin` header before `accept()`. Only localhost origins allowed (`127.0.0.1`, `localhost`, `::1`). Missing origin (non-browser clients like MCP) is permitted. Rejects with close code 1008.
+- **CORS middleware**: `CORSMiddleware` restricts `allow_origins` to `http://127.0.0.1:{port}` and `http://localhost:{port}`. No wildcard.
+- **Rate limiting**: In-memory sliding window via `_rate_limit()`. Login: 5/60s, task submission: 10/60s per client IP. Returns 429 with `Retry-After` header.
+- **Host binding guard**: `main()` refuses to start with `CLAWBRIDGE_HOST=0.0.0.0` unless `DASHBOARD_TOKEN` is set. Exits with clear error message.
+- **Loading server CORS removal**: Removed wildcard `Access-Control-Allow-Origin: *` from the startup loading page handler.
+
+#### Browser Management
+- **Chrome process tracking**: Browser-use engine's auto-launched Chrome subprocess is now tracked via `BrowserUseEngine._auto_chrome_proc`. All API endpoints (`/api/browser/status`, `/stop`, `/launch`) and shutdown cleanup coordinate with it.
+- **CDP-first pre-navigation**: Computer-use engine always tries CDP (`localhost:9222`) before falling back to system browser. Prevents dual-browser issue where both CDP Chrome and the default browser opened simultaneously.
+- **Headless toggle in PiP**: Eye icon button in the Live View panel titlebar toggles between visible and headless Chrome. Persists to `.env`, restarts Chrome with new setting. Real-time sync via WebSocket.
+- **`POST /api/browser/headless`**: New endpoint toggles `BROWSER_HEADLESS`, kills Chrome on CDP port (even untracked instances), re-initializes engines.
+- **`GET /api/browser/status`**: Now includes `headless` field in response.
+- **Port-level Chrome kill**: Stop and headless toggle endpoints find and kill Chrome by CDP port using `netstat`/`lsof`, not just tracked process handles.
+
+#### Infrastructure
+- **Dependabot**: Automated dependency vulnerability scanning for pip, npm, and GitHub Actions.
+- **Security response headers**: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` on all responses.
+- **SECURITY.md updated**: Current supported versions, new defenses documented.
+
+### Changed
+- **Task planner routing**: Browser-use now handles ALL web tasks (email, forms, shopping, login) since it uses real Chrome with CDP (sessions preserved). Computer-use reserved for native desktop apps only. Fallback `_engine_for()` heuristic synced to match.
+- **Monolith grew from ~12,700 to ~12,900 lines** with security hardening and browser management.
+
+---
+
 ## [0.5.2] - 2026-03-07
 
 ### Added
