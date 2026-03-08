@@ -96,6 +96,13 @@ def test_health():
     else:
         fail("GET /health", f"status={status}")
 
+    # Startup-status endpoint (loading page fallback)
+    status, data = req("GET", "/startup-status")
+    if status == 200 and isinstance(data, dict) and data.get("progress") == 100:
+        ok("GET /startup-status", f"progress={data.get('progress')}")
+    else:
+        fail("GET /startup-status", f"status={status} data={data}")
+
     # Dashboard HTML
     status, data = req("GET", "/")
     if status == 200 and isinstance(data, str) and "ClawBridge" in data:

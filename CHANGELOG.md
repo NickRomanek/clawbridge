@@ -5,6 +5,20 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-03-07
+
+### Fixed
+- **Loading page stuck on fresh install**: Loading page polls `/startup-status` during startup, but if the stdlib loading server shut down before the JS detected 100% progress, Uvicorn returned 404 (no such route) causing an infinite poll loop. Added `/startup-status` endpoint to FastAPI that always returns `progress: 100`.
+- **Loading server ConnectionAbortedError on Windows**: Wrapped `_LoadingHandler.do_GET()` in try/except for `ConnectionAbortedError`, `ConnectionResetError`, `BrokenPipeError` — common when browser disconnects mid-response during server transition.
+- **Loading page transition timing**: Increased pre-shutdown sleep from 0.5s to 1.0s to ensure the loading page JS (600ms poll interval) detects 100% progress before the stdlib server shuts down.
+
+### Added
+- **Planner UX**: Expandable notes (click to toggle), click-to-copy command pills for `RUN:` commands, `[AUTO]`/`[RECORD]` task tags.
+- **Planner phases**: Merged measure/fix into single "Benchmark & Fix" phase. New 5-phase layout: benchmark, show, ship, grow, done.
+- **Smoke test**: `/startup-status` endpoint now covered in smoke test suite.
+
+---
+
 ## [0.5.3] - 2026-03-07
 
 ### Added

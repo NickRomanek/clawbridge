@@ -33,7 +33,7 @@ if sys.platform != "darwin":
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 
 ROOT = Path(__file__).parent.resolve()
 DIST_DIR = ROOT / "dist"

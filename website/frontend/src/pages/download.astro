@@ -29,7 +29,7 @@ const macIntelUrl = "https://github.com/NickRomanek/clawbridge/releases/latest/d
             </svg>
           </div>
           <h2 class="text-2xl font-bold mb-2">ClawBridge for Windows</h2>
-          <p class="text-gray-400 mb-6">Version 0.5.3 &bull; Windows 10/11 (64-bit)</p>
+          <p class="text-gray-400 mb-6">Version 0.5.4 &bull; Windows 10/11 (64-bit)</p>
           <a href={downloadUrl} class="btn-primary text-lg px-10 py-4 mb-4 inline-flex gap-2">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
@@ -37,6 +37,12 @@ const macIntelUrl = "https://github.com/NickRomanek/clawbridge/releases/latest/d
             Download Installer
           </a>
           <p class="text-sm text-gray-500">~295 MB &bull; Includes everything needed</p>
+          <div id="download-stats" class="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/[0.04] border border-white/[0.08] text-sm text-gray-400 opacity-0 transition-opacity duration-500">
+            <svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            <span id="download-count"></span> downloads
+          </div>
         </div>
       </div>
 
@@ -212,6 +218,26 @@ const macIntelUrl = "https://github.com/NickRomanek/clawbridge/releases/latest/d
     showingMac = !showingMac;
     showPlatform(showingMac ? 'mac' : 'win');
   });
+
+  // Fetch download count from GitHub releases
+  fetch('https://api.github.com/repos/NickRomanek/clawbridge/releases')
+    .then(r => r.json())
+    .then(releases => {
+      if (!Array.isArray(releases)) return;
+      let total = 0;
+      releases.forEach(rel => {
+        (rel.assets || []).forEach(a => { total += a.download_count || 0; });
+      });
+      if (total > 0) {
+        const el = document.getElementById('download-count');
+        const wrap = document.getElementById('download-stats');
+        if (el && wrap) {
+          el.textContent = total.toLocaleString();
+          wrap.style.opacity = '1';
+        }
+      }
+    })
+    .catch(() => {});
 
   // Show activation code if present in URL
   const params = new URLSearchParams(window.location.search);

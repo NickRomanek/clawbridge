@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 import hmac
 import os
@@ -148,26 +148,29 @@ class _LoadingHandler(BaseHTTPRequestHandler):
     """Minimal handler for early loading server. Only serves loading page + status."""
 
     def do_GET(self):
-        if self.path == "/startup-status":
-            body = _json.dumps(_startup_status).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif self.path == "/health":
-            body = b'{"status":"loading"}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.send_header("Content-Length", str(len(_LOADING_PAGE_HTML)))
-            self.end_headers()
-            self.wfile.write(_LOADING_PAGE_HTML)
+        try:
+            if self.path == "/startup-status":
+                body = _json.dumps(_startup_status).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif self.path == "/health":
+                body = b'{"status":"loading"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(_LOADING_PAGE_HTML)))
+                self.end_headers()
+                self.wfile.write(_LOADING_PAGE_HTML)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass  # Client disconnected mid-response (common on Windows)
 
     def log_message(self, *args):
         pass  # silent
@@ -1856,36 +1859,44 @@ def init_db():
         _now = datetime.utcnow().isoformat()
         # (id, phase, title, notes, position, status)
         _seed_items = [
-            # ── MEASURE: Run real tasks, collect data (Sprint 1, ~1 week) ──
-            ("meas-1", "measure", "Pick 10 benchmark tasks across 3 categories", "Browser (price lookup, weather, news summary), Desktop (Notepad, file rename, settings change), Interactive (form fill, login flow, search+click). These 10 become your standard test set for all comparisons.", 0, "pending"),
-            ("meas-2", "measure", "Run all 10 tasks, record each one", "Screen-record with OBS/Game Bar while running. Each recording = raw video content. Note cost, time, pass/fail in a spreadsheet. This is your baseline.", 1, "pending"),
-            ("meas-3", "measure", "Run same 10 on Claude Cowork (or other tool)", "Fair comparison. Same tasks, same machine. Record these too. You now have 20 videos and a comparison dataset.", 2, "pending"),
-            ("meas-4", "measure", "Review failures and identify top 3 fixable issues", "Use failure analysis in dashboard. Look for: stuck loops, wrong element clicked, navigation failures. Pick the 3 that would flip the most fails to passes.", 3, "pending"),
-            # ── FIX: Improve success rate based on data (Sprint 2, ~1 week) ──
-            ("fix-1", "fix", "Fix top failure: the one that affects the most tasks", "Could be: element matching, stale detection, navigation timing, focus management. Fix it, re-run the failing tasks to verify.", 0, "pending"),
-            ("fix-2", "fix", "Fix second failure", "Same pattern: fix, re-run, verify. Update the spreadsheet with new results.", 1, "pending"),
-            ("fix-3", "fix", "Fix third failure", "After 3 fixes, re-run all 10 tasks. Compare before/after success rate. This delta is your story.", 2, "pending"),
-            ("fix-4", "fix", "Test scaffolding profiles on the same 10 tasks", "Run on full/standard/minimal/raw. Compare success rate, cost, steps. Find the sweet spot. Another video per profile = 4 more videos.", 3, "pending"),
-            # ── SHOW: Turn data into content (Sprint 3, ~1 week) ──
-            ("show-1", "show", "Create YouTube channel + social accounts", "Keep it simple. Banner, about section, links to clawbridge.ai and GitHub. Don't spend more than 30 min on this.", 0, "pending"),
-            ("show-2", "show", "Publish your best 5-10 task recordings as short videos", "Trim to 60-90s each. Title: 'AI does [X] on my desktop'. Publish daily over 1-2 weeks. Cross-post 30s clips to Twitter/X. Volume > polish.", 1, "pending"),
-            ("show-3", "show", "Write blog post with benchmark comparison table", "The spreadsheet data becomes a blog post. Bar charts for success rate, cost table, embedded videos. SEO title: 'Computer Use Agents Compared: [Year] Benchmarks'.", 2, "pending"),
-            ("show-4", "show", "Post comparison findings to Reddit", "r/selfhosted, r/automation, r/Python, r/artificial. Title: 'I tested N computer-use tools on the same tasks'. Share real data, show failures too. Link to blog.", 3, "pending"),
-            # ── SHIP: Release and distribute (Sprint 4, ~1 week) ──
-            ("ship-1", "ship", "Cut a release with all fixes from the FIX sprint", "Version bump, changelog, build installer, tag, push. The fixes from Sprint 2 become a real release.", 0, "pending"),
-            ("ship-2", "ship", "Product Hunt launch", "5 screenshots, demo GIF, tagline, maker comment. Use your best benchmark video as the hero. Launch Tuesday 12:01 AM PT.", 1, "pending"),
-            ("ship-3", "ship", "Open-source the benchmark suite", "Separate repo. Tasks, runner, scorer. Credibility builder. Others can run your benchmarks on their setups.", 2, "pending"),
-            # ── GROW: Repeat the loop, expand scope (ongoing) ──
-            ("grow-1", "grow", "Add 5 more ambitious tasks to the benchmark set", "Canva design, PowerPoint creation, multi-site price comparison, job application, support ticket. These are 'can it actually do this?' tasks.", 0, "pending"),
-            ("grow-2", "grow", "Record the comparison video: same tasks across tools", "This is your breakout content. Same 10+ tasks on multiple tools. Results table at end. Be fair. 5-10 min YouTube + 60s highlight.", 1, "pending"),
-            ("grow-3", "grow", "Explore Android emulator automation", "Install Android Studio, create Pixel emulator. If ClawBridge can see the emulator window, this is unique content nobody else has.", 2, "pending"),
-            # ── DONE: Completed milestones ──
-            ("done-1", "done", "Failure analysis endpoint + auto-populate on error", "analyze_task_failure() detects repeated actions, stale loops, max-steps. Auto-stored in task result.", 0, "done"),
-            ("done-2", "done", "Failure timeline view in dashboard history", "Color-coded step timeline, diagnosis text, token waste count on error tasks.", 1, "done"),
-            ("done-3", "done", "Post-action hint when screen unchanged", "Zero-cost stale detection at first occurrence.", 2, "done"),
-            ("done-4", "done", "Action-repetition detection (3 identical actions)", "Fast-tracks stale counter when same action repeated at same coordinates.", 3, "done"),
-            ("done-5", "done", "Earlier diagnostic trigger (stale=2)", "Haiku diagnostic fires at stale=2 for full+standard profiles.", 4, "done"),
-            ("done-6", "done", "Security hardening (WS origin, CORS, rate limit, host guard)", "v0.5.3: WebSocket origin validation, CORS middleware, rate limiting, host binding safety.", 5, "done"),
+            # ── BENCHMARK & FIX ──
+            # Items 1-2: No recording needed. Just run the command and check results.
+            ("bench-1", "benchmark", "[AUTO] Verify CLI + run chat baseline", "RUN: python -m benchmarks run --suite \"Q&A\"\nEXPECT: 3/3 pass, grade A, ~$0.00. Tests: openclaw.qa.001 (factual), .002 (math), .003 (list). If any fail, the benchmark pipeline itself is broken. No recording needed.", 0, "done"),
+            ("bench-2", "benchmark", "[AUTO] Run browser navigation + extraction", "RUN: python -m benchmarks run --suite \"Browser Navigation\" && python -m benchmarks run --suite \"Browser Data Extraction\"\nTASKS: nav.001 (read heading), nav.002 (search products), nav.003 (read article), extract.001 (sort table), extract.002 (filter table), extract.003 (calculator). 6 tasks, ~$0.30-0.60. No recording needed -- just getting baseline data.", 1, "pending"),
+            # Items 3-4: RECORD these. First real content -- browser doing interactive things.
+            ("bench-3", "benchmark", "[RECORD] Run browser e-commerce + forms", "START OBS FIRST.\nRUN: python -m benchmarks run --suite \"Browser E-Commerce Flow\" && python -m benchmarks run --suite \"Browser Form Interaction\"\nTASKS: ecom.001 (add to cart), ecom.002 (read prices), form.001 (login), form.002 (invalid login error), form.003 (3-step registration with checkboxes/dropdowns). 5 tasks, ~$0.50-1.00. These are the most visual -- great for content clips.", 2, "pending"),
+            ("bench-4", "benchmark", "Fix browser failures from items 2-3", "Open dashboard history (http://localhost:8765), click failed tasks, read the step trace + failure analysis. Common fixes: extraction prompt needs 'return the answer as your final message', form selectors changed, timeout too short. Fix in clawbridge.py, then re-run just the failing task: python -m benchmarks run --task browser.form.003", 3, "pending"),
+            # Items 5-6: RECORD these. Desktop automation is the unique selling point.
+            ("bench-5", "benchmark", "[RECORD] Run desktop computer-use tasks", "START OBS FIRST.\nRUN: python -m benchmarks run --suite \"Computer-Use Notepad\"\nTASKS: computer.notepad.001 (type in Notepad), computer.notepad.002 (use Calculator). 2 tasks, ~$0.30-0.40. You will see the AI move the mouse and type -- this is your best content. Notepad and Calculator will open on screen.", 4, "pending"),
+            ("bench-6", "benchmark", "Fix desktop failures from item 5", "Common issues: (1) Focus loss -- Windows steals focus mid-task, check _verify_focus() in dashboard steps. (2) Wrong window -- UIA tree shows wrong app's elements. (3) App didn't launch -- Win key search timing. Fix in clawbridge.py, re-run: python -m benchmarks run --task computer.notepad.001", 5, "pending"),
+            # Item 7: Quick sanity check, no recording.
+            ("bench-7", "benchmark", "[AUTO] Run cross-engine routing check", "RUN: python -m benchmarks run --suite \"Auto Routing\"\nTASK: auto.route.001 -- verifies the task planner routes to the right engine. 1 task, ~$0.01. Should pass if engines work. No recording needed.", 6, "pending"),
+            # Item 8: RECORD this. The before/after story.
+            ("bench-8", "benchmark", "[RECORD] Full re-run: capture improvement delta", "START OBS FIRST.\nRUN: python -m benchmarks run\nThis runs ALL 17 tasks. Compare pass rate vs your first runs (check benchmarks/results/ folder for earlier JSON). The improvement from fixing failures is your content story. Then run: python -m benchmarks report --comparison", 7, "pending"),
+            # Item 9: Run 3x with different profiles. Each run is a potential video.
+            ("bench-9", "benchmark", "[RECORD] Compare scaffolding profiles", "Run all tasks 3 times with different profiles. Between each, change SCAFFOLDING_PROFILE in .env:\nRUN 1: Set SCAFFOLDING_PROFILE=standard, then: python -m benchmarks run\nRUN 2: Set SCAFFOLDING_PROFILE=minimal, then: python -m benchmarks run\nRUN 3: Set SCAFFOLDING_PROFILE=raw, then: python -m benchmarks run\nCompare pass rates and costs. ~$3-6 total. Great data for a 'which AI scaffolding works best?' video.", 8, "pending"),
+            # Item 10: Data export, no recording.
+            ("bench-10", "benchmark", "[AUTO] Generate reports + archive", "RUN: python -m benchmarks report && python -m benchmarks report --trend 30 && python -m benchmarks marketing\nResults are in benchmarks/results/. Reports print to stdout. Marketing export gives you copy-paste stats for blog/social. Commit results: git add benchmarks/results/ && git commit -m 'benchmark: sprint 1 results'", 9, "pending"),
+            # ── SHOW ──
+            ("show-1", "show", "Create YouTube channel", "Pick a name (your brand or 'Computer Use Lab'). Upload banner, write about section, add links to clawbridge.ai and github.com/[repo]. 30 min max -- don't overthink it.", 0, "pending"),
+            ("show-2", "show", "Publish best OBS clips as YouTube Shorts", "Trim OBS recordings from [RECORD] items to 60-90s each. Focus on: (1) desktop automation clip -- AI moving mouse, (2) a failure-then-fix clip, (3) the full re-run showing improvement. Title: 'AI does [X] on my desktop'. Upload 1/day.", 1, "pending"),
+            ("show-3", "show", "Write blog post with benchmark data", "RUN: python -m benchmarks marketing\nCopy the stats into a blog post on clawbridge.ai. Add: before/after pass rate table, cost breakdown, embed your best YouTube clip. SEO title: 'Computer Use Agent Benchmarks: [Month] [Year] Results'.", 2, "pending"),
+            ("show-4", "show", "Post to Reddit with real data", "Subreddits: r/selfhosted, r/automation, r/Python, r/artificial. Title: 'I benchmarked my AI desktop agent on 17 tasks -- here are the results'. Include pass rate, total cost, link to blog. Show failures honestly -- Reddit hates promo.", 3, "pending"),
+            # ── SHIP ──
+            ("ship-1", "ship", "Cut release with benchmark-phase fixes", "Bump version in 6 files (clawbridge.py, build.py, build_macos.py, installer.iss, download.astro, index.astro). Write CHANGELOG entry. RUN: python -m pytest && python build.py --inno. Then: git tag v0.5.4 && git push --tags. Build + upload installer.", 0, "pending"),
+            ("ship-2", "ship", "Open-source the benchmark suite", "Write benchmarks/README.md explaining how to run. Include: install deps, start server, python -m benchmarks run. Push to main branch. Tweet/post about it -- others running your benchmarks = free credibility.", 1, "pending"),
+            # ── GROW ──
+            ("grow-1", "grow", "Add 5 real-world tasks people care about", "Ideas: (1) Compare prices on Amazon vs Walmart for a product, (2) Fill out a job application on Indeed, (3) Create a simple Canva design, (4) Book a restaurant on OpenTable, (5) File a support ticket. Copy an existing JSON in benchmarks/tasks/ as template.", 0, "pending"),
+            ("grow-2", "grow", "[RECORD] Comparison video: ClawBridge vs another tool", "Run same 10 tasks on ClawBridge and Claude Cowork (or raw browser-use). Screen-record both. Make a results table. Be honest about what loses. 5-10 min YouTube video -- this is breakout content.", 1, "pending"),
+            ("grow-3", "grow", "Explore Android emulator automation", "Install Android Studio, create Pixel 8 emulator. Launch it, then run a computer-use task targeting the emulator window. If it works, nobody else has this content.", 2, "pending"),
+            # ── DONE ──
+            ("done-1", "done", "Failure analysis + auto-populate on error", "analyze_task_failure() detects repeated actions, stale loops, max-steps.", 0, "done"),
+            ("done-2", "done", "Failure timeline view in dashboard", "Color-coded step timeline, diagnosis text, token waste count.", 1, "done"),
+            ("done-3", "done", "Post-action hint (stale=1)", "Zero-cost 'screen appears unchanged' note.", 2, "done"),
+            ("done-4", "done", "Action-repetition detection", "3 identical actions at same coords fast-tracks stale counter.", 3, "done"),
+            ("done-5", "done", "Earlier diagnostic trigger (stale=2)", "Haiku diagnostic for full+standard profiles.", 4, "done"),
+            ("done-6", "done", "Security hardening v0.5.3", "WS origin, CORS, rate limiting, host binding guard.", 5, "done"),
+            ("done-7", "done", "Benchmark CLI verified + chat baseline", "3/3 Q&A tasks pass, grade A, $0.00 cost.", 6, "done"),
         ]
         for _id, _phase, _title, _notes, _pos, _status in _seed_items:
             c.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?)",
@@ -7290,8 +7301,7 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .update-banner .dismiss:hover{color:var(--text);background:rgba(255,255,255,0.1);}
 /* Planner */
 .planner-phase{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:12px;overflow:hidden;}
-.planner-phase[data-phase="measure"]{border-left:3px solid #5865f2;}
-.planner-phase[data-phase="fix"]{border-left:3px solid #57a86d;}
+.planner-phase[data-phase="benchmark"]{border-left:3px solid #5865f2;}
 .planner-phase[data-phase="show"]{border-left:3px solid #e67e22;}
 .planner-phase[data-phase="ship"]{border-left:3px solid #9b59b6;}
 .planner-phase[data-phase="grow"]{border-left:3px solid #c49a3a;}
@@ -7314,7 +7324,14 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .planner-item-body{flex:1;min-width:0;overflow:hidden;}
 .planner-item-title{font-size:13px;line-height:1.5;}
 .planner-item.done .planner-item-title{text-decoration:line-through;}
-.planner-item-notes{font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.planner-item-preview{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;display:flex;align-items:center;gap:4px;}
+.planner-notes-chevron{width:12px;height:12px;color:var(--muted);transition:transform 0.2s;flex-shrink:0;}
+.planner-item-preview.expanded .planner-notes-chevron{transform:rotate(180deg);}
+.planner-item-notes{font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;max-height:0;line-height:1.6;white-space:pre-line;transition:max-height 0.25s ease;}
+.planner-item-notes.expanded{max-height:500px;}
+.planner-cmd{display:inline-block;background:rgba(88,101,242,0.12);color:#8b9bf7;padding:1px 6px;border-radius:4px;font-family:monospace;font-size:11px;cursor:pointer;margin:2px 0;transition:background 0.15s;user-select:all;}
+.planner-cmd:hover{background:rgba(88,101,242,0.25);}
+.planner-cmd:active{background:rgba(88,101,242,0.4);}
 .planner-item-actions{display:flex;gap:2px;flex-shrink:0;opacity:0;transition:opacity 0.15s;align-items:center;}
 .planner-item:hover .planner-item-actions{opacity:1;}
 .planner-act-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;border-radius:4px;transition:all 0.15s;display:flex;align-items:center;}
@@ -8630,8 +8647,8 @@ async function saveTaskAsTemplate(taskId){
 }
 
 // ── Planner ──
-var _phaseLabels={"measure":"Measure","fix":"Fix","show":"Show","ship":"Ship","grow":"Grow","done":"Done","custom":"Custom"};
-var _phaseOrder=["measure","fix","show","ship","grow","done","custom"];
+var _phaseLabels={"benchmark":"Benchmark & Fix","show":"Show","ship":"Ship","grow":"Grow","done":"Done","custom":"Custom"};
+var _phaseOrder=["benchmark","show","ship","grow","done","custom"];
 var _collapsedPhases={};
 async function renderPlannerView(){
   try{
@@ -8652,7 +8669,7 @@ async function renderPlannerView(){
       var total=pitems.length;
       var pct=total?Math.round(done/total*100):0;
       var label=_phaseLabels[phase]||phase.charAt(0).toUpperCase()+phase.slice(1);
-      var phaseColors={"measure":"#5865f2","fix":"#57a86d","show":"#e67e22","ship":"#9b59b6","grow":"#c49a3a","done":"#949ba4"};
+      var phaseColors={"benchmark":"#5865f2","show":"#e67e22","ship":"#9b59b6","grow":"#c49a3a","done":"#949ba4"};
       var barColor=pct===100?"var(--ok)":(phaseColors[phase]||"var(--accent)");
       var collapsed=_collapsedPhases[phase]===true;
       html+='<div class="planner-phase" data-phase="'+esc(phase)+'">';
@@ -8669,7 +8686,7 @@ async function renderPlannerView(){
         html+='<input type="checkbox" class="planner-check"'+(ck?" checked":"")+' onchange="togglePlannerItem(\\''+it.id+'\\',this.checked)">';
         html+='<div class="planner-item-body">';
         html+='<span class="planner-item-title">'+esc(it.title)+'</span>';
-        if(it.notes)html+='<div class="planner-item-notes" title="'+esc(it.notes)+'">'+esc(it.notes)+'</div>';
+        if(it.notes){var plain=it.notes.replace(/RUN:\s*.+/g,'').replace(/\n+/g,' ').trim();var preview=plain.length>100?plain.substring(0,100)+'...':plain;if(!preview)preview=it.notes.split('\\n')[0].substring(0,100);html+='<div class="planner-item-preview" onclick="var n=this.nextElementSibling;n.classList.toggle(\\'expanded\\');this.classList.toggle(\\'expanded\\')"><svg class="planner-notes-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg><span>'+esc(preview)+'</span></div>';var nn=esc(it.notes).replace(/RUN:\\s*(.+)/g,function(_,cmd){return 'RUN: <span class="planner-cmd" onclick="event.stopPropagation();navigator.clipboard.writeText(\\''+cmd.replace(/'/g,"\\\\'")+'\\')" title="Click to copy">'+cmd+'</span>';});html+='<div class="planner-item-notes">'+nn+'</div>';}
         html+='</div>';
         html+='<div class="planner-item-actions">';
         html+='<button class="planner-act-btn" onclick="editPlannerNotes(\\''+it.id+'\\')" title="Edit notes"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
@@ -10345,8 +10362,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <div style="width:160px;flex-shrink:0;">
                 <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Phase</label>
                 <select id="plannerNewPhase" style="font-size:13px;padding:8px 12px;">
-                  <option value="measure">Measure</option>
-                  <option value="fix">Fix</option>
+                  <option value="benchmark">Benchmark & Fix</option>
                   <option value="show">Show</option>
                   <option value="ship">Ship</option>
                   <option value="grow">Grow</option>
@@ -10657,6 +10673,12 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
     @app.get("/health")
     def health():
         return {"status": "ok", "version": __version__}
+
+    @app.get("/startup-status")
+    def startup_status():
+        """Loading page polls this during startup.  Once Uvicorn is serving,
+        startup is complete -- always return 100% so the page transitions."""
+        return {"stage": "Ready", "detail": "", "progress": 100}
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
@@ -12884,7 +12906,7 @@ def main() -> None:
 
     # 3. Signal ready — loading page JS will see 100% and start polling /health
     _startup_status.update({"stage": "Starting dashboard...", "detail": "", "progress": 100})
-    _time.sleep(0.5)  # Let loading page detect 100% and prepare for transition
+    _time.sleep(1.0)  # Let loading page detect 100% (polls every 600ms)
 
     # 4. Shut down early loading server so uvicorn can bind the port
     if _loading_server is not None:
