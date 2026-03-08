@@ -29,7 +29,7 @@ from pathlib import Path
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 
 ROOT = Path(__file__).parent.resolve()
 DIST_DIR = ROOT / "dist"
@@ -310,6 +310,20 @@ def step_launcher_scripts():
         encoding="utf-8"
     )
     print("    ClawBridge.bat (windowless/tray mode + auto-open browser)")
+
+    # ClawBridge.vbs — truly windowless launcher (no console flash)
+    cb_vbs = BUNDLE_DIR / "ClawBridge.vbs"
+    cb_vbs.write_text(
+        'Set WshShell = CreateObject("WScript.Shell")\r\n'
+        'AppDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)\r\n'
+        'Set WshEnv = WshShell.Environment("Process")\r\n'
+        'WshEnv("CLAWBRIDGE_OPEN_BROWSER") = "1"\r\n'
+        'WshEnv("PLAYWRIGHT_BROWSERS_PATH") = AppDir & "\\playwright_browsers"\r\n'
+        'WshEnv("PATH") = AppDir & "\\nodejs;" & AppDir & "\\python\\Scripts;" & WshEnv("PATH")\r\n'
+        'WshShell.Run """" & AppDir & "\\python\\pythonw.exe"" """ & AppDir & "\\clawbridge.py""", 0, False\r\n',
+        encoding="utf-8"
+    )
+    print("    ClawBridge.vbs (truly windowless launcher)")
 
     # update.bat — re-install deps (for manual updates)
     update_bat = BUNDLE_DIR / "update.bat"

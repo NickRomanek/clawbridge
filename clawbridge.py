@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.5.6"
+__version__ = "0.5.7"
 
 import hmac
 import os
@@ -212,16 +212,17 @@ try:
     _probe.close()
     _loading_server = HTTPServer(("127.0.0.1", _loading_port), _LoadingHandler)
     threading.Thread(target=_loading_server.serve_forever, daemon=True).start()
-    # Verify the server is accepting connections before we open the browser
+    # Verify the server is serving HTTP responses before we open the browser
     import time as _time_wait
-    for _attempt in range(10):
-        _test_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-        _test_sock.settimeout(0.3)
-        if _test_sock.connect_ex(("127.0.0.1", _loading_port)) == 0:
-            _test_sock.close()
-            break
-        _test_sock.close()
-        _time_wait.sleep(0.1)
+    import urllib.request as _urllib_req
+    for _attempt in range(20):
+        try:
+            _resp = _urllib_req.urlopen(f"http://127.0.0.1:{_loading_port}/", timeout=0.5)
+            if _resp.status == 200:
+                break
+        except Exception:
+            pass
+        _time_wait.sleep(0.2)
     print(f"  Loading page active on http://127.0.0.1:{_loading_port}")
 except OSError:
     _loading_server = None  # Port in use — skip (uvicorn will report the error later)
@@ -2750,6 +2751,72 @@ class OpenClawEngine(EngineBase):
         token = get_settings().openclaw_api_key or self._gateway_token
         return {"Authorization": f"Bearer {token}"} if token else {}
 
+    def _configure_openclaw_gateway(self, settings) -> None:
+        """Ensure ~/.openclaw/openclaw.json has chat endpoint enabled and API keys."""
+        oc_dir = os.path.join(os.path.expanduser("~"), ".openclaw")
+        oc_path = os.path.join(oc_dir, "openclaw.json")
+        try:
+            os.makedirs(oc_dir, exist_ok=True)
+            cfg = {}
+            if os.path.isfile(oc_path):
+                with open(oc_path, "r", encoding="utf-8") as f:
+                    cfg = json.loads(f.read())
+            changed = False
+            # Enable /v1/chat/completions endpoint (deep-merge, don't overwrite)
+            gw = cfg.setdefault("gateway", {})
+            http = gw.setdefault("http", {})
+            endpoints = http.setdefault("endpoints", {})
+            cc = endpoints.setdefault("chatCompletions", {})
+            if not cc.get("enabled"):
+                cc["enabled"] = True
+                changed = True
+            # Inject API keys into env block (only if non-empty and not already set)
+            env_block = cfg.setdefault("env", {})
+            for key_name, key_val in [
+                ("ANTHROPIC_API_KEY", settings.anthropic_api_key),
+                ("OPENAI_API_KEY", settings.openai_api_key),
+                ("OPENROUTER_API_KEY", settings.openrouter_api_key),
+            ]:
+                if key_val and not env_block.get(key_name):
+                    env_block[key_name] = key_val
+                    changed = True
+            if changed:
+                with open(oc_path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(cfg, indent=2))
+                logging.info("OpenClaw: updated %s (enabled chatCompletions, synced API keys)", oc_path)
+        except Exception as e:
+            logging.warning("OpenClaw: failed to configure gateway config: %s", e)
+
+    def _kill_port_process(self, port: int) -> None:
+        """Kill any process listening on *port* (except our own tracked gateway)."""
+        import subprocess as _sp
+        own_pid = self._gateway_proc.pid if self._gateway_proc and self._gateway_proc.poll() is None else None
+        try:
+            if sys.platform == "win32":
+                _netstat = _sp.run(
+                    ["netstat", "-ano"], capture_output=True, text=True, timeout=5,
+                    creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+                )
+                for _line in _netstat.stdout.splitlines():
+                    if f":{port}" in _line and "LISTENING" in _line:
+                        _pid = int(_line.strip().split()[-1])
+                        if _pid > 0 and _pid != own_pid:
+                            _sp.run(
+                                ["taskkill", "/F", "/PID", str(_pid)],
+                                capture_output=True, timeout=5,
+                                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+                            )
+                            logging.info("OpenClaw: killed stale process PID %d on port %d", _pid, port)
+            else:
+                _lsof = _sp.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True, timeout=5)
+                for _pid_str in _lsof.stdout.strip().split():
+                    _pid = int(_pid_str)
+                    if _pid > 0 and _pid != own_pid:
+                        _sp.run(["kill", "-9", _pid_str], capture_output=True, timeout=5)
+                        logging.info("OpenClaw: killed stale process PID %d on port %d", _pid, port)
+        except Exception as e:
+            logging.debug("OpenClaw: port cleanup on %d failed: %s", port, e)
+
     async def _ensure_gateway(self) -> bool:
         """Check if OpenClaw gateway is running; start it if not."""
         if not self._http_client:
@@ -2774,6 +2841,10 @@ class OpenClawEngine(EngineBase):
             return False
         import subprocess
         settings = get_settings()
+        # Configure gateway JSON (enable chatCompletions, sync API keys)
+        self._configure_openclaw_gateway(settings)
+        # Kill any stale processes holding the port
+        self._kill_port_process(settings.openclaw_gateway_port)
         # Minimal env: only pass what the gateway needs (avoid leaking other secrets)
         env = {
             "PATH": os.environ.get("PATH", ""),
@@ -2798,12 +2869,12 @@ class OpenClawEngine(EngineBase):
                 env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            # Poll for gateway readiness
+            # Poll for gateway readiness — use /v1/models to confirm API layer is up
             for _ in range(15):
                 await asyncio.sleep(1)
                 try:
-                    resp = await self._http_client.get("/", timeout=3.0, headers=_hdr)
-                    if resp.status_code == 200:
+                    resp = await self._http_client.get("/v1/models", timeout=3.0, headers=_hdr)
+                    if resp.status_code in (200, 401):
                         logging.info("OpenClaw gateway started successfully")
                         return True
                 except Exception:

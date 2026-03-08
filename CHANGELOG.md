@@ -5,6 +5,21 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-03-08
+
+### Fixed
+- **OpenClaw chat broken on fresh install**: Gateway's `/v1/chat/completions` endpoint is disabled by default. New `_configure_openclaw_gateway()` deep-merges `~/.openclaw/openclaw.json` to enable chatCompletions and sync API keys without overwriting user config.
+- **Stale gateway zombies**: New `_kill_port_process()` kills orphaned node.exe processes holding port 18789 after force-close, preventing gateway startup failures.
+- **Gateway readiness check**: Changed startup poll from `GET /` (web UI) to `GET /v1/models` (API layer) to confirm the chat endpoint is actually functional before declaring ready.
+- **Browser blank page on first launch**: Loading server verification used TCP `connect_ex()` which confirms socket listening but not HTTP serving. Replaced with `urllib.request.urlopen()` HTTP-level check (20 attempts x 0.2s).
+- **Console window flash on launch**: Added `ClawBridge.vbs` launcher using `WshShell.Run` with hidden window style. Installer shortcuts and post-install launch now use VBS instead of BAT.
+
+### Changed
+- Installer `[Run]` section uses `wscript.exe` to launch VBS for truly windowless startup.
+- `ClawBridge.bat` kept in bundle for backward compatibility and manual console use.
+
+---
+
 ## [0.5.6] - 2026-03-08
 
 ### Fixed

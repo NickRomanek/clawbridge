@@ -7,10 +7,10 @@
 ; Expects dist\ClawBridge\ to exist (run build.py first).
 
 #define MyAppName "ClawBridge"
-#define MyAppVersion "0.5.6"
+#define MyAppVersion "0.5.7"
 #define MyAppPublisher "ClawBridge"
 #define MyAppURL "https://clawbridge.ai"
-#define MyAppExeName "ClawBridge.bat"
+#define MyAppExeName "ClawBridge.vbs"
 
 [Setup]
 AppId={{B7C3E4F5-A1D2-4E6F-8B9C-0D1E2F3A4B5C}
@@ -65,7 +65,7 @@ Name: "{userstartup}\ClawBridge"; Filename: "{app}\{#MyAppExeName}"; WorkingDir:
 
 [Run]
 ; Only the final "Launch" checkbox — all heavy work is done in [Code] with progress bar
-Filename: "{app}\ClawBridge.bat"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent runhidden runasoriginaluser
+Filename: "{sys}\wscript.exe"; Parameters: """{app}\ClawBridge.vbs"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallDelete]
 ; Clean up generated files on uninstall
