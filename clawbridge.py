@@ -11,7 +11,7 @@ Optional: create .env with ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_
 """
 from __future__ import annotations
 
-__version__ = "0.5.11"
+__version__ = "0.6.0"
 
 import hmac
 import os
@@ -90,7 +90,7 @@ body{background:#18191c;color:#dbdee1;display:flex;justify-content:center;
 <div class="container">
   <img class="logo-icon" src="data:image/png;base64,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">
   <div class="logo">Claw<span>Bridge</span> <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:linear-gradient(135deg,#5865f2,#7289da);color:#fff;vertical-align:middle;letter-spacing:1px;text-transform:uppercase;">Beta</span></div>
-  <div class="sub">Desktop &amp; Browser Automation</div>
+  <div class="sub">AI that controls your entire computer</div>
   <div class="progress-wrap"><div class="progress-bar" id="bar"></div></div>
   <div class="stage" id="stage">Starting...</div>
   <div class="detail" id="detail"></div>
@@ -7560,6 +7560,67 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .planner-add-form{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;display:none;}
 .planner-add-form.visible{display:block;}
 .planner-empty{color:var(--muted);font-size:13px;text-align:center;padding:48px 20px;}
+.empty-state{text-align:center;padding:40px 20px;max-width:640px;margin:0 auto;}
+.empty-state h3{font-size:16px;font-weight:600;color:var(--text);margin-bottom:24px;}
+.empty-state-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;}
+.example-card{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:12px;padding:16px 12px;cursor:pointer;transition:all 0.2s;text-align:center;}
+.example-card:hover{background:rgba(88,101,242,0.08);border-color:rgba(88,101,242,0.3);transform:translateY(-2px);}
+.example-card .ec-icon{font-size:24px;margin-bottom:8px;display:block;}
+.example-card .ec-title{font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;}
+.example-card .ec-prompt{font-size:11px;color:var(--muted);line-height:1.4;margin-bottom:10px;min-height:30px;}
+.example-card .ec-btn{font-size:10px;color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;}
+.empty-state-hint{font-size:12px;color:var(--muted);}
+.config-section-header{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;padding:2px 0;}
+.config-section-header:hover{color:var(--text);}
+.config-section-arrow{font-size:10px;color:var(--muted);transition:transform 0.2s;display:inline-block;}
+.config-section-arrow.open{transform:rotate(90deg);}
+/* Walkthrough */
+.walkthrough-overlay{position:fixed;z-index:9999;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;overflow-y:auto;}
+.walkthrough-step{max-width:560px;width:100%;padding:40px 32px;text-align:center;animation:wtFadeIn 0.3s ease;}
+@keyframes wtFadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.walkthrough-step h2{font-size:22px;font-weight:700;margin-bottom:8px;color:var(--text);}
+.walkthrough-step .wt-sub{font-size:14px;color:var(--muted);margin-bottom:28px;line-height:1.5;}
+.wt-bullets{text-align:left;margin:0 auto 28px;max-width:400px;}
+.wt-bullets li{font-size:13px;color:var(--muted);margin-bottom:10px;line-height:1.5;list-style:none;padding-left:24px;position:relative;}
+.wt-bullets li::before{content:'';position:absolute;left:0;top:6px;width:8px;height:8px;border-radius:50%;background:var(--accent);}
+.wt-btn-primary{background:#5865f2;color:#fff;border:none;padding:12px 32px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;display:inline-block;}
+.wt-btn-primary:hover{background:#4752c4;transform:translateY(-1px);}
+.wt-btn-secondary{background:none;border:1px solid var(--border);color:var(--muted);padding:10px 24px;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s;display:inline-block;}
+.wt-btn-secondary:hover{border-color:var(--accent);color:var(--text);}
+.wt-skip{font-size:12px;color:var(--muted);cursor:pointer;margin-top:16px;display:inline-block;transition:color 0.15s;}
+.wt-skip:hover{color:var(--text);}
+.wt-provider-cards{display:flex;flex-direction:column;gap:12px;text-align:left;margin-bottom:20px;}
+.wt-provider-card{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:12px;padding:16px;transition:all 0.2s;}
+.wt-provider-card:hover{border-color:rgba(88,101,242,0.3);}
+.wt-provider-card.recommended{border-color:rgba(88,101,242,0.4);background:rgba(88,101,242,0.05);}
+.wt-provider-name{font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px;display:flex;align-items:center;gap:8px;}
+.wt-provider-hint{font-size:11px;color:var(--muted);margin-bottom:10px;}
+.wt-provider-badge{font-size:9px;background:rgba(88,101,242,0.2);color:var(--accent);padding:2px 8px;border-radius:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;}
+.wt-key-row{display:flex;gap:8px;align-items:center;}
+.wt-key-row input{flex:1;font-size:12px;padding:8px 12px;border-radius:8px;background:rgba(0,0,0,0.3);border:1px solid var(--border);color:var(--text);}
+.wt-key-row button{font-size:12px;padding:8px 16px;border-radius:8px;background:#5865f2;color:#fff;border:none;cursor:pointer;white-space:nowrap;font-weight:600;}
+.wt-key-row button:hover{background:#4752c4;}
+.wt-key-status{font-size:11px;margin-top:6px;min-height:16px;}
+.wt-key-help{font-size:11px;color:var(--accent);text-decoration:none;margin-top:4px;display:inline-block;}
+.wt-key-help:hover{text-decoration:underline;}
+.wt-pref-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;}
+.wt-pref-card{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:12px;padding:20px 12px;cursor:pointer;transition:all 0.2s;text-align:center;}
+.wt-pref-card:hover{background:rgba(88,101,242,0.08);border-color:rgba(88,101,242,0.3);transform:translateY(-2px);}
+.wt-pref-card .wt-pref-icon{font-size:28px;margin-bottom:8px;display:block;color:var(--muted);}
+.wt-pref-card .wt-pref-label{font-size:13px;font-weight:600;color:var(--text);}
+.wt-example-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;text-align:left;}
+.wt-example-card{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:all 0.2s;font-size:12px;color:var(--muted);line-height:1.4;}
+.wt-example-card:hover{background:rgba(88,101,242,0.08);border-color:rgba(88,101,242,0.3);}
+.wt-progress{display:flex;gap:6px;justify-content:center;margin-bottom:24px;}
+.wt-progress-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.1);transition:all 0.3s;}
+.wt-progress-dot.active{background:var(--accent);transform:scale(1.2);}
+.wt-progress-dot.done{background:var(--ok);}
+.wt-checkmark{width:64px;height:64px;margin:0 auto 20px;position:relative;}
+.wt-checkmark circle{stroke:#57a86d;stroke-width:2;fill:none;stroke-dasharray:166;stroke-dashoffset:166;animation:wtCircle 0.6s ease forwards;}
+.wt-checkmark path{stroke:#57a86d;stroke-width:3;fill:none;stroke-dasharray:48;stroke-dashoffset:48;animation:wtCheck 0.3s 0.4s ease forwards;}
+@keyframes wtCircle{to{stroke-dashoffset:0}}
+@keyframes wtCheck{to{stroke-dashoffset:0}}
+.wt-corner{position:fixed;bottom:20px;right:20px;z-index:9998;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 16px;font-size:12px;color:var(--muted);box-shadow:0 4px 16px rgba(0,0,0,0.3);display:none;animation:wtFadeIn 0.3s ease;}
 """
     # Inline JS
     js = """
@@ -7872,18 +7933,28 @@ function updateHeadlessIcon(){
   const btn=document.getElementById('pipHeadlessBtn');
   const eyeOn=document.getElementById('pipEyeOpen');
   const eyeOff=document.getElementById('pipEyeOff');
-  if(!btn||!eyeOn||!eyeOff)return;
-  if(_headlessState){
-    // Headless ON: show eye-off (slashed), accent color
-    eyeOn.style.display='none';eyeOff.style.display='block';
-    btn.classList.add('headless-active');
-    btn.title='Browser hidden (headless) - click to show';
-  }else{
-    // Headless OFF: show eye-open
-    eyeOn.style.display='block';eyeOff.style.display='none';
-    btn.classList.remove('headless-active');
-    btn.title='Browser visible - click to hide (headless)';
+  if(btn&&eyeOn&&eyeOff){
+    if(_headlessState){
+      eyeOn.style.display='none';eyeOff.style.display='block';
+      btn.classList.add('headless-active');
+      btn.title='Browser hidden (headless) - click to show';
+    }else{
+      eyeOn.style.display='block';eyeOff.style.display='none';
+      btn.classList.remove('headless-active');
+      btn.title='Browser visible - click to hide (headless)';
+    }
   }
+  // Update config view headless buttons
+  const hOn=document.getElementById('headlessOn');
+  const hOff=document.getElementById('headlessOff');
+  const hDesc=document.getElementById('headlessDesc');
+  if(hOn&&hOff){
+    hOn.style.background=_headlessState?'rgba(88,101,242,0.2)':'';
+    hOn.style.borderColor=_headlessState?'var(--accent)':'';
+    hOff.style.background=_headlessState?'':'rgba(88,101,242,0.2)';
+    hOff.style.borderColor=_headlessState?'':'var(--accent)';
+  }
+  if(hDesc)hDesc.textContent=_headlessState?'Browser runs hidden in the background':'Browser window is visible during tasks';
 }
 async function toggleHeadless(){
   if(_headlessState===null)return; // state not yet loaded
@@ -8208,6 +8279,208 @@ function updateChatRecordBtn(active){
     if(_chatRecordInterval){clearInterval(_chatRecordInterval);_chatRecordInterval=null;}
   }
 }
+// -- Walkthrough --
+let _wtStep=0;
+let _wtPreference='auto';
+function initWalkthrough(){
+  const ov=document.getElementById('walkthroughOverlay');
+  if(!ov)return;
+  if(localStorage.getItem('walkthrough_completed'))return;
+  const p=window.__PRELOAD__;
+  const hasKey=p&&p.has_any_key;
+  if(hasKey)return;
+  ov.style.display='flex';
+  walkthroughStep(1);
+}
+function walkthroughStep(n){
+  _wtStep=n;
+  const ov=document.getElementById('walkthroughOverlay');
+  if(!ov)return;
+  // Build progress dots
+  let dots='<div class="wt-progress">';
+  for(let i=1;i<=5;i++){
+    const cls=i<n?'wt-progress-dot done':i===n?'wt-progress-dot active':'wt-progress-dot';
+    dots+='<div class="'+cls+'"></div>';
+  }
+  dots+='</div>';
+  let html='<div class="walkthrough-step">'+dots;
+  if(n===1){
+    html+='<h2>Welcome to ClawBridge</h2>'
+      +'<p class="wt-sub">Your AI agent that controls your entire computer -- browser, desktop apps, everything.</p>'
+      +'<ul class="wt-bullets">'
+      +'<li>Tell it what to do in plain English</li>'
+      +'<li>Watch it work in real-time</li>'
+      +'<li>Your API keys, your machine, your data</li>'
+      +'</ul>'
+      +'<button class="wt-btn-primary" onclick="walkthroughStep(2)">Get Started</button>';
+  }else if(n===2){
+    html+='<h2>Connect an AI Provider</h2>'
+      +'<p class="wt-sub">ClawBridge uses your own API key. Pick a provider to get started.</p>'
+      +'<div class="wt-provider-cards">'
+      // OpenRouter
+      +'<div class="wt-provider-card recommended">'
+      +'<div class="wt-provider-name">OpenRouter <span class="wt-provider-badge">Recommended</span></div>'
+      +'<div class="wt-provider-hint">One key, all models. Pay-as-you-go pricing.</div>'
+      +'<button class="wt-btn-primary" onclick="startOpenRouterOAuth()" style="width:100%;margin-bottom:8px;font-size:13px">Sign in with OpenRouter</button>'
+      +'<div class="wt-key-status" id="wt-status-openrouter"></div>'
+      +'<details style="margin-top:8px"><summary style="font-size:11px;color:var(--muted);cursor:pointer">Or paste your API key</summary>'
+      +'<div class="wt-key-row" style="margin-top:8px"><input type="password" id="wt-key-openrouter" placeholder="sk-or-..."><button onclick="walkthroughSaveKey(\\'openrouter\\')">Save</button></div>'
+      +'<a class="wt-key-help" href="https://openrouter.ai/keys" target="_blank" rel="noopener">Get a key at openrouter.ai/keys</a></details>'
+      +'</div>'
+      // Anthropic
+      +'<div class="wt-provider-card">'
+      +'<div class="wt-provider-name">Anthropic</div>'
+      +'<div class="wt-provider-hint">Direct access to Claude models.</div>'
+      +'<div class="wt-key-row"><input type="password" id="wt-key-anthropic" placeholder="sk-ant-..."><button onclick="walkthroughSaveKey(\\'anthropic\\')">Save</button></div>'
+      +'<div class="wt-key-status" id="wt-status-anthropic"></div>'
+      +'<a class="wt-key-help" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get a key at console.anthropic.com</a>'
+      +'</div>'
+      // OpenAI
+      +'<div class="wt-provider-card">'
+      +'<div class="wt-provider-name">OpenAI</div>'
+      +'<div class="wt-provider-hint">GPT models for chat tasks.</div>'
+      +'<div class="wt-key-row"><input type="password" id="wt-key-openai" placeholder="sk-..."><button onclick="walkthroughSaveKey(\\'openai\\')">Save</button></div>'
+      +'<div class="wt-key-status" id="wt-status-openai"></div>'
+      +'<a class="wt-key-help" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get a key at platform.openai.com</a>'
+      +'</div>'
+      +'</div>'
+      +'<button class="wt-btn-primary" onclick="walkthroughStep(3)">Continue</button>'
+      +'<br><span class="wt-skip" onclick="walkthroughStep(3)">Skip for now</span>';
+  }else if(n===3){
+    html+='<h2>What do you want to automate?</h2>'
+      +'<p class="wt-sub">Pick what interests you most. You can always change this later.</p>'
+      +'<div class="wt-pref-cards">'
+      +'<div class="wt-pref-card" onclick="walkthroughSetPreference(\\'browser_use\\')">'
+      +'<span class="wt-pref-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>'
+      +'<div class="wt-pref-label">Browse the web</div></div>'
+      +'<div class="wt-pref-card" onclick="walkthroughSetPreference(\\'computer_use\\')">'
+      +'<span class="wt-pref-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>'
+      +'<div class="wt-pref-label">Control desktop apps</div></div>'
+      +'<div class="wt-pref-card" onclick="walkthroughSetPreference(\\'openclaw\\')">'
+      +'<span class="wt-pref-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>'
+      +'<div class="wt-pref-label">Just chat</div></div>'
+      +'</div>'
+      +'<span class="wt-skip" onclick="walkthroughSetPreference(\\'auto\\')">Auto works great too</span>';
+  }else if(n===4){
+    const examples={
+      browser_use:['Search Google for today\\'s weather','Go to reddit.com and find the top post','Open YouTube and search for productivity tips'],
+      computer_use:['Open Notepad and type Hello World','Take a screenshot of my desktop','Open Calculator'],
+      openclaw:['What can you help me with?','Explain how ClawBridge works','Write me a short poem']
+    };
+    const ex=examples[_wtPreference]||examples.browser_use;
+    html+='<h2>Try it out</h2>'
+      +'<p class="wt-sub">Click an example to see your agent in action.</p>'
+      +'<div class="wt-example-cards">';
+    ex.forEach(e=>{
+      html+='<div class="wt-example-card" onclick="walkthroughTryExample(\\''+e.replace(/'/g,"\\\\\\'")+'\\')">'+esc(e)+'</div>';
+    });
+    html+='</div>'
+      +'<span class="wt-skip" onclick="walkthroughStep(5)">Skip</span>';
+  }else if(n===5){
+    html+='<svg class="wt-checkmark" viewBox="0 0 52 52"><circle cx="26" cy="26" r="25"/><path fill="none" d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>'
+      +'<h2>You\\'re all set!</h2>'
+      +'<p class="wt-sub">Your agent is ready. You can always change settings in Config.</p>'
+      +'<button class="wt-btn-primary" onclick="walkthroughComplete()">Start Using ClawBridge</button>';
+  }
+  html+='</div>';
+  ov.innerHTML=html;
+}
+async function walkthroughSaveKey(provider){
+  const input=document.getElementById('wt-key-'+provider);
+  const status=document.getElementById('wt-status-'+provider);
+  const key=input?input.value.trim():'';
+  if(!key){if(status){status.textContent='Enter a key first';status.style.color='var(--err)';}return;}
+  if(status){status.textContent='Saving...';status.style.color='var(--muted)';}
+  try{
+    await api('POST','/api/config/keys',{provider,key});
+    if(status){status.textContent='Saved!';status.style.color='var(--ok)';}
+    if(input)input.value='';
+    refreshConfig();
+  }catch(e){if(status){status.textContent=e.message;status.style.color='var(--err)';}}
+}
+function walkthroughSetPreference(engine){
+  _wtPreference=engine;
+  localStorage.setItem('preferred_engine',engine);
+  if(engine!=='auto')document.getElementById('engine').value=engine;
+  walkthroughStep(4);
+}
+function walkthroughTryExample(prompt){
+  const ov=document.getElementById('walkthroughOverlay');
+  // Shrink to corner indicator
+  if(ov)ov.style.display='none';
+  const corner=document.getElementById('walkthroughCorner');
+  if(corner){corner.style.display='block';corner.textContent='Running your first task...';}
+  // Set engine and submit
+  const eng=_wtPreference!=='auto'?_wtPreference:'';
+  document.getElementById('prompt').value=prompt;
+  if(eng)document.getElementById('engine').value=eng;
+  submit();
+  // Watch for task completion via polling
+  const checkDone=setInterval(()=>{
+    if(!state.runningTaskId){
+      clearInterval(checkDone);
+      if(corner)corner.style.display='none';
+      walkthroughStep(5);
+      const ov2=document.getElementById('walkthroughOverlay');
+      if(ov2)ov2.style.display='flex';
+    }
+  },1000);
+  // Timeout after 60s
+  setTimeout(()=>{
+    clearInterval(checkDone);
+    if(corner)corner.style.display='none';
+    walkthroughStep(5);
+    const ov2=document.getElementById('walkthroughOverlay');
+    if(ov2)ov2.style.display='flex';
+  },60000);
+}
+function walkthroughComplete(){
+  localStorage.setItem('walkthrough_completed','true');
+  const ov=document.getElementById('walkthroughOverlay');
+  if(ov){ov.style.opacity='0';ov.style.transition='opacity 0.3s';setTimeout(()=>ov.remove(),300);}
+  const corner=document.getElementById('walkthroughCorner');
+  if(corner)corner.remove();
+}
+async function startOpenRouterOAuth(){
+  try{
+    const r=await api('GET','/auth/openrouter');
+    if(r&&r.auth_url){
+      window.open(r.auth_url,'_blank','noopener');
+      // Poll for key save
+      const statusEl=document.getElementById('wt-status-openrouter')||document.getElementById('oauth-status-config');
+      if(statusEl){statusEl.textContent='Waiting for authorization...';statusEl.style.color='var(--muted)';}
+      let polls=0;
+      const poll=setInterval(async()=>{
+        polls++;
+        if(polls>60){clearInterval(poll);if(statusEl){statusEl.textContent='Timed out. Try pasting your key manually.';statusEl.style.color='var(--err)';}return;}
+        try{
+          const cfg=await api('GET','/api/config');
+          if(cfg&&cfg.keys&&cfg.keys.openrouter_configured){
+            clearInterval(poll);
+            if(statusEl){statusEl.textContent='Connected!';statusEl.style.color='var(--ok)';}
+            refreshConfig();
+          }
+        }catch(e){}
+      },2000);
+    }
+  }catch(e){
+    const statusEl=document.getElementById('wt-status-openrouter')||document.getElementById('oauth-status-config');
+    if(statusEl){statusEl.textContent='OAuth failed: '+e.message;statusEl.style.color='var(--err)';}
+  }
+}
+function useExample(prompt,engine){
+  document.getElementById("prompt").value=prompt;
+  if(engine)document.getElementById("engine").value=engine;
+  submit();
+}
+function toggleConfigSection(id){
+  const el=document.getElementById(id+"Content");
+  const arrow=document.getElementById(id+"Arrow");
+  if(!el)return;
+  const show=el.style.display==="none";
+  el.style.display=show?"block":"none";
+  if(arrow)arrow.classList.toggle("open",show);
+}
 async function submit(){
   if(state.runningTaskId){addActivity({timestamp:new Date().toISOString(),event_type:"info",detail:"A task is already running. Stop it first or wait for it to finish."});return;}
   const raw=document.getElementById("prompt").value.trim();if(!raw)return;
@@ -8323,7 +8596,7 @@ function renderStats(){
 function render(){
   const c=document.getElementById("taskList");
   renderStats();
-  if(!state.tasks.length){c.innerHTML='<p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>';return;}
+  if(!state.tasks.length){c.innerHTML='<div class="empty-state"><h3>Your AI agent is ready.</h3><div class="empty-state-cards"><div class="example-card" onclick="useExample(\\'Go to YouTube and find the top trending video\\',\\'browser_use\\')"><span class="ec-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><div class="ec-title">Browse the web</div><div class="ec-prompt">&ldquo;Go to YouTube and find the top trending video&rdquo;</div><div class="ec-btn">Try this</div></div><div class="example-card" onclick="useExample(\\'Open Notepad and write meeting notes for today\\',\\'computer_use\\')"><span class="ec-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span><div class="ec-title">Control desktop apps</div><div class="ec-prompt">&ldquo;Open Notepad and write meeting notes for today&rdquo;</div><div class="ec-btn">Try this</div></div><div class="example-card" onclick="useExample(\\'What time is it in Tokyo right now?\\',\\'openclaw\\')"><span class="ec-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><div class="ec-title">Ask anything</div><div class="ec-prompt">&ldquo;What time is it in Tokyo right now?&rdquo;</div><div class="ec-btn">Try this</div></div></div><p class="empty-state-hint">Or type anything below to get started</p></div>';return;}
 
   const items = [...state.tasks].sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
 
@@ -8519,11 +8792,26 @@ function renderConfigSummary(c){
       +'</div>'
       +'<div id="key-status-'+pkey+'" style="font-size:10px;margin-top:4px"></div></div></div>';
   }
+  // OpenRouter row with OAuth button
+  const orRow=k.openrouter_configured?providerRow("OpenRouter","openrouter",true)
+    :'<div class="config-provider-row">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;cursor:pointer" onclick="toggleInlineKey(\\'openrouter\\')">'
+    +'<span style="font-size:12px;color:var(--muted)">OpenRouter</span>'
+    +'<span class="config-chip not-set clickable-chip">Click to set</span></div>'
+    +'<div id="inline-key-openrouter" style="display:none;padding:4px 0 8px">'
+    +'<button class="btn" style="width:100%;font-size:12px;padding:8px;margin-bottom:8px;background:#5865f2" onclick="startOpenRouterOAuth()">Sign in with OpenRouter</button>'
+    +'<div id="oauth-status-config" style="font-size:10px;margin-bottom:8px;min-height:14px"></div>'
+    +'<div style="font-size:10px;color:var(--muted);margin-bottom:6px">Or paste your API key:</div>'
+    +'<div style="display:flex;gap:6px">'
+    +'<input type="password" id="key-input-openrouter" placeholder="Paste OpenRouter API key..." style="flex:1;font-size:12px;padding:6px 10px" onkeydown="if(event.key===\\'Enter\\')saveInlineKey(\\'openrouter\\')">'
+    +'<button class="btn" style="font-size:11px;padding:6px 12px;white-space:nowrap" onclick="saveInlineKey(\\'openrouter\\')">Save</button>'
+    +'</div>'
+    +'<div id="key-status-openrouter" style="font-size:10px;margin-top:4px"></div></div></div>';
   document.getElementById("configSummary").innerHTML=
     '<div class="config-provider-primary">Active: '+esc(primary)+'</div>'
     +providerRow("Anthropic","anthropic",k.anthropic_configured)
     +providerRow("OpenAI","openai",k.openai_configured)
-    +providerRow("OpenRouter","openrouter",k.openrouter_configured);
+    +orRow;
   // Update Machine ID in health dropdown
   const midEl=document.getElementById("healthMachineId");
   if(midEl&&c.machine_id)midEl.textContent=c.machine_id;
@@ -9560,14 +9848,20 @@ function dismissOnboarding(){
     setTimeout(()=>{card.style.display="none";localStorage.setItem("onboarding_dismissed","true");},300);}
 }
 let _soulOriginal="";
+function _getSoulEditor(){return document.getElementById("soulEditor")||document.getElementById("soulEditorInline");}
+function _getSoulStatus(){return document.getElementById("soulSaveStatus")||document.getElementById("soulSaveStatusInline");}
 async function loadSoulFile(name){
   _currentSoulFile=name;
-  document.querySelectorAll(".soul-tab").forEach(b=>b.classList.toggle("active",b.dataset.file===name));
-  const editor=document.getElementById("soulEditor");
+  document.querySelectorAll(".soul-tab").forEach(b=>{b.classList.toggle("active",b.dataset.file===name);b.style.background=b.dataset.file===name?"rgba(88,101,242,0.15)":"rgba(255,255,255,0.05)";b.style.color=b.dataset.file===name?"var(--accent)":"var(--muted)";});
+  const editor=_getSoulEditor();
+  if(!editor)return;
   editor.value="Loading...";
   try{
     const r=await api("GET","/api/personality/"+name);
     editor.value=r.content;_soulOriginal=r.content;
+    // Sync to both editors if both exist
+    const other=document.getElementById("soulEditor")===editor?document.getElementById("soulEditorInline"):document.getElementById("soulEditor");
+    if(other)other.value=r.content;
     const badge=document.getElementById("soulBadge");if(badge)badge.style.display="none";
     editor.oninput=()=>{
       const badge=document.getElementById("soulBadge");
@@ -9577,8 +9871,9 @@ async function loadSoulFile(name){
 }
 async function saveSoulFile(){
   if(!_currentSoulFile)return;
-  const content=document.getElementById("soulEditor").value;
-  const st=document.getElementById("soulSaveStatus");
+  const editor=_getSoulEditor();if(!editor)return;
+  const content=editor.value;
+  const st=_getSoulStatus();
   st.textContent="Saving...";st.style.color="var(--muted)";
   try{
     await api("PUT","/api/personality/"+_currentSoulFile,{content});
@@ -9835,6 +10130,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   refreshConfig();
   connect();
   showLastSession();
+  initWalkthrough();
   checkOnboarding();
   checkMacPermissions();
   // HTTP fallback — load engine/task data if WebSocket is slow or blocked
@@ -9895,7 +10191,7 @@ async function checkLicenseStatus() {
 function updateLicenseBadge(data) {
   const badge = document.getElementById('licenseBadge');
   if (!badge) return;
-  badge.style.display = 'inline';
+  return; // License badge hidden -- licensing backend not public
   if (data.status === 'activated' || data.tier === 'starter') {
     badge.textContent = 'PRO';
     badge.className = 'license-badge pro';
@@ -10057,6 +10353,8 @@ document.addEventListener('DOMContentLoaded', () => {
   <style>""" + css + """</style>
 </head>
 <body>
+  <div id="walkthroughOverlay" class="walkthrough-overlay" style="display:none"></div>
+  <div id="walkthroughCorner" class="wt-corner"></div>
   <header class="header">
     <div style="display:flex;align-items:center;gap:8px;">
       <span class="beta-badge">Beta</span>
@@ -10070,9 +10368,9 @@ document.addEventListener('DOMContentLoaded', () => {
       <span id="healthText">Connecting...</span>
       <div class="system-health-dropdown">
         <div class="health-row"><span class="health-label">WebSocket</span><span id="healthWS" class="health-value h-err">Connecting...</span></div>
-        <div class="health-row"><span class="health-label">Remote Bridge</span><span id="healthBridge" class="health-value" style="color:var(--muted)">Offline</span></div>
+        <div class="health-row" style="display:none"><span class="health-label">Remote Bridge</span><span id="healthBridge" class="health-value" style="color:var(--muted)">Offline</span></div>
         <div class="health-row"><span class="health-label">Active Engines</span><span id="healthEngines" class="health-value" style="color:var(--muted)">0</span></div>
-        <div class="health-row"><span class="health-label">Machine ID</span><span id="healthMachineId" class="health-value" style="color:var(--accent);font-size:9px;font-family:monospace;word-break:break-all;max-width:120px;text-align:right"></span></div>
+        <div class="health-row" style="display:none"><span class="health-label">Machine ID</span><span id="healthMachineId" class="health-value" style="color:var(--accent);font-size:9px;font-family:monospace;word-break:break-all;max-width:120px;text-align:right"></span></div>
       </div>
     </div>
     </div>
@@ -10087,10 +10385,10 @@ document.addEventListener('DOMContentLoaded', () => {
         <div onclick="switchView('config')" title="Config">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </div>
-        <div onclick="switchView('soul')" title="Soul">
+        <div onclick="switchView('soul')" title="Soul" style="display:none">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
         </div>
-        <div onclick="switchView('memory')" title="Memory">
+        <div onclick="switchView('memory')" title="Memory" style="display:none">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
         </div>
         <div onclick="switchView('schedules')" title="Schedules">
@@ -10099,7 +10397,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div onclick="switchView('history')" title="History">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
         </div>
-        <div onclick="switchView('planner')" title="Planner">
+        <div onclick="switchView('planner')" title="Planner" style="display:none">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
         </div>
       </div>
@@ -10116,12 +10414,12 @@ document.addEventListener('DOMContentLoaded', () => {
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         <span>Config</span>
       </div>
-      <div class="sidebar-nav-item" onclick="switchView('soul')" id="nav-soul">
+      <div class="sidebar-nav-item" onclick="switchView('soul')" id="nav-soul" style="display:none">
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
         <span>Soul</span>
         <span id="soulBadge" class="nav-badge" style="display:none"></span>
       </div>
-      <div class="sidebar-nav-item" onclick="switchView('memory')" id="nav-memory">
+      <div class="sidebar-nav-item" onclick="switchView('memory')" id="nav-memory" style="display:none">
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
         <span>Memory</span>
         <span id="memoryBadge" class="nav-badge" style="display:none"></span>
@@ -10140,11 +10438,11 @@ document.addEventListener('DOMContentLoaded', () => {
         <span>Workflows</span>
         <span id="workflowsBadge" class="nav-badge" style="display:none">0</span>
       </div>
-      <div class="sidebar-nav-item" onclick="switchView('templates')" id="nav-templates">
+      <div class="sidebar-nav-item" onclick="switchView('templates')" id="nav-templates" style="display:none">
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
         <span>Templates</span>
       </div>
-      <div class="sidebar-nav-item" onclick="switchView('planner')" id="nav-planner">
+      <div class="sidebar-nav-item" onclick="switchView('planner')" id="nav-planner" style="display:none">
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
         <span>Planner</span>
         <span id="plannerBadge" class="nav-badge" style="display:none">0</span>
@@ -10189,7 +10487,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
         <div id="taskList" class="task-list">
-          <p style="color:var(--muted);text-align:center;padding:40px">Send a message to start.</p>
+          <div class="empty-state"><h3>Your AI agent is ready.</h3><div class="empty-state-cards"><div class="example-card" onclick="useExample('Go to YouTube and find the top trending video','browser_use')"><span class="ec-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><div class="ec-title">Browse the web</div><div class="ec-prompt">"Go to YouTube and find the top trending video"</div><div class="ec-btn">Try this</div></div><div class="example-card" onclick="useExample('Open Notepad and write meeting notes for today','computer_use')"><span class="ec-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span><div class="ec-title">Control desktop apps</div><div class="ec-prompt">"Open Notepad and write meeting notes for today"</div><div class="ec-btn">Try this</div></div><div class="example-card" onclick="useExample('What time is it in Tokyo right now?','openclaw')"><span class="ec-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><div class="ec-title">Ask anything</div><div class="ec-prompt">"What time is it in Tokyo right now?"</div><div class="ec-btn">Try this</div></div></div><p class="empty-state-hint">Or type anything below to get started</p></div>
         </div>
         <div id="chatWfSaveCard" style="display:none;flex-shrink:0;padding:0 16px;"></div>
         <div class="input-area">
@@ -10203,7 +10501,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   <option value="computer_use">Computer</option>
                   <option value="openclaw">Chat</option>
                 </select>
-                <textarea id="prompt" placeholder="Send a message... (try /record, /replay)" rows="1" title="Enter to send, Shift+Enter for new line"></textarea>
+                <textarea id="prompt" placeholder="Tell your agent what to do..." rows="1" title="Enter to send, Shift+Enter for new line"></textarea>
                 <button type="submit" class="btn" id="submitBtn" title="Send message (Enter)">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                   Send
@@ -10221,14 +10519,9 @@ document.addEventListener('DOMContentLoaded', () => {
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
             <div>
               <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Configuration</h3>
-              <p style="font-size:12px;color:var(--muted)">Engines, API keys, and automation settings</p>
+              <p style="font-size:12px;color:var(--muted)">API keys and automation settings</p>
             </div>
             <button class="btn" onclick="switchView('chat')" style="font-size:13px;background:#232428;border:1px solid var(--border)">Back to Chat</button>
-          </div>
-          <!-- Engines Section -->
-          <div class="card" style="margin-bottom:16px;">
-            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>Engines</h2>
-            <div id="engineList"><p class="muted">Loading...</p></div>
           </div>
           <!-- API Keys Section -->
           <div class="card" style="margin-bottom:16px;">
@@ -10241,15 +10534,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span style="color:var(--muted);font-size:12px">/</span>
                 <span id="creditLimit" style="font-size:14px;color:var(--muted)">$0.00</span>
               </div>
-              <div style="background:rgba(255,255,255,0.1);border-radius:4px;height:6px;overflow:hidden;margin-bottom:8px">
+              <div style="background:rgba(255,255,255,0.1);border-radius:4px;height:6px;overflow:hidden">
                 <div id="creditBar" style="height:100%;background:#5865f2;transition:width 0.3s;width:0%"></div>
               </div>
-              <button class="btn" onclick="window.open(window._topupUrl||'https://clawbridge.ai/account','_blank')" style="width:100%;font-size:11px;background:#5865f2">Buy More Credits</button>
             </div>
           </div>
-          <!-- Automation Settings -->
+          <!-- Quick Settings -->
           <div class="card" style="margin-bottom:16px;">
-            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;">Automation Settings</h2>
+            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;">Quick Settings</h2>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
               <div>
                 <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Automation Mode</div>
@@ -10269,6 +10561,50 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
               </div>
               <div>
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Browser Visibility</div>
+                <div style="display:flex;gap:4px">
+                  <button id="headlessOff" class="btn mode-btn" onclick="toggleHeadless()" title="Browser window is visible" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                    <span style="font-weight:600;white-space:nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> Visible</span>
+                  </button>
+                  <button id="headlessOn" class="btn mode-btn" onclick="toggleHeadless()" title="Browser runs in background" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                    <span style="font-weight:600;white-space:nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> Hidden</span>
+                  </button>
+                </div>
+                <div style="font-size:10px;color:var(--muted);margin-top:6px" id="headlessDesc">Browser window is visible during tasks</div>
+              </div>
+            </div>
+          </div>
+          <!-- Personalization (collapsed) -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="config-section-header" onclick="toggleConfigSection('personalization')">
+              <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+              <h2 style="font-size:14px;font-weight:600;margin:0;">Personalization</h2>
+              <span id="personalizationArrow" class="config-section-arrow">&#9656;</span>
+            </div>
+            <div id="personalizationContent" style="display:none;margin-top:12px;">
+              <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Define who your agent is -- personality, identity, and user context. Injected into every engine prompt.</p>
+              <div style="display:flex;gap:8px;margin-bottom:12px;">
+                <button class="soul-tab active" data-file="SOUL.md" onclick="loadSoulFile('SOUL.md')" style="background:rgba(88,101,242,0.15);color:var(--accent);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">SOUL.md</button>
+                <button class="soul-tab" data-file="IDENTITY.md" onclick="loadSoulFile('IDENTITY.md')" style="background:rgba(255,255,255,0.05);color:var(--muted);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">IDENTITY.md</button>
+                <button class="soul-tab" data-file="USER.md" onclick="loadSoulFile('USER.md')" style="background:rgba(255,255,255,0.05);color:var(--muted);border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">USER.md</button>
+              </div>
+              <textarea id="soulEditorInline" style="width:100%;min-height:250px;font-family:monospace;font-size:13px;line-height:1.6;padding:16px;border-radius:12px;resize:vertical;" placeholder="Click a tab above to load..."></textarea>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+                <span id="soulSaveStatusInline" style="font-size:12px;color:var(--muted)"></span>
+                <button class="btn" onclick="saveSoulFile()" style="font-size:12px;">Save Changes</button>
+              </div>
+            </div>
+          </div>
+          <!-- Advanced Settings (collapsed) -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="config-section-header" onclick="toggleConfigSection('advanced')">
+              <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              <h2 style="font-size:14px;font-weight:600;margin:0;">Advanced Settings</h2>
+              <span id="advancedArrow" class="config-section-arrow">&#9656;</span>
+            </div>
+            <div id="advancedContent" style="display:none;margin-top:12px;">
+              <!-- Model Tier -->
+              <div style="margin-bottom:16px;">
                 <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Model Tier</div>
                 <div id="tierBtnWrap" style="position:relative">
                   <div style="display:flex;gap:4px">
@@ -10285,72 +10621,74 @@ document.addEventListener('DOMContentLoaded', () => {
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-          <!-- Advanced Settings -->
-          <div class="card" style="margin-bottom:16px;">
-            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;">Advanced</h2>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-              <div>
-                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Computer API Path</div>
-                <div id="apiPathWrap" style="position:relative">
-                  <div style="display:flex;gap:4px">
-                    <button id="apiAuto" class="btn mode-btn" onclick="setComputerUseApi('auto')" title="Prefers direct Anthropic when key is set" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
-                      <span style="font-weight:600;white-space:nowrap">Auto</span>
-                    </button>
-                    <button id="apiDirect" class="btn mode-btn" onclick="setComputerUseApi('direct')" title="Native computer-use tool + prompt caching" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
-                      <span style="font-weight:600;white-space:nowrap">Direct</span>
-                    </button>
-                    <button id="apiOpenRouter" class="btn mode-btn" onclick="setComputerUseApi('openrouter')" title="Unified billing, wider model selection" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
-                      <span style="font-weight:600;white-space:nowrap">OpenRouter</span>
-                    </button>
+              <!-- Computer API Path + Scaffolding -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+                <div>
+                  <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Computer API Path</div>
+                  <div id="apiPathWrap" style="position:relative">
+                    <div style="display:flex;gap:4px">
+                      <button id="apiAuto" class="btn mode-btn" onclick="setComputerUseApi('auto')" title="Prefers direct Anthropic when key is set" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                        <span style="font-weight:600;white-space:nowrap">Auto</span>
+                      </button>
+                      <button id="apiDirect" class="btn mode-btn" onclick="setComputerUseApi('direct')" title="Native computer-use tool + prompt caching" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                        <span style="font-weight:600;white-space:nowrap">Direct</span>
+                      </button>
+                      <button id="apiOpenRouter" class="btn mode-btn" onclick="setComputerUseApi('openrouter')" title="Unified billing, wider model selection" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                        <span style="font-weight:600;white-space:nowrap">OpenRouter</span>
+                      </button>
+                    </div>
+                    <div class="api-hint">
+                      <div id="apiPathDesc" style="font-size:10px;color:var(--muted);margin-top:6px">Auto: uses direct Anthropic when key is set</div>
+                      <div id="apiPathDetails" style="font-size:10px;line-height:1.5"></div>
+                    </div>
                   </div>
-                  <div class="api-hint">
-                    <div id="apiPathDesc" style="font-size:10px;color:var(--muted);margin-top:6px">Auto: uses direct Anthropic when key is set</div>
-                    <div id="apiPathDetails" style="font-size:10px;line-height:1.5"></div>
+                </div>
+                <div>
+                  <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Scaffolding Profile</div>
+                  <div id="scaffoldingWrap" style="position:relative">
+                    <div style="display:flex;gap:4px">
+                      <button id="scaffFull" class="btn mode-btn" onclick="setScaffoldingProfile('full')" title="Maximum guidance" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                        <span style="font-weight:600;white-space:nowrap">Full</span>
+                      </button>
+                      <button id="scaffStandard" class="btn mode-btn" onclick="setScaffoldingProfile('standard')" title="Balanced guidance" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                        <span style="font-weight:600;white-space:nowrap">Standard</span>
+                      </button>
+                      <button id="scaffMinimal" class="btn mode-btn" onclick="setScaffoldingProfile('minimal')" title="Core rules only" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                        <span style="font-weight:600;white-space:nowrap">Minimal</span>
+                      </button>
+                      <button id="scaffRaw" class="btn mode-btn" onclick="setScaffoldingProfile('raw')" title="No scaffolding" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
+                        <span style="font-weight:600;white-space:nowrap">Raw</span>
+                      </button>
+                    </div>
+                    <div class="scaffolding-hint">
+                      <div id="scaffoldingDesc" style="font-size:10px;color:var(--muted);margin-top:6px">Balanced guidance for current models</div>
+                      <div id="scaffoldingDetailsPanel" style="font-size:10px;line-height:1.5"></div>
+                    </div>
                   </div>
                 </div>
               </div>
+              <!-- Engines Section -->
+              <div style="margin-bottom:16px;">
+                <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>Engines</h2>
+                <div id="engineList"><p class="muted">Loading...</p></div>
+              </div>
+              <!-- Browser Session -->
               <div>
-                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Scaffolding Profile</div>
-                <div id="scaffoldingWrap" style="position:relative">
-                  <div style="display:flex;gap:4px">
-                    <button id="scaffFull" class="btn mode-btn" onclick="setScaffoldingProfile('full')" title="Maximum guidance" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
-                      <span style="font-weight:600;white-space:nowrap">Full</span>
-                    </button>
-                    <button id="scaffStandard" class="btn mode-btn" onclick="setScaffoldingProfile('standard')" title="Balanced guidance" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
-                      <span style="font-weight:600;white-space:nowrap">Standard</span>
-                    </button>
-                    <button id="scaffMinimal" class="btn mode-btn" onclick="setScaffoldingProfile('minimal')" title="Core rules only" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
-                      <span style="font-weight:600;white-space:nowrap">Minimal</span>
-                    </button>
-                    <button id="scaffRaw" class="btn mode-btn" onclick="setScaffoldingProfile('raw')" title="No scaffolding" style="flex:1;min-width:0;font-size:11px;padding:8px 6px;overflow:hidden;box-sizing:border-box">
-                      <span style="font-weight:600;white-space:nowrap">Raw</span>
-                    </button>
+                <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>Browser Session</h2>
+                <div id="browserSessionStatus" style="font-size:12px;margin-bottom:8px;padding:8px 12px;background:rgba(255,255,255,0.02);border-radius:6px">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span id="chromeStatusDot" style="width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0"></span>
+                    <span id="chromeStatusText" style="font-size:12px">Not connected</span>
                   </div>
-                  <div class="scaffolding-hint">
-                    <div id="scaffoldingDesc" style="font-size:10px;color:var(--muted);margin-top:6px">Balanced guidance for current models</div>
-                    <div id="scaffoldingDetailsPanel" style="font-size:10px;line-height:1.5"></div>
-                  </div>
+                  <div id="chromeModeText" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
+                </div>
+                <div id="chromeBtnWrap" style="display:flex;gap:8px;align-items:center">
+                  <button class="btn" id="launchChromeBtn" style="font-size:12px" onclick="launchChrome()">Launch Chrome Session</button>
+                  <button class="btn" id="stopChromeBtn" style="font-size:12px;background:rgba(217,83,79,0.15);color:var(--err);display:none" onclick="stopChrome()">Stop Chrome Session</button>
+                  <span id="chromeBtnHint" style="font-size:10px;color:var(--muted)">Persistent Chrome profile with saved logins</span>
+                  <span id="chromeExeInfo" style="font-size:10px;color:var(--muted)"></span>
                 </div>
               </div>
-            </div>
-          </div>
-          <!-- Browser Session -->
-          <div class="card" style="margin-bottom:16px;">
-            <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>Browser Session</h2>
-            <div id="browserSessionStatus" style="font-size:12px;margin-bottom:8px;padding:8px 12px;background:rgba(255,255,255,0.02);border-radius:6px">
-              <div style="display:flex;align-items:center;gap:8px">
-                <span id="chromeStatusDot" style="width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0"></span>
-                <span id="chromeStatusText" style="font-size:12px">Not connected</span>
-              </div>
-              <div id="chromeModeText" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
-            </div>
-            <div id="chromeBtnWrap" style="display:flex;gap:8px;align-items:center">
-              <button class="btn" id="launchChromeBtn" style="font-size:12px" onclick="launchChrome()">Launch Chrome Session</button>
-              <button class="btn" id="stopChromeBtn" style="font-size:12px;background:rgba(217,83,79,0.15);color:var(--err);display:none" onclick="stopChrome()">Stop Chrome Session</button>
-              <span id="chromeBtnHint" style="font-size:10px;color:var(--muted)">Persistent Chrome profile with saved logins</span>
-              <span id="chromeExeInfo" style="font-size:10px;color:var(--muted)"></span>
             </div>
           </div>
         </div>
@@ -10965,7 +11303,7 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
             _plc.close()
         except Exception:
             planner_items = []
-        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates, "workflows": workflows, "csrf_token": csrf_token, "stats": stats, "planner_items": planner_items}
+        preload_data = {"engines": engines, "tasks": tasks, "config": config, "schedules": schedules, "templates": templates, "workflows": workflows, "csrf_token": csrf_token, "stats": stats, "planner_items": planner_items, "has_any_key": bool(s.has_anthropic_key() or s.has_openai_key() or s.has_openrouter_key())}
         preload = '<script>window.__PRELOAD__=' + _json.dumps(preload_data, default=str) + ';</script>'
         html = _dashboard_html()
         html = html.replace("</head>", preload + "\n</head>")
@@ -11250,6 +11588,89 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
         await get_manager().init_engines()
         await _broadcast({"type": "engine_status", "payload": await get_manager().engine_infos()})
         return {"status": "ok", "provider": provider}
+
+    # -- OpenRouter OAuth PKCE --
+    _oauth_state: dict = {}
+
+    @app.get("/auth/openrouter")
+    async def openrouter_oauth_start():
+        """Generate PKCE challenge and return the OpenRouter auth URL."""
+        import hashlib
+        code_verifier = secrets.token_urlsafe(48)
+        code_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode()).digest()
+        ).rstrip(b"=").decode()
+        _oauth_state["code_verifier"] = code_verifier
+        _oauth_state["created_at"] = __import__("time").time()
+        port = int(os.environ.get("CLAWBRIDGE_PORT", "8765"))
+        callback_url = f"http://localhost:{port}/auth/openrouter-callback"
+        auth_url = f"https://openrouter.ai/auth?callback_url={callback_url}&code_challenge={code_challenge}&code_challenge_method=S256"
+        return {"auth_url": auth_url}
+
+    @app.get("/auth/openrouter-callback")
+    async def openrouter_oauth_callback(request: Request):
+        """Receive auth code from OpenRouter, exchange for API key."""
+        import hashlib
+        import httpx
+        code = request.query_params.get("code", "")
+        if not code:
+            return HTMLResponse("<html><body><h2>Error: No auth code received</h2></body></html>", status_code=400)
+        verifier = _oauth_state.pop("code_verifier", None)
+        _oauth_state.pop("created_at", None)
+        if not verifier:
+            return HTMLResponse("<html><body><h2>Error: OAuth session expired. Please try again.</h2></body></html>", status_code=400)
+        # Exchange code for API key
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post("https://openrouter.ai/api/v1/auth/keys", json={
+                    "code": code,
+                    "code_verifier": verifier,
+                    "code_challenge_method": "S256",
+                })
+                if resp.status_code != 200:
+                    return HTMLResponse(f"<html><body><h2>Error from OpenRouter: {resp.text}</h2></body></html>", status_code=502)
+                data = resp.json()
+                api_key = data.get("key", "")
+                if not api_key:
+                    return HTMLResponse("<html><body><h2>Error: No key in response</h2></body></html>", status_code=502)
+        except Exception as e:
+            return HTMLResponse(f"<html><body><h2>Error exchanging code: {e}</h2></body></html>", status_code=500)
+        # Save to .env
+        env_var = "OPENROUTER_API_KEY"
+        env_path = Path(".env")
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith(env_var + "=") or line.strip().startswith(env_var + " ="):
+                lines[i] = f"{env_var}={api_key}"
+                found = True
+                break
+        if not found:
+            lines.append(f"{env_var}={api_key}")
+        env_path.write_text("\n".join(lines) + "\n")
+        os.environ[env_var] = api_key
+        Settings.openrouter_api_key = api_key
+        # Re-init engines
+        await get_manager().init_engines()
+        await _broadcast({"type": "engine_status", "payload": await get_manager().engine_infos()})
+        # Return HTML that closes/redirects
+        port = int(os.environ.get("CLAWBRIDGE_PORT", "8765"))
+        return HTMLResponse(f"""<html><head><style>
+body{{background:#1e1f22;color:#e0e1e5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}
+.card{{text-align:center;padding:40px;background:#2b2d31;border-radius:16px;border:1px solid #3f4147}}
+.check{{font-size:48px;color:#57a86d;margin-bottom:16px}}
+h2{{margin:0 0 8px;font-size:20px}}
+p{{color:#949ba4;font-size:14px;margin:0 0 20px}}
+a{{color:#5865f2;text-decoration:none;font-weight:600}}
+</style></head><body>
+<div class="card">
+<div class="check">&#10003;</div>
+<h2>Connected!</h2>
+<p>Your OpenRouter API key has been saved.</p>
+<a href="http://localhost:{port}">Return to Dashboard</a>
+</div>
+<script>setTimeout(function(){{window.close()}},3000)</script>
+</body></html>""")
 
     @app.post("/api/config/browser")
     async def save_browser_config(body: dict):
