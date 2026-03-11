@@ -124,6 +124,13 @@ body{background:#18191c;color:#dbdee1;display:flex;justify-content:center;
     }).catch(function(){setTimeout(pollStatus,600)});
   }
 
+  function goToDashboard(){
+    fetch("/",{method:"HEAD"}).then(function(r){
+      if(r.ok){window.location.replace("/")}
+      else{setTimeout(goToDashboard,500)}
+    }).catch(function(){setTimeout(goToDashboard,500)});
+  }
+
   function pollHealth(){
     fetch("/health").then(function(r){return r.json()}).then(function(d){
       if(d.status==="ok"){
@@ -131,7 +138,7 @@ body{background:#18191c;color:#dbdee1;display:flex;justify-content:center;
         detail.style.display="none";
         bar.style.width="100%";
         ready.style.display="block";
-        setTimeout(function(){window.location.replace("/")},400);
+        setTimeout(goToDashboard,400);
       } else {
         setTimeout(pollHealth,300);
       }
@@ -296,9 +303,9 @@ def _open_app_mode(url: str) -> None:
     webbrowser.open(url)
 
 
-# Auto-open browser if requested (set by ClawBridge.bat windowless launcher)
-if os.environ.get("CLAWBRIDGE_OPEN_BROWSER") == "1" and _loading_server is not None:
-    _open_app_mode(f"http://127.0.0.1:{_loading_port}")
+# Flag for deferred browser open — actual open happens in lifespan() after uvicorn is serving,
+# which eliminates "site can't be reached" on first launch (GIL contention) and port transition gap.
+_should_open_browser = (os.environ.get("CLAWBRIDGE_OPEN_BROWSER") == "1" and _loading_server is not None)
 
 # ---------------------------------------------------------------------------
 # Auto-install dependencies if missing (run once, then exit; user runs again)
@@ -11081,6 +11088,13 @@ def create_app() -> FastAPI:
             _hotkey_monitor.start(loop)
         if _overlay is not None:
             _overlay.start(loop)
+        # Open browser now that uvicorn is actually serving — avoids "site can't be reached"
+        # that occurred when browser opened during module-level imports (GIL contention).
+        if _should_open_browser:
+            async def _deferred_browser_open():
+                await asyncio.sleep(0.3)  # Let uvicorn fully settle
+                _open_app_mode(f"http://127.0.0.1:{get_settings().port}")
+            asyncio.create_task(_deferred_browser_open())
         yield
         # Cleanup hotkey monitor and overlay
         if _hotkey_monitor is not None:
