@@ -105,15 +105,20 @@ body{background:#18191c;color:#dbdee1;display:flex;justify-content:center;
       stage=document.getElementById("stage"),
       detail=document.getElementById("detail"),
       ready=document.getElementById("ready"),
-      done=false;
+      done=false,
+      maxProg=0;
 
   function pollStatus(){
     if(done) return;
     fetch("/startup-status").then(function(r){return r.json()}).then(function(d){
-      bar.style.width=d.progress+"%";
-      stage.textContent=d.stage;
-      detail.textContent=d.detail||"";
-      if(d.progress>=100){
+      // Never let progress go backwards (server may restart during dep install)
+      if(d.progress>maxProg) maxProg=d.progress;
+      bar.style.width=maxProg+"%";
+      if(d.progress>=maxProg){
+        stage.textContent=d.stage;
+        detail.textContent=d.detail||"";
+      }
+      if(maxProg>=100){
         done=true;
         stage.textContent="Starting dashboard...";
         detail.textContent="";
@@ -295,12 +300,24 @@ def _open_app_mode(url: str) -> None:
             try:
                 subprocess.Popen([exe, f"--app={url}"], **popen_kwargs)  # nosemgrep: dangerous-subprocess-use-tainted-env-args  # url is always http://127.0.0.1:PORT
                 return
-            except Exception:
+            except Exception as _app_err:
+                print(f"  [browser-open] --app failed with {exe}: {_app_err}")
                 continue
 
-    # Fallback: regular browser
-    import webbrowser
-    webbrowser.open(url)
+    # Fallback: os.startfile on Windows (most reliable from pythonw.exe context)
+    if _pf.system() == "Windows":
+        try:
+            os.startfile(url)  # nosemgrep: dangerous-subprocess-use-tainted-env-args  # url is always http://127.0.0.1:PORT
+            return
+        except Exception as _sf_err:
+            print(f"  [browser-open] os.startfile failed: {_sf_err}")
+
+    # Final fallback: webbrowser module
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception as _wb_err:
+        print(f"  [browser-open] webbrowser.open failed: {_wb_err}")
 
 
 # Flag for deferred browser open — actual open happens in lifespan() after uvicorn is serving,
@@ -11895,9 +11912,16 @@ def create_app() -> FastAPI:
         # that occurred when browser opened during module-level imports (GIL contention).
         if _should_open_browser:
             async def _deferred_browser_open():
-                await asyncio.sleep(0.3)  # Let uvicorn fully settle
-                _open_app_mode(f"http://127.0.0.1:{get_settings().port}")
+                await asyncio.sleep(0.5)  # Let uvicorn fully settle
+                try:
+                    logging.info("Opening browser (CLAWBRIDGE_OPEN_BROWSER=1)...")
+                    _open_app_mode(f"http://127.0.0.1:{get_settings().port}")
+                except Exception as _bo_err:
+                    logging.warning("Browser auto-open failed: %s", _bo_err)
             asyncio.create_task(_deferred_browser_open())
+        else:
+            if os.environ.get("CLAWBRIDGE_OPEN_BROWSER") == "1":
+                logging.warning("CLAWBRIDGE_OPEN_BROWSER=1 but loading server was None -- browser open skipped")
         yield
         # Cleanup hotkey monitor and overlay
         if _hotkey_monitor is not None:
