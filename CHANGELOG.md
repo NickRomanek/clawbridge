@@ -5,6 +5,21 @@ All notable changes to ClawBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-03-12
+
+### Added
+- **Mission Control planner**: Executable planner items with stage-based kanban (backlog/planning/executing/complete). Items can be executed directly from the dashboard with live status updates.
+- **Planner presets**: 5 preset templates — Developer (17 items), Demo (8), Real Estate (7), QA Testing (7), Content Creation (7). Reset button lets you switch between them.
+- **Mission Control API**: `POST /api/planner/{id}/execute`, `POST /api/planner/execute-phase`, `POST /api/planner/{id}/cancel`, `POST /api/planner/reset-execution` endpoints.
+- **Developer mode**: `DEVELOPER_MODE` setting toggles between developer-oriented and demo-friendly planner presets.
+- **Planner-task linking**: Tasks created from planner items track `planner_item_id`, with automatic stage/status sync on task completion.
+
+### Fixed
+- **Browser opens to "site can't be reached"**: Deferred browser auto-open to FastAPI lifespan (runs after uvicorn is serving) instead of module-level execution where GIL contention caused the page to load before the server was ready.
+- **Test config assertions**: Fixed `test_default_enabled_engines` order to match current default, isolated `test_default_browser_headless` from .env leakage.
+
+---
+
 ## [0.5.7] - 2026-03-08
 
 ### Fixed
