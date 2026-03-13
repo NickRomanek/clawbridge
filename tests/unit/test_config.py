@@ -50,7 +50,7 @@ class TestSettings:
         assert s.max_actions_per_task == 50
 
     def test_default_browser_headless(self):
-        s = self._make_settings()
+        s = self._make_settings(BROWSER_HEADLESS="true")
         assert s.browser_headless is True
 
     def test_default_log_retention(self):
@@ -63,7 +63,7 @@ class TestSettings:
 
     def test_default_enabled_engines(self):
         s = self._make_settings()
-        assert s.enabled_engines == "browser_use,computer_use,openclaw"
+        assert s.enabled_engines == "browser_use,openclaw,computer_use"
 
 
 class TestKeyDetection:

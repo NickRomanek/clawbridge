@@ -75,7 +75,7 @@ Request flow:
 - **PersonalityManager** — File-based identity system (`workspace/SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, daily logs). Context assembled by `get_system_context()` and injected into each engine differently.
 - **Safety/Policy** — `safety_scan_prompt()` detects credentials/PII/injection. `safety_redact()` scrubs before logging. Three policy modes: permissive, guarded (default), strict.
 - **AuditLogger** — SQLite with tables: `tasks`, `task_steps`, `audit_log`, `replay_outcomes`, `planner_items`. Step traces persisted for replay. Outcome data powers confidence model learning.
-- **Planner** — Kanban-style checklist in the dashboard for tracking project work. SQLite-backed with phases (observability, reliability, benchmarks, content). API: `GET/POST/PUT/DELETE /api/planner`, `POST /api/planner/seed`. Pre-seeded with 28 items covering benchmark strategy, reliability improvements, and content creation with actionable notes on each item.
+- **Planner** — Kanban-style checklist in the dashboard for tracking project work. SQLite-backed with phases. API: `GET/POST/PUT/DELETE /api/planner`, `POST /api/planner/seed`. Items use zero-padded numeric IDs (01, 02, 03...) for quick `/do` command access. Multiple presets: Developer (24 items), Demo (8), Real Estate (7), QA Testing (7), Content Creation (7). POST `/api/planner` accepts optional `id` field for custom IDs (falls back to UUID). Phase filter dropdown on kanban view filters cards by phase.
 - **Failure Analysis** — `analyze_task_failure()` algorithmically diagnoses failed tasks by parsing step traces. Detects: repeated actions (3+ same action at same coordinates), stale sequences, max-steps hit, hard-stops. Auto-populated on task ERROR. Displayed as color-coded timeline in dashboard history view.
 - **Dashboard HTML** — ~1,800 lines of inline HTML/JS/CSS rendered by `_dashboard_html()`. Server-side rendering via `window.__PRELOAD__` pattern. Includes slash command autocomplete, always-visible stop button, and chat-integrated workflow save card.
 - **WorkflowManager** — Desktop action recording (pynput) and adaptive replay with accessibility-tree element matching + LLM fallback.
@@ -100,7 +100,7 @@ Copy `.env.example` to `.env`. Key variables:
 - `DASHBOARD_TOKEN` — empty = no auth, set a value to require login
 - `BROWSER_MODE` — `default`, `cdp` (connect to Chrome on port 9222), or `user_data_dir`
 - `BROWSER_HEADLESS` — run browser in headless mode (default: `true`). Togglable at runtime via `/api/browser/headless`
-- `COMPUTER_USE_MODEL` — primary model (default: `anthropic/claude-sonnet-4.5`)
+- `COMPUTER_USE_MODEL` — primary model (default: `anthropic/claude-sonnet-4`)
 - `COMPUTER_USE_MODEL_FAST` — cheap model for routine replay steps (default: `anthropic/claude-haiku-4-5`)
 - `COMPUTER_USE_API` — `auto` (default: Anthropic if key exists, else OpenRouter), `direct`, `openrouter`
 - `ECONOMY_MODEL` — optional economy model override (e.g. `google/gemini-2.5-flash`)
@@ -208,7 +208,7 @@ Security model: localhost-only with opt-in auth. Open on localhost is fine for a
 
 - **WebSocket origin validation**: `/ws` handler checks `Origin` header before `accept()`. Only `127.0.0.1`, `localhost`, `::1` allowed. Missing origin (non-browser clients like MCP, wscat) is permitted. Rejects with close code 1008.
 - **CORS middleware**: `CORSMiddleware` restricts `allow_origins` to `http://127.0.0.1:{port}` and `http://localhost:{port}`. No wildcard. HTTPS variants not included (not needed for local-only; would need adding if reverse proxy support is added).
-- **Rate limiting**: In-memory sliding window via `_rate_limit()`. Applied as middleware (not per-endpoint) to avoid breaking existing `body: dict` endpoint signatures. Limits: `/api/auth/login` POST 5/60s, `/api/tasks` POST 10/60s per client IP. Returns 429 with `Retry-After` header.
+- **Rate limiting**: In-memory sliding window via `_rate_limit()`. Applied as middleware (not per-endpoint) to avoid breaking existing `body: dict` endpoint signatures. Limits: `/api/auth/login` POST 5/60s, `/api/dos` POST 10/60s per client IP. Returns 429 with `Retry-After` header.
 - **Host binding guard**: `main()` refuses to start with `CLAWBRIDGE_HOST=0.0.0.0` or `::` unless `DASHBOARD_TOKEN` is set. Exits with `sys.exit(1)` and clear error message. If token is set, prints a warning.
 - **Middleware ordering**: Starlette processes last-added first (LIFO). Order of `add_middleware()` calls: Auth → RateLimit → CORS. Execution order: CORS (outermost) → RateLimit → Auth (innermost). This ensures OPTIONS preflight is handled by CORS before Auth can reject it with 401.
 - **Loading server**: No `Access-Control-Allow-Origin` header (removed wildcard `*`). Loading page JS is same-origin.
@@ -219,7 +219,7 @@ Security model: localhost-only with opt-in auth. Open on localhost is fine for a
 - **task_steps**: id (autoincrement), task_id, step_num, max_steps, action, detail, reasoning, tokens_in, tokens_out, timestamp. Indexed on task_id.
 - **audit_log**: id (UUID), task_id, event_type, detail, timestamp. Indexed on task_id.
 - **replay_outcomes**: id (autoincrement), workflow_id, task_id, step_index, action_type, method, success, confidence, tokens_used, duration_ms, action_fingerprint, timestamp. Indexed on workflow_id and action_fingerprint.
-- **planner_items**: id (text PK), phase, title, description, status (pending/in_progress/done), position, notes, created_at, updated_at. Indexed on phase. Pre-seeded with 28 default items across 4 phases.
+- **planner_items**: id (text PK, zero-padded numeric e.g. "01"), phase, title, description, status (pending/in_progress/done), position, notes, stage, engine_hint, workflow_id, task_id, execution_status, execution_result, due_date, created_at, updated_at. Indexed on phase and stage. Pre-seeded from preset (default: Developer with 24 items across 5 phases).
 
 ## Known Gotchas
 
@@ -235,7 +235,7 @@ Security model: localhost-only with opt-in auth. Open on localhost is fine for a
 - Don't use `openclaw gateway start` — use `gateway` (foreground, `--bind loopback`).
 - Don't use `--host` with OpenClaw gateway — it's not a valid flag. Use `--bind loopback` instead.
 - Don't add version numbers to installer filename — must stay `ClawBridge-Setup.exe`.
-- Don't use dated model slugs (e.g. `-20250514`) with OpenClaw or OpenRouter — they're not recognized. Use undated slugs: `anthropic/claude-sonnet-4.5`, `anthropic/claude-haiku-4-5`.
+- Don't use dated model slugs (e.g. `-20250514`) with OpenClaw or OpenRouter — they're not recognized. Use undated slugs: `anthropic/claude-sonnet-4`, `anthropic/claude-haiku-4-5`.
 - Don't use `time.sleep()` in async functions — use `asyncio.sleep()`.
 - Don't render user data in dashboard HTML without escaping — use the `esc()` JS function.
 - Don't write to memory/logs without calling `safety_redact()` first.
@@ -258,14 +258,15 @@ Security model: localhost-only with opt-in auth. Open on localhost is fine for a
 ## Dashboard UX Features
 
 - **Always-visible Stop button**: Send button swaps to red Stop when any task is running. `state.runningTaskId` tracks active task via WebSocket `task_update`. Resets on terminal status.
-- **Slash command autocomplete**: Typing `/` shows dropdown above input with commands and saved workflow names. Arrow keys navigate, Enter selects, Escape dismisses.
+- **Slash command autocomplete**: Typing `/` shows dropdown above input with commands, saved workflow names, and planner items. Arrow keys navigate, Enter selects, Escape dismisses. `/do` shows non-complete planner items with numeric IDs.
 - **Chat recording save card**: Stopping a recording from chat shows a save card (between task list and input area, outside render cycle) with pre-filled timestamp name. User can Save immediately or customize.
 - **Engine dropdown**: Compact `<select id="engine">` in the chip row above the text input. Options: Auto (default), Browser, Computer, Chat. Slash commands `/browser`, `/computer`, `/chat` set it programmatically via `selectEngineChip()`. The hidden `<select>` inside the form was removed — the visible dropdown IS the value source for `sendMsg()`.
 - **Replay routing clarity**: `/replay` always forces `computer_use` engine regardless of dropdown selection. Routing info shows "Replaying Workflow (Visual Automation)".
 - **Dashboard click filtering**: `stop_recording()` strips trailing events whose `window_title` contains "clawbridge dashboard", "localhost:8765", or "127.0.0.1:8765". Prevents Stop Record button click from being saved in the workflow.
 - **Double-submit guard**: Prevents sending new tasks while one is already running.
 - **App-mode browser launch**: `_open_app_mode(url)` opens the dashboard in a chromeless Chrome/Edge window via `--app=` flag (no URL bar, no tabs). Tries Edge first on Windows (always present on Win10+), then Chrome. Falls back to regular `webbrowser.open()` if no Chromium browser found. Used by: auto-open on startup (`CLAWBRIDGE_OPEN_BROWSER=1`), tray icon "Open Dashboard", and overlay focus fallback.
-- **Planner view**: Kanban-style checklist with collapsible phase sections. Color-coded left borders per phase (blue=observability, green=reliability, purple=benchmarks, amber=content). Each item has checkbox, title, notes preview, hover-reveal edit/delete buttons. Overall progress bar in header. Add Item form with phase dropdown. Reset button re-seeds defaults. Pre-loaded via `window.__PRELOAD__`.
+- **Planner view**: Kanban board with 4 stage columns (Backlog, Planning, Executing, Complete). Cards show numeric ID badge, title, phase tag, notes preview, and action buttons (play/cancel, edit, link workflow, delete). Engine badge only shown when not "auto". Phase filter dropdown filters cards across all columns. Drag-and-drop between columns. Multiple presets via Reset. Pre-loaded via `window.__PRELOAD__`.
+- **`/do` slash command**: `/do 01` executes planner item by numeric ID. Calls `executePlannerItem(id)` which triggers the full execute flow (stage transition, API call, WS updates).
 
 ## Recorder Notes
 

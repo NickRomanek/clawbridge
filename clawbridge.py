@@ -488,6 +488,7 @@ class Settings:
     activation_code = _env("CLAWBRIDGE_ACTIVATION_CODE", "")
     activation_backend_url = _env("ACTIVATION_BACKEND_URL", "https://api.clawbridge.ai")
     license_tier = _env("LICENSE_TIER", "")  # "starter" | "byok" | ""
+    developer_mode = _env("DEVELOPER_MODE", "false").lower() in ("1", "true", "yes")
 
     @classmethod
     def has_anthropic_key(cls) -> bool:
@@ -1874,54 +1875,71 @@ def init_db():
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_planner_phase ON planner_items(phase)')
+    # Mission Control columns on planner_items
+    for _col_sql in [
+        "ALTER TABLE planner_items ADD COLUMN task_id TEXT DEFAULT NULL",
+        "ALTER TABLE planner_items ADD COLUMN execution_status TEXT DEFAULT 'idle'",
+        "ALTER TABLE planner_items ADD COLUMN execution_result TEXT DEFAULT ''",
+        "ALTER TABLE planner_items ADD COLUMN engine_hint TEXT DEFAULT 'auto'",
+        "ALTER TABLE planner_items ADD COLUMN workflow_id TEXT DEFAULT NULL",
+        "ALTER TABLE planner_items ADD COLUMN stage TEXT DEFAULT 'backlog'",
+        "ALTER TABLE planner_items ADD COLUMN due_date TEXT DEFAULT NULL",
+    ]:
+        try:
+            c.execute(_col_sql)
+        except Exception:
+            pass  # column already exists
+    c.execute('CREATE INDEX IF NOT EXISTS idx_planner_stage ON planner_items(stage)')
+    # One-time migration: sync stage from existing status/execution_status
+    try:
+        c.execute("UPDATE planner_items SET stage = 'complete' WHERE status = 'done' AND (stage = 'backlog' OR stage IS NULL)")
+        c.execute("UPDATE planner_items SET stage = 'executing' WHERE execution_status IN ('queued', 'running') AND stage = 'backlog'")
+    except Exception:
+        pass
+    # planner_item_id on tasks table
+    try:
+        c.execute("ALTER TABLE tasks ADD COLUMN planner_item_id TEXT DEFAULT ''")
+    except Exception:
+        pass
     # Seed default planner items if table is empty
     _planner_count = c.execute("SELECT COUNT(*) FROM planner_items").fetchone()[0]
     if _planner_count == 0:
         _now = datetime.utcnow().isoformat()
-        # (id, phase, title, notes, position, status)
+        # (id, phase, title, notes, position, status, stage)
         _seed_items = [
-            # ── BENCHMARK & FIX ──
-            # Items 1-2: No recording needed. Just run the command and check results.
-            ("bench-1", "benchmark", "[AUTO] Verify CLI + run chat baseline", "RUN: python -m benchmarks run --suite \"Q&A\"\nEXPECT: 3/3 pass, grade A, ~$0.00. Tests: openclaw.qa.001 (factual), .002 (math), .003 (list). If any fail, the benchmark pipeline itself is broken. No recording needed.", 0, "done"),
-            ("bench-2", "benchmark", "[AUTO] Run browser navigation + extraction", "RUN: python -m benchmarks run --suite \"Browser Navigation\" && python -m benchmarks run --suite \"Browser Data Extraction\"\nTASKS: nav.001 (read heading), nav.002 (search products), nav.003 (read article), extract.001 (sort table), extract.002 (filter table), extract.003 (calculator). 6 tasks, ~$0.30-0.60. No recording needed -- just getting baseline data.", 1, "pending"),
-            # Items 3-4: RECORD these. First real content -- browser doing interactive things.
-            ("bench-3", "benchmark", "[RECORD] Run browser e-commerce + forms", "START OBS FIRST.\nRUN: python -m benchmarks run --suite \"Browser E-Commerce Flow\" && python -m benchmarks run --suite \"Browser Form Interaction\"\nTASKS: ecom.001 (add to cart), ecom.002 (read prices), form.001 (login), form.002 (invalid login error), form.003 (3-step registration with checkboxes/dropdowns). 5 tasks, ~$0.50-1.00. These are the most visual -- great for content clips.", 2, "pending"),
-            ("bench-4", "benchmark", "Fix browser failures from items 2-3", "Open dashboard history (http://localhost:8765), click failed tasks, read the step trace + failure analysis. Common fixes: extraction prompt needs 'return the answer as your final message', form selectors changed, timeout too short. Fix in clawbridge.py, then re-run just the failing task: python -m benchmarks run --task browser.form.003", 3, "pending"),
-            # Items 5-6: RECORD these. Desktop automation is the unique selling point.
-            ("bench-5", "benchmark", "[RECORD] Run desktop computer-use tasks", "START OBS FIRST.\nRUN: python -m benchmarks run --suite \"Computer-Use Notepad\"\nTASKS: computer.notepad.001 (type in Notepad), computer.notepad.002 (use Calculator). 2 tasks, ~$0.30-0.40. You will see the AI move the mouse and type -- this is your best content. Notepad and Calculator will open on screen.", 4, "pending"),
-            ("bench-6", "benchmark", "Fix desktop failures from item 5", "Common issues: (1) Focus loss -- Windows steals focus mid-task, check _verify_focus() in dashboard steps. (2) Wrong window -- UIA tree shows wrong app's elements. (3) App didn't launch -- Win key search timing. Fix in clawbridge.py, re-run: python -m benchmarks run --task computer.notepad.001", 5, "pending"),
-            # Item 7: Quick sanity check, no recording.
-            ("bench-7", "benchmark", "[AUTO] Run cross-engine routing check", "RUN: python -m benchmarks run --suite \"Auto Routing\"\nTASK: auto.route.001 -- verifies the task planner routes to the right engine. 1 task, ~$0.01. Should pass if engines work. No recording needed.", 6, "pending"),
-            # Item 8: RECORD this. The before/after story.
-            ("bench-8", "benchmark", "[RECORD] Full re-run: capture improvement delta", "START OBS FIRST.\nRUN: python -m benchmarks run\nThis runs ALL 17 tasks. Compare pass rate vs your first runs (check benchmarks/results/ folder for earlier JSON). The improvement from fixing failures is your content story. Then run: python -m benchmarks report --comparison", 7, "pending"),
-            # Item 9: Run 3x with different profiles. Each run is a potential video.
-            ("bench-9", "benchmark", "[RECORD] Compare scaffolding profiles", "Run all tasks 3 times with different profiles. Between each, change SCAFFOLDING_PROFILE in .env:\nRUN 1: Set SCAFFOLDING_PROFILE=standard, then: python -m benchmarks run\nRUN 2: Set SCAFFOLDING_PROFILE=minimal, then: python -m benchmarks run\nRUN 3: Set SCAFFOLDING_PROFILE=raw, then: python -m benchmarks run\nCompare pass rates and costs. ~$3-6 total. Great data for a 'which AI scaffolding works best?' video.", 8, "pending"),
-            # Item 10: Data export, no recording.
-            ("bench-10", "benchmark", "[AUTO] Generate reports + archive", "RUN: python -m benchmarks report && python -m benchmarks report --trend 30 && python -m benchmarks marketing\nResults are in benchmarks/results/. Reports print to stdout. Marketing export gives you copy-paste stats for blog/social. Commit results: git add benchmarks/results/ && git commit -m 'benchmark: sprint 1 results'", 9, "pending"),
-            # ── SHOW ──
-            ("show-1", "show", "Create YouTube channel", "Pick a name (your brand or 'Computer Use Lab'). Upload banner, write about section, add links to clawbridge.ai and github.com/[repo]. 30 min max -- don't overthink it.", 0, "pending"),
-            ("show-2", "show", "Publish best OBS clips as YouTube Shorts", "Trim OBS recordings from [RECORD] items to 60-90s each. Focus on: (1) desktop automation clip -- AI moving mouse, (2) a failure-then-fix clip, (3) the full re-run showing improvement. Title: 'AI does [X] on my desktop'. Upload 1/day.", 1, "pending"),
-            ("show-3", "show", "Write blog post with benchmark data", "RUN: python -m benchmarks marketing\nCopy the stats into a blog post on clawbridge.ai. Add: before/after pass rate table, cost breakdown, embed your best YouTube clip. SEO title: 'Computer Use Agent Benchmarks: [Month] [Year] Results'.", 2, "pending"),
-            ("show-4", "show", "Post to Reddit with real data", "Subreddits: r/selfhosted, r/automation, r/Python, r/artificial. Title: 'I benchmarked my AI desktop agent on 17 tasks -- here are the results'. Include pass rate, total cost, link to blog. Show failures honestly -- Reddit hates promo.", 3, "pending"),
-            # ── SHIP ──
-            ("ship-1", "ship", "Cut release with benchmark-phase fixes", "Bump version in 6 files (clawbridge.py, build.py, build_macos.py, installer.iss, download.astro, index.astro). Write CHANGELOG entry. RUN: python -m pytest && python build.py --inno. Then: git tag v0.5.4 && git push --tags. Build + upload installer.", 0, "pending"),
-            ("ship-2", "ship", "Open-source the benchmark suite", "Write benchmarks/README.md explaining how to run. Include: install deps, start server, python -m benchmarks run. Push to main branch. Tweet/post about it -- others running your benchmarks = free credibility.", 1, "pending"),
-            # ── GROW ──
-            ("grow-1", "grow", "Add 5 real-world tasks people care about", "Ideas: (1) Compare prices on Amazon vs Walmart for a product, (2) Fill out a job application on Indeed, (3) Create a simple Canva design, (4) Book a restaurant on OpenTable, (5) File a support ticket. Copy an existing JSON in benchmarks/tasks/ as template.", 0, "pending"),
-            ("grow-2", "grow", "[RECORD] Comparison video: ClawBridge vs another tool", "Run same 10 tasks on ClawBridge and Claude Cowork (or raw browser-use). Screen-record both. Make a results table. Be honest about what loses. 5-10 min YouTube video -- this is breakout content.", 1, "pending"),
-            ("grow-3", "grow", "Explore Android emulator automation", "Install Android Studio, create Pixel 8 emulator. Launch it, then run a computer-use task targeting the emulator window. If it works, nobody else has this content.", 2, "pending"),
-            # ── DONE ──
-            ("done-1", "done", "Failure analysis + auto-populate on error", "analyze_task_failure() detects repeated actions, stale loops, max-steps.", 0, "done"),
-            ("done-2", "done", "Failure timeline view in dashboard", "Color-coded step timeline, diagnosis text, token waste count.", 1, "done"),
-            ("done-3", "done", "Post-action hint (stale=1)", "Zero-cost 'screen appears unchanged' note.", 2, "done"),
-            ("done-4", "done", "Action-repetition detection", "3 identical actions at same coords fast-tracks stale counter.", 3, "done"),
-            ("done-5", "done", "Earlier diagnostic trigger (stale=2)", "Haiku diagnostic for full+standard profiles.", 4, "done"),
-            ("done-6", "done", "Security hardening v0.5.3", "WS origin, CORS, rate limiting, host binding guard.", 5, "done"),
-            ("done-7", "done", "Benchmark CLI verified + chat baseline", "3/3 Q&A tasks pass, grade A, $0.00 cost.", 6, "done"),
+            # ── ENGINE TESTS (01-08) ──
+            ("01", "test", "Look up population of France on Wikipedia", "Navigate to wikipedia.org, search for France, extract current population. Expected: ~68 million.", 0, "pending", "backlog"),
+            ("02", "test", "Search Google and summarize top results", "Search 'best programming languages 2026', return top 3 results with brief descriptions.", 1, "pending", "backlog"),
+            ("03", "test", "Type a message in Notepad and save", "Open Notepad, type a greeting message, save to Desktop as 'clawbridge-test.txt'.", 2, "pending", "backlog"),
+            ("04", "test", "Use Windows Calculator", "Open Calculator, compute 1337 * 42, return the result. Expected: 56,154.", 3, "pending", "backlog"),
+            ("05", "test", "Answer a reasoning question", "What is the square root of 144? Should route to chat engine and answer 12.", 4, "pending", "backlog"),
+            ("06", "test", "Read top story from Hacker News", "Navigate to news.ycombinator.com, extract the #1 story title and link.", 5, "pending", "backlog"),
+            ("07", "test", "List trending GitHub repos", "Navigate to github.com/trending, list the top 3 repositories with descriptions.", 6, "pending", "backlog"),
+            ("08", "test", "Check Windows version in Settings", "Open Settings > System > About, read and return the Windows version and build number.", 7, "pending", "backlog"),
+            # ── DEMOS (09-11) ──
+            ("09", "demo", "Find best-rated budget keyboard on Amazon", "Search Amazon for budget mechanical keyboards, filter/sort by rating, extract name + price + rating of top result.", 0, "pending", "backlog"),
+            ("10", "demo", "Get NYC weather and write summary in Notepad", "Look up current NYC weather on weather.com, then open Notepad and write a brief weather summary.", 1, "pending", "backlog"),
+            ("11", "demo", "Research latest SpaceX launch and draft summary", "Search for the most recent SpaceX launch, gather key details, and compose a 3-sentence summary.", 2, "pending", "backlog"),
+            # ── CONTENT (12-15) ──
+            ("12", "content", "Draft a YouTube channel description for ClawBridge", "Write a YouTube channel 'About' section: tagline, what ClawBridge does, key features, target audience. Keep it under 200 words.", 0, "pending", "backlog"),
+            ("13", "content", "Write a blog post outline about computer-use benchmarks", "Create a structured blog post outline with sections, hooks, and data points for an article about AI desktop automation benchmarks.", 1, "pending", "backlog"),
+            ("14", "content", "Draft a Reddit post announcing ClawBridge benchmark results", "Write an honest, data-driven r/selfhosted post about ClawBridge capabilities. No promo tone -- show real results and limitations.", 2, "pending", "backlog"),
+            ("15", "content", "Generate 5 YouTube Short title/description pairs for demo clips", "Create 5 titles + descriptions optimized for discoverability. Focus on AI desktop automation demos.", 3, "pending", "backlog"),
+            # ── RELEASE (16-17) ──
+            ("16", "release", "Draft CHANGELOG entry for current unreleased changes", "Read recent git log and generate a categorized changelog entry (features, fixes, improvements).", 0, "pending", "backlog"),
+            ("17", "release", "Write a README section explaining the benchmark suite", "Draft install/run/interpret instructions for the benchmarks/ module.", 1, "pending", "backlog"),
+            # ── DONE (18-24) ──
+            ("18", "done", "Failure analysis + auto-populate on error", "analyze_task_failure() detects repeated actions, stale loops, max-steps.", 0, "done", "complete"),
+            ("19", "done", "Failure timeline view in dashboard", "Color-coded step timeline, diagnosis text, token waste count.", 1, "done", "complete"),
+            ("20", "done", "Post-action hint (stale=1)", "Zero-cost 'screen appears unchanged' note.", 2, "done", "complete"),
+            ("21", "done", "Action-repetition detection", "3 identical actions at same coords fast-tracks stale counter.", 3, "done", "complete"),
+            ("22", "done", "Earlier diagnostic trigger (stale=2)", "Haiku diagnostic for full+standard profiles.", 4, "done", "complete"),
+            ("23", "done", "Security hardening v0.5.3", "WS origin, CORS, rate limiting, host binding guard.", 5, "done", "complete"),
+            ("24", "done", "Planner items reworked to executable tasks", "Replaced benchmark CLI references with direct engine tests, demos, content, and release tasks.", 6, "done", "complete"),
         ]
-        for _id, _phase, _title, _notes, _pos, _status in _seed_items:
-            c.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?)",
-                      (_id, _phase, _title, _status, _pos, _notes, _now, _now))
+        for _id, _phase, _title, _notes, _pos, _status, _stage in _seed_items:
+            c.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, stage, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?)",
+                      (_id, _phase, _title, _status, _pos, _notes, _stage, _now, _now))
         logging.info("Seeded %d default planner items", len(_seed_items))
     # Settle orphaned "running"/"pending" tasks from previous crashed/killed server
     orphaned = c.execute("UPDATE tasks SET status = 'error', error = 'Server restarted — task interrupted' WHERE status IN ('running', 'pending')").rowcount
@@ -1931,6 +1949,150 @@ def init_db():
     conn.close()
 
 init_db()
+
+def _seed_demo_planner():
+    """Seed planner with demo-friendly practical items (non-developer mode)."""
+    conn = sqlite3.connect(Settings.db_path)
+    _now = datetime.utcnow().isoformat()
+    _demo_items = [
+        # ── Research (01-03) ──
+        ("01", "research", "Search for recent real estate market trends", "Use browser to search for current real estate market trends and underwriting opportunities. Summarize key findings.", 0, "pending", "browser_use", "backlog"),
+        ("02", "research", "Analyze findings and identify top 3 opportunities", "Review the research results and identify the top 3 investment opportunities based on market data.", 1, "pending", "auto", "backlog"),
+        ("03", "research", "Look up local property listings matching criteria", "Search real estate listing sites for properties that match the identified investment criteria.", 2, "pending", "browser_use", "backlog"),
+        # ── Organize (04-05) ──
+        ("04", "organize", "Create a summary document with key findings", "Open Notepad or a text editor and create a structured summary of all research findings.", 0, "pending", "computer_use", "backlog"),
+        ("05", "organize", "Draft an email with research highlights", "Compose a concise email summarizing the research highlights and recommended next steps.", 1, "pending", "auto", "backlog"),
+        # ── Personal (06-08) ──
+        ("06", "personal", "Check calendar for upcoming deadlines this week", "Open the browser and check Google Calendar or Outlook for any upcoming deadlines.", 0, "pending", "browser_use", "backlog"),
+        ("07", "personal", "Search for best flights to destination next month", "Search Google Flights or similar for the best flight options and prices.", 1, "pending", "browser_use", "backlog"),
+        ("08", "personal", "Compile a comparison table of top 3 options", "Create a comparison table of the top 3 flight/hotel options with prices and details.", 2, "pending", "auto", "backlog"),
+    ]
+    for _id, _phase, _title, _notes, _pos, _status, _engine, _stage in _demo_items:
+        conn.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, engine_hint, stage, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
+                     (_id, _phase, _title, _status, _pos, _notes, _engine, _stage, _now, _now))
+    conn.commit()
+    conn.close()
+    logging.info("Seeded %d demo planner items", len(_demo_items))
+
+def _seed_real_estate():
+    """Seed planner with real estate underwriting workflow."""
+    conn = sqlite3.connect(Settings.db_path)
+    _now = datetime.utcnow().isoformat()
+    _items = [
+        # ── Research (01-03) ──
+        ("01", "research", "Search Zillow/Redfin for properties in target market", "Use browser to search for active listings in the target area. Filter by price range, property type, and days on market.", 0, "pending", "browser_use", "backlog"),
+        ("02", "research", "Pull recent comparable sales data", "Search for recently sold properties in the same area to establish market comps. Note sale prices, price/sqft, and days on market.", 1, "pending", "browser_use", "backlog"),
+        ("03", "research", "Check county assessor for tax and zoning info", "Look up target properties on the county assessor site for tax history, zoning designation, and lot details.", 2, "pending", "browser_use", "backlog"),
+        # ── Analysis (04-05) ──
+        ("04", "analysis", "Analyze cap rates and cash-on-cash returns", "Calculate cap rate (NOI/price) and cash-on-cash return for each property. Compare against market benchmarks.", 0, "pending", "auto", "backlog"),
+        ("05", "analysis", "Create underwriting summary spreadsheet", "Open a spreadsheet and build an underwriting model with purchase price, rental income, expenses, and returns for each property.", 1, "pending", "computer_use", "backlog"),
+        # ── Outreach (06-07) ──
+        ("06", "outreach", "Draft LOI email to seller/broker", "Compose a Letter of Intent email with offer price, terms, contingencies, and timeline for the top property.", 0, "pending", "auto", "backlog"),
+        ("07", "outreach", "Research lender options for financing", "Search for commercial lenders or mortgage brokers offering competitive rates for investment properties in this market.", 1, "pending", "browser_use", "backlog"),
+    ]
+    for _id, _phase, _title, _notes, _pos, _status, _engine, _stage in _items:
+        conn.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, engine_hint, stage, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
+                     (_id, _phase, _title, _status, _pos, _notes, _engine, _stage, _now, _now))
+    conn.commit()
+    conn.close()
+    logging.info("Seeded %d real-estate planner items", len(_items))
+
+def _seed_qa_testing():
+    """Seed planner with QA testing workflow."""
+    conn = sqlite3.connect(Settings.db_path)
+    _now = datetime.utcnow().isoformat()
+    _items = [
+        # ── Setup (01-02) ──
+        ("01", "setup", "Navigate to staging site and verify login flow", "Open the staging URL in browser, test login with valid credentials, and confirm successful authentication.", 0, "pending", "browser_use", "backlog"),
+        ("02", "setup", "Verify test environment configuration", "Check that staging environment matches expected version and configuration. Note any discrepancies.", 1, "pending", "browser_use", "backlog"),
+        # ── Test (03-05) ──
+        ("03", "test", "Test form validation with edge case inputs", "Submit forms with empty fields, special characters, very long strings, and SQL injection patterns. Document validation behavior.", 0, "pending", "browser_use", "backlog"),
+        ("04", "test", "Check responsive layout at mobile breakpoints", "Resize browser to 375px, 768px, and 1024px widths. Screenshot each breakpoint and note layout issues.", 1, "pending", "browser_use", "backlog"),
+        ("05", "test", "Open dev tools and check for console errors", "Open browser developer tools, navigate through key pages, and log any JavaScript errors or failed network requests.", 2, "pending", "computer_use", "backlog"),
+        # ── Report (06-07) ──
+        ("06", "report", "Compile test results into a summary", "Create a structured test report with pass/fail status for each test case, screenshots of failures, and severity ratings.", 0, "pending", "auto", "backlog"),
+        ("07", "report", "File bug tickets for critical issues", "For each critical or high-severity issue found, draft a bug report with steps to reproduce, expected vs actual behavior, and screenshots.", 1, "pending", "auto", "backlog"),
+    ]
+    for _id, _phase, _title, _notes, _pos, _status, _engine, _stage in _items:
+        conn.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, engine_hint, stage, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
+                     (_id, _phase, _title, _status, _pos, _notes, _engine, _stage, _now, _now))
+    conn.commit()
+    conn.close()
+    logging.info("Seeded %d qa-testing planner items", len(_items))
+
+def _seed_content():
+    """Seed planner with content creation workflow."""
+    conn = sqlite3.connect(Settings.db_path)
+    _now = datetime.utcnow().isoformat()
+    _items = [
+        # ── Research (01-03) ──
+        ("01", "research", "Research trending topics in target niche", "Search Google Trends, Reddit, and industry blogs for trending topics and high-engagement content ideas.", 0, "pending", "browser_use", "backlog"),
+        ("02", "research", "Analyze top 3 competitor posts for structure", "Find the top-performing posts from competitors. Note their headlines, structure, word count, and engagement metrics.", 1, "pending", "browser_use", "backlog"),
+        ("03", "research", "Gather supporting data and statistics", "Search for relevant statistics, studies, and quotes to cite in the content. Bookmark authoritative sources.", 2, "pending", "browser_use", "backlog"),
+        # ── Create (04-05) ──
+        ("04", "create", "Draft blog post outline and key points", "Create a structured outline with headline, subheadings, key arguments, and a call to action based on research findings.", 0, "pending", "auto", "backlog"),
+        ("05", "create", "Write social media captions for 3 platforms", "Draft platform-specific captions: Twitter (concise + hashtags), LinkedIn (professional + insights), Instagram (engaging + CTA).", 1, "pending", "auto", "backlog"),
+        # ── Distribute (06-07) ──
+        ("06", "distribute", "Schedule posts in Buffer/Hootsuite", "Log into the social media scheduler and create posts for each platform with optimal posting times.", 0, "pending", "browser_use", "backlog"),
+        ("07", "distribute", "Submit blog post to publishing platform", "Navigate to the CMS or blogging platform, paste the final content, add images/tags, and publish or schedule.", 1, "pending", "browser_use", "backlog"),
+    ]
+    for _id, _phase, _title, _notes, _pos, _status, _engine, _stage in _items:
+        conn.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, engine_hint, stage, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
+                     (_id, _phase, _title, _status, _pos, _notes, _engine, _stage, _now, _now))
+    conn.commit()
+    conn.close()
+    logging.info("Seeded %d content-creation planner items", len(_items))
+
+_PLANNER_PRESETS = {
+    "demo": _seed_demo_planner,
+    "dev": None,  # None = use init_db() default (engine tests + demos + content + release)
+    "real-estate": _seed_real_estate,
+    "qa-testing": _seed_qa_testing,
+    "content-creation": _seed_content,
+}
+
+_PLANNER_PRESET_LABELS = {
+    "demo": "Demo (Research & Personal)",
+    "dev": "Developer (Engine Tests)",
+    "real-estate": "Real Estate Underwriting",
+    "qa-testing": "QA Testing",
+    "content-creation": "Content Creation",
+}
+
+# ---------------------------------------------------------------------------
+# Mission Control helpers (module-level, used by TaskManager and API endpoints)
+# ---------------------------------------------------------------------------
+
+def _get_planner_item(item_id: str) -> dict | None:
+    """Fetch a single planner item as dict (for WS broadcast)."""
+    try:
+        conn = sqlite3.connect(Settings.db_path)
+        row = conn.execute("SELECT id, phase, title, description, status, position, notes, created_at, updated_at, task_id, execution_status, execution_result, engine_hint, workflow_id, stage, due_date FROM planner_items WHERE id = ?", (item_id,)).fetchone()
+        conn.close()
+        if not row:
+            return None
+        return dict(zip(["id", "phase", "title", "description", "status", "position", "notes", "created_at", "updated_at", "task_id", "execution_status", "execution_result", "engine_hint", "workflow_id", "stage", "due_date"], row))
+    except Exception as e:
+        logging.error("Failed to get planner item %s: %s", item_id, e)
+        return None
+
+def _update_planner_execution_status(item_id: str, exec_status: str, task_id: str | None = None, exec_result: str = ""):
+    """Update execution columns on a planner item. Auto-transitions stage based on execution_status."""
+    try:
+        conn = sqlite3.connect(Settings.db_path)
+        _now = datetime.utcnow().isoformat()
+        conn.execute("UPDATE planner_items SET execution_status = ?, task_id = ?, execution_result = ?, updated_at = ? WHERE id = ?",
+                     (exec_status, task_id, exec_result, _now, item_id))
+        # Auto-stage transitions
+        if exec_status in ("queued", "running"):
+            conn.execute("UPDATE planner_items SET stage = 'executing' WHERE id = ? AND stage != 'executing'", (item_id,))
+        elif exec_status == "complete":
+            conn.execute("UPDATE planner_items SET stage = 'complete', status = 'done' WHERE id = ?", (item_id,))
+        # error: leave in current stage (user decides to retry or drag back)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error("Failed to update planner execution status for %s: %s", item_id, e)
 
 # ---------------------------------------------------------------------------
 # Schemas (Pydantic)
@@ -1985,6 +2147,7 @@ class Task(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     result: TaskResult | None = None
     error: str | None = None
+    planner_item_id: str = ""
     _personality_context: str = PrivateAttr(default="")  # injected at runtime, not serialized
 
 class AuditEvent(BaseModel):
@@ -1993,6 +2156,41 @@ class AuditEvent(BaseModel):
     task_id: str = ""
     event_type: str = ""
     detail: str = ""
+
+def _update_planner_from_task(task: Task):
+    """Update planner item based on completed task status."""
+    if not task.planner_item_id:
+        return
+    result_data = {}
+    if task.result:
+        result_data = {
+            "summary": (task.result.summary or "")[:200],
+            "cost": task.result.estimated_cost_usd or 0,
+            "tokens_in": task.result.tokens_in or 0,
+            "tokens_out": task.result.tokens_out or 0,
+            "duration_ms": task.result.total_duration_ms or 0,
+            "steps": task.result.total_steps or 0,
+            "engine": task.engine.value if hasattr(task.engine, 'value') else str(task.engine),
+        }
+    if task.error:
+        result_data["error"] = task.error[:200]
+    exec_result = json.dumps(result_data) if result_data else ""
+
+    if task.status == TaskStatus.COMPLETE:
+        _update_planner_execution_status(task.planner_item_id, "complete", task.id, exec_result)
+        # Auto-check the planner item as done
+        try:
+            conn = sqlite3.connect(Settings.db_path)
+            conn.execute("UPDATE planner_items SET status = 'done', updated_at = ? WHERE id = ?",
+                         (datetime.utcnow().isoformat(), task.planner_item_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+    elif task.status == TaskStatus.ERROR:
+        _update_planner_execution_status(task.planner_item_id, "error", task.id, exec_result)
+    elif task.status == TaskStatus.CANCELLED:
+        _update_planner_execution_status(task.planner_item_id, "idle", None, "")
 
 class RecordedAction(BaseModel):
     """A single recorded user action (click, type, scroll, key)."""
@@ -6228,12 +6426,13 @@ class TaskManager:
             for row in c.fetchall():
                 res_val = json.loads(row[4]) if row[4] else None
                 t = Task(
-                    id=row[0], prompt=row[1], engine=row[2], 
+                    id=row[0], prompt=row[1], engine=row[2],
                     status=TaskStatus(row[3]),
                     result=TaskResult(**res_val) if res_val else None,
                     error=row[5],
                     created_at=datetime.fromisoformat(row[6]),
-                    updated_at=datetime.fromisoformat(row[7])
+                    updated_at=datetime.fromisoformat(row[7]),
+                    planner_item_id=row[8] if len(row) > 8 and row[8] else "",
                 )
                 self._tasks[t.id] = t
                 if t.status == TaskStatus.COMPLETE:
@@ -6248,10 +6447,11 @@ class TaskManager:
             c = conn.cursor()
             res_json = json.dumps(task.result.model_dump()) if task.result else None
             c.execute("""INSERT OR REPLACE INTO tasks
-                         (id, prompt, engine, status, result, error, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                         (id, prompt, engine, status, result, error, created_at, updated_at, planner_item_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                       (task.id, task.prompt, task.engine, task.status.value,
-                       res_json, task.error, task.created_at.isoformat(), task.updated_at.isoformat()))
+                       res_json, task.error, task.created_at.isoformat(), task.updated_at.isoformat(),
+                       task.planner_item_id))
             # Increment cumulative usage stats on task completion (once per task)
             if task.status == TaskStatus.COMPLETE and task.result and task.id not in self._counted_task_ids:
                 self._counted_task_ids.add(task.id)
@@ -6679,6 +6879,10 @@ class TaskManager:
         self._save_task_to_db(task)
         if self._broadcast:
             await self._broadcast({"type": "task_update", "payload": task.model_dump(mode="json")})
+        # Notify planner if this task is linked to a planner item
+        if task.planner_item_id and self._broadcast:
+            _update_planner_execution_status(task.planner_item_id, "running", task.id)
+            await self._broadcast({"type": "planner_item_update", "payload": _get_planner_item(task.planner_item_id)})
 
         # ── Safety screening ─────────────────────────────────────────────
         original_prompt = task.prompt  # preserve for logging
@@ -7057,6 +7261,12 @@ class TaskManager:
                     task.result = TaskResult(summary=fa.get("diagnosis", ""), failure_summary=fa)
             except Exception as e:
                 logging.debug("Failed to generate failure analysis: %s", e)
+
+        # Update planner item if linked
+        if task.planner_item_id:
+            _update_planner_from_task(task)
+            if self._broadcast:
+                await self._broadcast({"type": "planner_item_update", "payload": _get_planner_item(task.planner_item_id)})
 
         if self._running > 0:
             self._running -= 1
@@ -7534,6 +7744,9 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .planner-phase[data-phase="grow"]{border-left:3px solid #c49a3a;}
 .planner-phase[data-phase="done"]{border-left:3px solid #949ba4;}
 .planner-phase[data-phase="custom"]{border-left:3px solid #949ba4;}
+.planner-phase[data-phase="research"]{border-left:3px solid #3498db;}
+.planner-phase[data-phase="organize"]{border-left:3px solid #2ecc71;}
+.planner-phase[data-phase="personal"]{border-left:3px solid #e67e22;}
 .planner-phase-hdr{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none;transition:background 0.15s;}
 .planner-phase-hdr:hover{background:rgba(255,255,255,0.03);}
 .planner-chevron{width:16px;height:16px;color:var(--muted);transition:transform 0.2s;flex-shrink:0;}
@@ -7566,6 +7779,113 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 .planner-act-btn.del:hover{color:var(--err);background:rgba(217,83,79,0.1);}
 .planner-add-form{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;display:none;}
 .planner-add-form.visible{display:block;}
+/* Mission Control execution states */
+.planner-item[data-exec="queued"]{opacity:0.85;}
+.planner-item[data-exec="queued"] .exec-indicator{color:var(--accent);animation:pulse 1.5s ease-in-out infinite;}
+.planner-item[data-exec="running"]{border-left:3px solid var(--accent) !important;}
+.planner-item[data-exec="running"] .exec-indicator{color:var(--accent);animation:spin 1s linear infinite;}
+.planner-item[data-exec="complete"]{border-left:3px solid var(--ok) !important;}
+.planner-item[data-exec="complete"] .exec-indicator{color:var(--ok);}
+.planner-item[data-exec="error"]{border-left:3px solid var(--err) !important;}
+.planner-item[data-exec="error"] .exec-indicator{color:var(--err);}
+.exec-indicator{width:16px;height:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin-top:2px;}
+.exec-result{font-size:10px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.exec-result .exec-err{color:var(--err);}
+.exec-retry-btn{font-size:10px;color:var(--accent);cursor:pointer;background:none;border:none;padding:0;text-decoration:underline;}
+.exec-retry-btn:hover{color:var(--text);}
+.planner-play-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;border-radius:4px;transition:all 0.15s;display:flex;align-items:center;}
+.planner-play-btn:hover{background:rgba(87,242,135,0.1);color:var(--ok);}
+.engine-badge{font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(88,101,242,0.1);color:var(--accent);cursor:pointer;white-space:nowrap;border:none;transition:background 0.15s;}
+.engine-badge:hover{background:rgba(88,101,242,0.25);}
+.mission-bar{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:12px;font-size:12px;color:var(--muted);}
+.mission-bar .mission-stat{display:flex;align-items:center;gap:4px;}
+.mission-bar .mission-stat b{color:var(--text);font-weight:600;}
+.mission-launch-btn{font-size:12px;padding:6px 16px;border-radius:8px;border:none;cursor:pointer;font-weight:600;transition:all 0.15s;}
+.mission-launch-btn.go{background:#5865f2;color:#fff;}
+.mission-launch-btn.go:hover{background:#4752c4;}
+.mission-launch-btn.stop{background:var(--err);color:#fff;}
+.mission-launch-btn.stop:hover{background:#c0392b;}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+/* Kanban Board */
+.kb-board{display:flex;gap:12px;flex:1;overflow-x:auto;padding-bottom:8px;}
+.kb-col{flex:1;min-width:220px;max-width:340px;display:flex;flex-direction:column;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);}
+.kb-col-hdr{padding:10px 14px;font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:600;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);}
+.kb-col-count{font-size:10px;background:var(--border);padding:1px 8px;border-radius:10px;color:var(--text);}
+.kb-col-body{flex:1;overflow-y:auto;padding:8px;min-height:100px;}
+.kb-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:grab;transition:all 0.15s;}
+.kb-card:active{cursor:grabbing;}
+.kb-card.kb-dragging{opacity:0.4;transform:scale(0.95);}
+.kb-col-body.kb-drop-target{background:rgba(88,101,242,0.06);border:1px dashed var(--accent);border-radius:8px;}
+.kb-card-title{font-size:13px;font-weight:500;margin-bottom:4px;line-height:1.4;}
+.kb-card-id{display:inline-block;font-size:10px;font-weight:600;color:var(--accent);background:var(--accent)15;padding:1px 5px;border-radius:4px;margin-right:6px;vertical-align:middle;font-family:monospace;}
+.kb-card-meta{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.kb-card-phase{font-size:9px;padding:1px 6px;border-radius:3px;display:inline-block;}
+.kb-card-actions{display:none;gap:2px;margin-top:6px;flex-wrap:wrap;}
+.kb-card:hover .kb-card-actions{display:flex;}
+.kb-card.kb-selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
+/* Slide-out detail panel */
+.kb-panel-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9990;opacity:0;transition:opacity 0.25s ease;pointer-events:none;}
+.kb-panel-overlay.open{opacity:1;pointer-events:auto;}
+.kb-panel{position:fixed;top:0;right:0;bottom:0;width:420px;max-width:85vw;background:var(--bg);border-left:1px solid var(--border);z-index:9991;transform:translateX(100%);transition:transform 0.25s ease;display:flex;flex-direction:column;overflow:hidden;}
+.kb-panel.open{transform:translateX(0);}
+.kb-panel-hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.kb-panel-hdr h3{margin:0;font-size:15px;font-weight:600;line-height:1.3;}
+.kb-panel-close{background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px;transition:all 0.15s;}
+.kb-panel-close:hover{background:rgba(255,255,255,0.06);color:var(--text);}
+.kb-panel-body{flex:1;overflow-y:auto;padding:20px;}
+.kb-panel-section{margin-bottom:20px;}
+.kb-panel-section-title{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-weight:600;margin-bottom:8px;}
+.kb-panel-notes{font-size:12px;line-height:1.6;color:var(--text);white-space:pre-wrap;background:var(--bg-secondary);border-radius:8px;padding:12px;border:1px solid var(--border);}
+.kb-panel-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;}
+.kb-panel-meta-item{display:flex;align-items:center;gap:4px;color:var(--muted);}
+.kb-panel-meta-item b{color:var(--text);font-weight:500;}
+.kb-panel-actions{display:flex;gap:8px;padding:16px 20px;border-top:1px solid var(--border);flex-shrink:0;}
+.kb-panel-actions button{flex:1;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;font-size:12px;font-weight:500;transition:all 0.15s;}
+.kb-panel-actions button:hover{background:rgba(255,255,255,0.06);}
+.kb-panel-actions button.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
+.kb-panel-actions button.primary:hover{background:#4752c4;}
+.kb-panel-actions button.danger{color:var(--err);border-color:var(--err);}
+.kb-panel-actions button.danger:hover{background:rgba(237,66,69,0.1);}
+.kb-panel-live{background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;min-height:60px;}
+.kb-panel-live .step-row{display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.04);}
+.kb-panel-live .step-row:last-child{border-bottom:none;}
+.kb-panel-live .step-num{color:var(--accent);font-weight:600;flex-shrink:0;min-width:42px;}
+.kb-panel-live .step-action{color:var(--text);}
+.kb-panel-live .step-reasoning{color:var(--muted);font-style:italic;font-size:10px;margin-top:2px;}
+.kb-panel-live .step-tokens{color:var(--muted);font-size:10px;margin-left:auto;flex-shrink:0;}
+.kb-live-spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top:2px solid var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin-right:6px;vertical-align:middle;}
+.kb-card[data-exec="running"]{border-left:3px solid var(--accent);}
+.kb-card[data-exec="running"] .exec-indicator{animation:spin 1s linear infinite;}
+.kb-card[data-exec="queued"]{border-left:3px solid var(--accent);opacity:0.85;}
+.kb-card[data-exec="error"]{border-left:3px solid var(--err);}
+.kb-card[data-exec="complete"]{border-left:3px solid var(--ok);}
+.kb-complete-toggle{display:flex;align-items:center;gap:6px;padding:8px 12px;font-size:11px;color:var(--muted);cursor:pointer;border-radius:6px;transition:background 0.15s;user-select:none;}
+.kb-complete-toggle:hover{background:rgba(255,255,255,0.04);}
+.kb-complete-toggle svg{transition:transform 0.2s;}
+.kb-complete-toggle.expanded svg{transform:rotate(90deg);}
+/* Kanban sub-tabs */
+.sched-tabs{display:flex;gap:4px;margin-bottom:16px;}
+.sched-tab{background:none;border:none;color:var(--muted);font-size:13px;font-weight:600;padding:8px 16px;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.15s;}
+.sched-tab.active{color:var(--text);border-bottom-color:var(--accent);}
+.sched-tab:hover{color:var(--text);}
+/* Calendar */
+.cal-header{display:flex;justify-content:center;align-items:center;gap:16px;margin-bottom:12px;}
+.cal-header button{background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:14px;transition:all 0.15s;}
+.cal-header button:hover{background:rgba(255,255,255,0.05);}
+.cal-header span{font-size:15px;font-weight:600;min-width:160px;text-align:center;}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;margin-bottom:16px;}
+.cal-dow{text-align:center;font-size:11px;text-transform:uppercase;color:var(--muted);padding:8px 4px;font-weight:600;}
+.cal-day{min-height:80px;padding:4px 6px;border:1px solid var(--border);cursor:pointer;border-radius:4px;transition:background 0.15s;}
+.cal-day:hover{background:rgba(255,255,255,0.03);}
+.cal-day.today{border-color:var(--accent);}
+.cal-day.other-month{opacity:0.3;}
+.cal-date{font-size:12px;font-weight:600;margin-bottom:4px;}
+.cal-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin:1px;}
+.cal-dot.sched{background:var(--accent);}
+.cal-dot.kanban{background:var(--ok);}
+.cal-dot.overdue{background:var(--err);}
+.cal-day-detail{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;}
 .planner-empty{color:var(--muted);font-size:13px;text-align:center;padding:48px 20px;}
 .empty-state{text-align:center;padding:40px 20px;max-width:640px;margin:0 auto;}
 .empty-state h3{font-size:16px;font-weight:600;color:var(--text);margin-bottom:24px;}
@@ -7631,7 +7951,7 @@ main{display:flex;flex-direction:column;height:100%;overflow:hidden;max-width:10
 """
     # Inline JS
     js = """
-const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],plannerItems:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null,routingInfo:{},chatExtras:{},chatRecordStart:null,runningTaskId:null,allTimeStats:{total_tasks:0,total_cost_usd:0,total_tokens:0,balance_usd:null}};
+const state={ws:null,tasks:[],engines:[],connected:false,schedules:[],templates:[],workflows:[],plannerItems:[],activeView:'chat',wsRetryCount:0,wsRetryMax:20,bridgeActive:false,automationMode:'supervised',recording:false,recordingActions:null,recordingStartTime:null,routingInfo:{},chatExtras:{},chatRecordStart:null,runningTaskId:null,allTimeStats:{total_tasks:0,total_cost_usd:0,total_tokens:0,balance_usd:null},schedulesSubTab:'kanban',calendarMonth:new Date()};
 function updateSystemHealth(){
   const dot=document.getElementById("healthDot"),txt=document.getElementById("healthText");
   const wsEl=document.getElementById("healthWS"),engEl=document.getElementById("healthEngines"),brEl=document.getElementById("healthBridge");
@@ -7715,6 +8035,7 @@ function connect(){
       else if(m.type==="replay_started"){addActivity({timestamp:new Date().toISOString(),event_type:"replay",detail:"Replaying workflow: "+(m.payload.workflow||"")});}
       else if(m.type==="emergency_stop"){handleEmergencyStop(m.payload);}
       else if(m.type==="stop_all"){handleEmergencyStop(m.payload);}
+      else if(m.type==="planner_item_update"){handlePlannerItemUpdate(m.payload);}
       else if(m.type==="headless_changed"){_headlessState=!!m.payload.headless;updateHeadlessIcon();}
     }catch(err){console.error("[ClawBridge] WS message parse error:",err);}
   };
@@ -7992,6 +8313,14 @@ function handleStepUpdate(p){
   }
   // Also add to activity feed
   addActivity({timestamp:new Date().toISOString(),event_type:"step",detail:"Step "+p.step+": "+p.action});
+  // Update slide-out panel if open for this task's planner item
+  if(_kbPanelItemId){
+    var pi=(state.plannerItems||[]).find(function(i){return i.id===_kbPanelItemId;});
+    if(pi&&pi.task_id===p.task_id){
+      _kbPanelSteps.push(p);
+      _renderKbPanelLive(pi);
+    }
+  }
 }
 // ── Multi-step task plan display ──────────────────────────────────
 function handleTaskPlan(p){
@@ -8195,6 +8524,7 @@ const SLASH_COMMANDS=[
   {cmd:"/record",desc:"Start/stop recording desktop actions"},
   {cmd:"/stop",desc:"Stop recording"},
   {cmd:"/replay",desc:"Replay a saved workflow",hasArg:true},
+  {cmd:"/do",desc:"Execute planner item by number",hasArg:true},
   {cmd:"/browser",desc:"Force browser engine",hasArg:true},
   {cmd:"/computer",desc:"Force desktop engine",hasArg:true},
   {cmd:"/chat",desc:"Force chat/LLM engine",hasArg:true},
@@ -8219,6 +8549,17 @@ function showSlashDropdown(filter){
       wfs.forEach(w=>{
         const val="/replay "+w.name+" ";
         html+='<div class="slash-item" data-value="'+esc(val)+'" onclick="selectSlashItem(this)"><span class="slash-cmd">/replay</span><span class="slash-desc">'+esc(w.name)+(w.action_count?" ("+w.action_count+" actions)":"")+'</span></div>';
+      });
+    }
+  }
+  // Show planner items for /do prefix
+  if("/do".startsWith(f)||f.startsWith("/do")){
+    var pis=state.plannerItems||[];
+    var pending=pis.filter(function(p){return p.stage!=="complete";});
+    if(pending.length){
+      html+='<div class="slash-section">Tasks</div>';
+      pending.forEach(function(p){
+        html+='<div class="slash-item" data-value="/do '+p.id+' " onclick="selectSlashItem(this)"><span class="slash-cmd">'+esc(p.id)+'</span><span class="slash-desc">'+esc(p.title)+'</span></div>';
       });
     }
   }
@@ -8487,6 +8828,7 @@ function toggleConfigSection(id){
   const show=el.style.display==="none";
   el.style.display=show?"block":"none";
   if(arrow)arrow.classList.toggle("open",show);
+  if(show)setTimeout(()=>el.scrollIntoView({behavior:"smooth",block:"nearest"}),50);
 }
 async function submit(){
   if(state.runningTaskId){addActivity({timestamp:new Date().toISOString(),event_type:"info",detail:"A task is already running. Stop it first or wait for it to finish."});return;}
@@ -8500,6 +8842,10 @@ async function submit(){
     if(lower.startsWith("/replay ")){
       const rest=raw.slice(8).trim();
       if(rest){await handleSlashReplay(rest);document.getElementById("prompt").value="";document.getElementById("prompt").style.height="auto";return;}
+    }
+    if(lower.startsWith("/do ")){
+      var taskNum=raw.slice(4).trim();
+      if(taskNum){executePlannerItem(taskNum);document.getElementById("prompt").value="";document.getElementById("prompt").style.height="auto";return;}
     }
     for(const[prefix,eng] of Object.entries(SLASH_ENGINE_MAP)){
       if(lower.startsWith(prefix+" ")||lower.startsWith(prefix+"\\n")){
@@ -9076,11 +9422,11 @@ function renderSchedules(){
   }).join("");
 }
 async function toggleSchedule(id,enabled){
-  try{await api("PATCH","/api/schedules/"+id,{enabled});}catch(e){console.error(e);}
+  try{await api("PATCH","/api/schedules/"+id,{enabled});var s=await api("GET","/api/schedules");state.schedules=s;if(state.schedulesSubTab==="calendar")renderCalendarView();else renderScheduleView();updateTabBadges();}catch(e){console.error(e);}
 }
 async function deleteSchedule(id){
   if(!confirm("Delete this scheduled task?"))return;
-  try{await api("DELETE","/api/schedules/"+id);}catch(e){console.error(e);}
+  try{await api("DELETE","/api/schedules/"+id);var s=await api("GET","/api/schedules");state.schedules=s;if(state.schedulesSubTab==="calendar")renderCalendarView();else renderScheduleView();updateTabBadges();}catch(e){console.error(e);}
 }
 function showNewScheduleForm(){
   const d=document.getElementById("newScheduleForm");
@@ -9099,6 +9445,11 @@ async function createSchedule(){
     document.getElementById("schedPrompt").value="";
     document.getElementById("schedValue").value="";
     document.getElementById("newScheduleForm").style.display="none";
+    // Refresh schedule data and re-render
+    try{var s=await api("GET","/api/schedules");state.schedules=s;}catch(e2){}
+    if(state.schedulesSubTab==="calendar")renderCalendarView();
+    else renderScheduleView();
+    updateTabBadges();
   }catch(e){alert("Error: "+e.message);}
 }
 
@@ -9161,69 +9512,390 @@ async function saveTaskAsTemplate(taskId){
   }catch(e){alert("Error: "+e.message);}
 }
 
-// ── Planner ──
-var _phaseLabels={"benchmark":"Benchmark & Fix","show":"Show","ship":"Ship","grow":"Grow","done":"Done","custom":"Custom"};
-var _phaseOrder=["benchmark","show","ship","grow","done","custom"];
+// ── Planner (Kanban + Calendar) ──
+var _phaseLabels={"test":"Engine Tests","demo":"Demos","content":"Content","release":"Release","done":"Done","custom":"Custom","research":"Research","organize":"Organize","personal":"Personal","analysis":"Analysis","outreach":"Outreach","setup":"Setup","report":"Report","create":"Create","distribute":"Distribute"};
+var _phaseOrder=["research","organize","personal","test","demo","content","release","done","custom"];
+var _engineIcons={"browser_use":"B","computer_use":"D","openclaw":"C","auto":"A"};
+var _phaseColors={"test":"#5865f2","demo":"#57f287","content":"#f0b232","release":"#ed4245","done":"#949ba4","custom":"#949ba4","research":"#3498db","organize":"#2ecc71","personal":"#e67e22","analysis":"#9b59b6","outreach":"#e67e22","setup":"#3498db","report":"#2ecc71","create":"#9b59b6","distribute":"#e67e22"};
+var _stageLabels={"backlog":"Backlog","planning":"Planning","executing":"Executing","complete":"Complete"};
+var _stageColors={"backlog":"#949ba4","planning":"#5865f2","executing":"#9b59b6","complete":"#2ecc71"};
 var _collapsedPhases={};
-async function renderPlannerView(){
+async function switchSchedulesTab(tab){
+  state.schedulesSubTab=tab;
+  var kc=document.getElementById("kanbanContent");
+  var cc=document.getElementById("calendarContent");
+  if(kc)kc.style.display=tab==="kanban"?"flex":"none";
+  if(cc)cc.style.display=tab==="calendar"?"block":"none";
+  document.querySelectorAll(".sched-tab").forEach(function(b){b.classList.toggle("active",b.getAttribute("data-tab")===tab);});
+  if(tab==="kanban"){renderKanbanView();}
+  else{
+    // Load schedules for calendar view
+    try{var s=await api("GET","/api/schedules");state.schedules=s;}catch(e){}
+    // Load planner items if not already loaded
+    if(!state.plannerItems||!state.plannerItems.length){try{state.plannerItems=await api("GET","/api/planner");}catch(e){}}
+    renderCalendarView();
+  }
+}
+function _execIndicatorHtml(exec){
+  if(!exec||exec==="idle")return "";
+  if(exec==="queued")return '<div class="exec-indicator"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg></div>';
+  if(exec==="running")return '<div class="exec-indicator"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 2a10 10 0 0 1 10 10" /></svg></div>';
+  if(exec==="complete")return '<div class="exec-indicator"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>';
+  if(exec==="error")return '<div class="exec-indicator"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>';
+  return "";
+}
+function _execResultHtml(it){
+  if(!it.execution_result)return "";
+  try{
+    var r=JSON.parse(it.execution_result);
+    if(r.error)return '<div class="exec-result"><span class="exec-err">'+esc(r.error.substring(0,80))+'</span><button class="exec-retry-btn" onclick="event.stopPropagation();executePlannerItem(\\''+it.id+'\\')">Retry</button>'+(it.task_id?'<button class="exec-retry-btn" onclick="event.stopPropagation();viewTaskInChat(\\''+it.task_id+'\\')">View</button>':'')+'</div>';
+    var parts=[];
+    if(r.engine)parts.push(r.engine.replace("_use",""));
+    if(r.steps)parts.push(r.steps+" steps");
+    if(r.cost)parts.push("$"+r.cost.toFixed(4));
+    if(r.duration_ms)parts.push((r.duration_ms/1000).toFixed(1)+"s");
+    if(!parts.length)return "";
+    return '<div class="exec-result">'+parts.join(" | ")+(it.task_id?' <button class="exec-retry-btn" onclick="event.stopPropagation();viewTaskInChat(\\''+it.task_id+'\\')">View</button>':'')+'</div>';
+  }catch(e){return "";}
+}
+function _kbCardHtml(it){
+  var ex=it.execution_status||"idle";
+  var eng=it.engine_hint||"auto";
+  var pcolor=_phaseColors[it.phase]||"#949ba4";
+  var plabel=_phaseLabels[it.phase]||it.phase;
+  var h='<div class="kb-card" id="pi-'+it.id+'" data-exec="'+esc(ex)+'" draggable="true" ondragstart="kanbanDragStart(event,\\''+it.id+'\\')" onclick="openKbPanel(\\''+it.id+'\\')">';
+  h+=_execIndicatorHtml(ex);
+  h+='<div class="kb-card-title"><span class="kb-card-id">'+esc(it.id)+'</span>'+esc(it.title)+'</div>';
+  h+='<div class="kb-card-meta">';
+  h+='<span class="kb-card-phase" style="background:'+pcolor+'22;color:'+pcolor+'">'+esc(plabel)+'</span>';
+  if(eng!=="auto"){h+='<button class="engine-badge" onclick="event.stopPropagation();cyclePlannerEngine(\\''+it.id+'\\',\\''+eng+'\\')" title="Engine: '+eng+'">'+(_engineIcons[eng]||eng.charAt(0).toUpperCase())+'</button>';}
+  if(it.due_date)h+='<span style="font-size:10px">'+esc(it.due_date)+'</span>';
+  h+='</div>';
+  if(it.notes){var preview=it.notes.replace(/RUN:\\s*.+/g,'').replace(/\\n+/g,' ').trim().substring(0,80);if(preview)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+esc(preview)+'</div>';}
+  h+=_execResultHtml(it);
+  h+='<div class="kb-card-actions">';
+  if(ex!=="running"&&ex!=="queued"){h+='<button class="planner-play-btn" onclick="event.stopPropagation();executePlannerItem(\\''+it.id+'\\')" title="Execute"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>';}
+  else{h+='<button class="planner-play-btn" onclick="event.stopPropagation();cancelPlannerItem(\\''+it.id+'\\')" title="Cancel" style="color:var(--err)"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>';}
+  h+='<button class="planner-act-btn" onclick="event.stopPropagation();editPlannerNotes(\\''+it.id+'\\')" title="Edit notes"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
+  h+='<button class="planner-act-btn" onclick="event.stopPropagation();linkWorkflow(\\''+it.id+'\\')" title="Link workflow"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>';
+  h+='<button class="planner-act-btn del" onclick="event.stopPropagation();deletePlannerItem(\\''+it.id+'\\')" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>';
+  h+='</div></div>';
+  return h;
+}
+var _kbPanelItemId=null;
+var _kbPanelSteps=[];
+function openKbPanel(itemId){
+  var it=(state.plannerItems||[]).find(function(i){return i.id===itemId;});
+  if(!it)return;
+  _kbPanelItemId=itemId;
+  _kbPanelSteps=[];
+  // Highlight selected card
+  document.querySelectorAll(".kb-card.kb-selected").forEach(function(c){c.classList.remove("kb-selected");});
+  var card=document.getElementById("pi-"+itemId);
+  if(card)card.classList.add("kb-selected");
+  // Title
+  document.getElementById("kbPanelTitle").textContent=it.title;
+  // Body
+  _renderKbPanelBody(it);
+  // Actions
+  _renderKbPanelActions(it);
+  // Open
+  document.getElementById("kbPanelOverlay").classList.add("open");
+  document.getElementById("kbPanel").classList.add("open");
+  // If task is running, fetch existing steps
+  if(it.task_id){
+    api("GET","/api/tasks/"+it.task_id+"/steps").then(function(d){
+      if(d&&d.steps){_kbPanelSteps=d.steps;_renderKbPanelLive(it);}
+    }).catch(function(){});
+  }
+}
+function closeKbPanel(){
+  _kbPanelItemId=null;
+  document.getElementById("kbPanelOverlay").classList.remove("open");
+  document.getElementById("kbPanel").classList.remove("open");
+  document.querySelectorAll(".kb-card.kb-selected").forEach(function(c){c.classList.remove("kb-selected");});
+}
+function _renderKbPanelBody(it){
+  var ex=it.execution_status||"idle";
+  var pcolor=_phaseColors[it.phase]||"#949ba4";
+  var plabel=_phaseLabels[it.phase]||it.phase;
+  var sc=_stageColors[it.stage||"backlog"]||"#949ba4";
+  var sl=_stageLabels[it.stage||"backlog"]||it.stage;
+  var h='<div class="kb-panel-section"><div class="kb-panel-meta">';
+  h+='<div class="kb-panel-meta-item"><span class="kb-card-phase" style="background:'+pcolor+'22;color:'+pcolor+'">'+esc(plabel)+'</span></div>';
+  h+='<div class="kb-panel-meta-item"><span style="color:'+sc+'">'+esc(sl)+'</span></div>';
+  h+='<div class="kb-panel-meta-item">Engine: <b>'+esc(it.engine_hint||"auto")+'</b></div>';
+  if(it.due_date)h+='<div class="kb-panel-meta-item">Due: <b>'+esc(it.due_date)+'</b></div>';
+  h+='<div class="kb-panel-meta-item">Status: <b>'+esc(it.status)+'</b></div>';
+  h+='</div></div>';
+  // Notes
+  if(it.notes){
+    h+='<div class="kb-panel-section"><div class="kb-panel-section-title">Notes</div>';
+    h+='<div class="kb-panel-notes">'+esc(it.notes)+'</div></div>';
+  }
+  // Execution status
+  if(ex==="running"||ex==="queued"){
+    h+='<div class="kb-panel-section"><div class="kb-panel-section-title"><span class="kb-live-spinner"></span>Execution in Progress</div>';
+    h+='<div class="kb-panel-live" id="kbPanelLive"><div style="color:var(--muted);font-size:11px;padding:8px">Waiting for step data...</div></div></div>';
+  }else if(ex==="complete"||ex==="error"){
+    h+='<div class="kb-panel-section"><div class="kb-panel-section-title">Execution Result</div>';
+    if(it.execution_result){
+      try{
+        var r=JSON.parse(it.execution_result);
+        h+='<div class="kb-panel-live">';
+        if(r.summary)h+='<div style="font-size:12px;margin-bottom:8px;line-height:1.5">'+esc(r.summary)+'</div>';
+        var parts=[];
+        if(r.engine)parts.push("Engine: "+r.engine);
+        if(r.steps)parts.push(r.steps+" steps");
+        if(r.cost!==undefined)parts.push("$"+Number(r.cost).toFixed(4));
+        if(r.duration_ms)parts.push((r.duration_ms/1000).toFixed(1)+"s");
+        if(r.tokens_in||r.tokens_out)parts.push((r.tokens_in+r.tokens_out).toLocaleString()+" tokens");
+        if(parts.length)h+='<div style="font-size:10px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap">'+parts.join(" &middot; ")+'</div>';
+        if(r.error)h+='<div style="color:var(--err);font-size:12px;margin-top:6px">'+esc(r.error)+'</div>';
+        h+='</div>';
+      }catch(e){h+='<div class="kb-panel-live">'+esc(it.execution_result)+'</div>';}
+    }else{
+      h+='<div class="kb-panel-live" style="color:var(--muted);font-size:11px">'+(ex==="complete"?"Completed":"Error - no result data")+'</div>';
+    }
+    h+='</div>';
+  }
+  // Step history container (for completed tasks)
+  h+='<div id="kbPanelStepHistory"></div>';
+  document.getElementById("kbPanelBody").innerHTML=h;
+  // If running, render existing steps
+  if((ex==="running"||ex==="queued")&&_kbPanelSteps.length)_renderKbPanelLive(it);
+  // Auto-load step history for completed/errored tasks
+  if((ex==="complete"||ex==="error")&&it.task_id){showKbPanelSteps(it.task_id);}
+}
+function _renderKbPanelLive(it){
+  var el=document.getElementById("kbPanelLive");
+  if(!el)return;
+  if(!_kbPanelSteps.length){el.innerHTML='<div style="color:var(--muted);font-size:11px;padding:8px">Waiting for step data...</div>';return;}
+  var h="";
+  _kbPanelSteps.forEach(function(s){
+    var tok=(s.tokens_in||0)+(s.tokens_out||0);
+    h+='<div class="step-row"><span class="step-num">Step '+(s.step_num||s.step||"?")+'</span><div><div class="step-action">'+esc(s.action||s.detail||"")+'</div>';
+    if(s.reasoning)h+='<div class="step-reasoning">'+esc(s.reasoning.substring(0,200))+'</div>';
+    h+='</div>';
+    if(tok)h+='<span class="step-tokens">'+tok.toLocaleString()+' tok</span>';
+    h+='</div>';
+  });
+  el.innerHTML=h;
+  el.scrollTop=el.scrollHeight;
+}
+function _renderKbPanelActions(it){
+  var ex=it.execution_status||"idle";
+  var h="";
+  if(ex==="running"||ex==="queued"){
+    h+='<button class="danger" onclick="cancelPlannerItem(\\''+it.id+'\\');closeKbPanel()">Cancel</button>';
+    if(it.task_id)h+='<button onclick="viewTaskInChat(\\''+it.task_id+'\\');closeKbPanel()">View in Chat</button>';
+  }else{
+    h+='<button class="primary" onclick="executePlannerItem(\\''+it.id+'\\')">Execute</button>';
+    h+='<button onclick="editPlannerNotes(\\''+it.id+'\\')">Edit Notes</button>';
+    h+='<button onclick="linkWorkflow(\\''+it.id+'\\')">Link Workflow</button>';
+    h+='<button class="danger" onclick="deletePlannerItem(\\''+it.id+'\\');closeKbPanel()">Delete</button>';
+  }
+  document.getElementById("kbPanelActions").innerHTML=h;
+}
+async function showKbPanelSteps(taskId){
+  try{
+    var d=await api("GET","/api/tasks/"+taskId+"/steps");
+    if(!d||!d.steps||!d.steps.length){document.getElementById("kbPanelStepHistory").innerHTML='<div style="padding:12px;color:var(--muted);font-size:11px">No step data recorded.</div>';return;}
+    var h='<div class="kb-panel-section" style="margin-top:12px"><div class="kb-panel-section-title">Step History ('+d.steps.length+' steps)</div><div class="kb-panel-live">';
+    d.steps.forEach(function(s){
+      var tok=(s.tokens_in||0)+(s.tokens_out||0);
+      h+='<div class="step-row"><span class="step-num">Step '+(s.step_num||"?")+'</span><div><div class="step-action">'+esc(s.action||s.detail||"")+'</div>';
+      if(s.reasoning)h+='<div class="step-reasoning">'+esc(s.reasoning.substring(0,200))+'</div>';
+      h+='</div>';
+      if(tok)h+='<span class="step-tokens">'+tok.toLocaleString()+' tok</span>';
+      h+='</div>';
+    });
+    h+='</div></div>';
+    document.getElementById("kbPanelStepHistory").innerHTML=h;
+  }catch(e){console.error(e);}
+}
+function toggleCompleteCol(){
+  state._completeExpanded=!state._completeExpanded;
+  var items=document.getElementById("kbCompleteItems");
+  var tog=document.querySelector(".kb-complete-toggle");
+  if(items)items.style.display=state._completeExpanded?"block":"none";
+  if(tog)tog.classList.toggle("expanded",state._completeExpanded);
+}
+async function renderKanbanView(){
   try{
     var items=await api("GET","/api/planner");
     state.plannerItems=items;
-    var el=document.getElementById("plannerPhases");
+    var board=document.getElementById("kbBoard");
+    if(!board)return;
     if(!items||!items.length){
-      el.innerHTML='<div class="planner-empty"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;display:block;margin:0 auto 12px"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>No planner items yet.<br><span style="font-size:11px;margin-top:4px;display:inline-block">Click <strong>+ Add Item</strong> to get started, or <strong>Reset</strong> to load defaults.</span></div>';
-      updatePlannerProgress();return;
+      board.innerHTML='<div class="planner-empty" style="flex:1"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;display:block;margin:0 auto 12px"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>No planner items yet.<br><span style="font-size:11px;margin-top:4px;display:inline-block">Click <strong>+ Add Item</strong> to get started, or <strong>Reset</strong> to load presets.</span></div>';
+      updatePlannerProgress();updateMissionStats();return;
     }
-    var grouped={};
-    items.forEach(function(it){if(!grouped[it.phase])grouped[it.phase]=[];grouped[it.phase].push(it);});
-    var phases=Object.keys(grouped).sort(function(a,b){var ai=_phaseOrder.indexOf(a),bi=_phaseOrder.indexOf(b);return(ai<0?99:ai)-(bi<0?99:bi);});
+    var stages=["backlog","planning","executing","complete"];
+    var grouped={backlog:[],planning:[],executing:[],complete:[]};
+    items.forEach(function(it){var s=it.stage||"backlog";if(!grouped[s])grouped[s]=[];grouped[s].push(it);});
     var html="";
-    phases.forEach(function(phase){
-      var pitems=grouped[phase];
-      var done=pitems.filter(function(i){return i.status==="done"}).length;
-      var total=pitems.length;
-      var pct=total?Math.round(done/total*100):0;
-      var label=_phaseLabels[phase]||phase.charAt(0).toUpperCase()+phase.slice(1);
-      var phaseColors={"benchmark":"#5865f2","show":"#e67e22","ship":"#9b59b6","grow":"#c49a3a","done":"#949ba4"};
-      var barColor=pct===100?"var(--ok)":(phaseColors[phase]||"var(--accent)");
-      var collapsed=_collapsedPhases[phase]===true;
-      html+='<div class="planner-phase" data-phase="'+esc(phase)+'">';
-      html+='<div class="planner-phase-hdr'+(collapsed?" collapsed":"")+'" onclick="togglePhaseCollapse(this)">';
-      html+='<svg class="planner-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>';
-      html+='<span class="planner-phase-label">'+esc(label)+'</span>';
-      html+='<span class="planner-phase-count">'+done+' / '+total+'</span>';
-      html+='<div class="planner-phase-bar"><div class="planner-phase-bar-fill" style="width:'+pct+'%;background:'+barColor+'"></div></div>';
-      html+='</div>';
-      html+='<div class="planner-items-wrap"'+(collapsed?' style="display:none"':'')+'>';
-      pitems.forEach(function(it){
-        var ck=it.status==="done";
-        html+='<div class="planner-item'+(ck?" done":"")+'" id="pi-'+it.id+'">';
-        html+='<input type="checkbox" class="planner-check"'+(ck?" checked":"")+' onchange="togglePlannerItem(\\''+it.id+'\\',this.checked)">';
-        html+='<div class="planner-item-body">';
-        html+='<span class="planner-item-title">'+esc(it.title)+'</span>';
-        if(it.notes){var plain=it.notes.replace(/RUN:\s*.+/g,'').replace(/\\n+/g,' ').trim();var preview=plain.length>100?plain.substring(0,100)+'...':plain;if(!preview)preview=it.notes.split('\\n')[0].substring(0,100);html+='<div class="planner-item-preview" onclick="var n=this.nextElementSibling;n.classList.toggle(\\'expanded\\');this.classList.toggle(\\'expanded\\')"><svg class="planner-notes-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg><span>'+esc(preview)+'</span></div>';var nn=esc(it.notes).replace(/RUN:\\s*(.+)/g,function(_,cmd){return 'RUN: <span class="planner-cmd" onclick="event.stopPropagation();navigator.clipboard.writeText(\\''+cmd.replace(/'/g,"\\\\'")+'\\')" title="Click to copy">'+cmd+'</span>';});html+='<div class="planner-item-notes">'+nn+'</div>';}
+    stages.forEach(function(stage){
+      var sitems=grouped[stage]||[];
+      var sc=_stageColors[stage]||"#949ba4";
+      html+='<div class="kb-col">';
+      html+='<div class="kb-col-hdr" style="border-bottom-color:'+sc+'"><span style="color:'+sc+'">'+(_stageLabels[stage]||stage)+'</span><span class="kb-col-count">'+sitems.length+'</span></div>';
+      html+='<div class="kb-col-body" ondragover="kanbanDragOver(event)" ondragleave="kanbanDragLeave(event)" ondrop="kanbanDrop(event,\\''+stage+'\\')">';
+      if(stage==="complete"&&sitems.length>0){
+        var isExp=state._completeExpanded||false;
+        html+='<div class="kb-complete-toggle'+(isExp?' expanded':'')+'" onclick="event.stopPropagation();toggleCompleteCol()"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l8 7-8 7z"/></svg>'+sitems.length+' completed item'+(sitems.length!==1?'s':'')+'</div>';
+        html+='<div id="kbCompleteItems" style="display:'+(isExp?'block':'none')+'">';
+        sitems.forEach(function(it){html+=_kbCardHtml(it);});
         html+='</div>';
-        html+='<div class="planner-item-actions">';
-        html+='<button class="planner-act-btn" onclick="editPlannerNotes(\\''+it.id+'\\')" title="Edit notes"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>';
-        html+='<button class="planner-act-btn del" onclick="deletePlannerItem(\\''+it.id+'\\')" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>';
-        html+='</div>';
-        html+='</div>';
-      });
+      }else{
+        sitems.forEach(function(it){html+=_kbCardHtml(it);});
+        if(!sitems.length)html+='<div style="text-align:center;padding:20px;color:var(--muted);font-size:11px;opacity:0.5">Drop items here</div>';
+      }
       html+='</div></div>';
     });
-    el.innerHTML=html;
+    board.innerHTML=html;
+    // Populate phase selector
+    var allPhases={};items.forEach(function(it){allPhases[it.phase]=true;});
+    var psel=document.getElementById("missionPhaseSelect");
+    if(psel){psel.innerHTML='<option value="all">All Phases</option>';Object.keys(allPhases).sort().forEach(function(p){psel.innerHTML+='<option value="'+esc(p)+'">'+esc(_phaseLabels[p]||p)+'</option>';});}
     updatePlannerProgress();
-  }catch(e){console.error("renderPlannerView error:",e);}
+    updateMissionStats();
+  }catch(e){console.error("renderKanbanView error:",e);}
 }
-function togglePhaseCollapse(hdr){
-  var phase=hdr.parentElement.getAttribute("data-phase");
-  var wrap=hdr.nextElementSibling;
-  if(hdr.classList.contains("collapsed")){
-    hdr.classList.remove("collapsed");wrap.style.display="";_collapsedPhases[phase]=false;
-  }else{
-    hdr.classList.add("collapsed");wrap.style.display="none";_collapsedPhases[phase]=true;
+function filterKanbanByPhase(phase){
+  var cards=document.querySelectorAll(".kb-card");
+  var items=state.plannerItems||[];
+  cards.forEach(function(card){
+    var id=card.id.replace("pi-","");
+    var it=items.find(function(i){return i.id===id;});
+    if(!it)return;
+    card.style.display=(phase==="all"||it.phase===phase)?"":"none";
+  });
+}
+function kanbanDragStart(event,itemId){
+  event.dataTransfer.setData("text/plain",itemId);
+  event.dataTransfer.effectAllowed="move";
+  var card=document.getElementById("pi-"+itemId);
+  if(card)setTimeout(function(){card.classList.add("kb-dragging");},0);
+}
+function kanbanDragOver(event){
+  event.preventDefault();
+  event.dataTransfer.dropEffect="move";
+  var body=event.currentTarget;
+  if(body&&!body.classList.contains("kb-drop-target"))body.classList.add("kb-drop-target");
+}
+function kanbanDragLeave(event){
+  var body=event.currentTarget;
+  if(body)body.classList.remove("kb-drop-target");
+}
+async function kanbanDrop(event,targetStage){
+  event.preventDefault();
+  var body=event.currentTarget;
+  if(body)body.classList.remove("kb-drop-target");
+  var itemId=event.dataTransfer.getData("text/plain");
+  if(!itemId)return;
+  var card=document.getElementById("pi-"+itemId);
+  if(card)card.classList.remove("kb-dragging");
+  try{
+    await api("PUT","/api/planner/"+itemId,{stage:targetStage});
+    var it=(state.plannerItems||[]).find(function(i){return i.id===itemId});
+    if(it)it.stage=targetStage;
+    if(targetStage==="complete"){
+      await api("PUT","/api/planner/"+itemId,{status:"done"});
+      if(it)it.status="done";
+    }else if(it&&it.status==="done"){
+      await api("PUT","/api/planner/"+itemId,{status:"pending"});
+      if(it)it.status="pending";
+    }
+    renderKanbanView();
+  }catch(e){console.error("kanbanDrop error:",e);}
+}
+function renderCalendarView(){
+  var cc=document.getElementById("calendarContent");
+  if(!cc)return;
+  var d=state.calendarMonth;
+  var year=d.getFullYear(),month=d.getMonth();
+  var monthNames=["January","February","March","April","May","June","July","August","September","October","November","December"];
+  var first=new Date(year,month,1);
+  var last=new Date(year,month+1,0);
+  var startDay=first.getDay();
+  var daysInMonth=last.getDate();
+  var today=new Date();var todayStr=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-"+String(today.getDate()).padStart(2,"0");
+  // Build date->items map from plannerItems due_date
+  var dateItems={};
+  (state.plannerItems||[]).forEach(function(it){if(it.due_date){{if(!dateItems[it.due_date])dateItems[it.due_date]=[];dateItems[it.due_date].push(it);}}});
+  // Build date->schedules map from next_run
+  var dateScheds={};
+  (state.schedules||[]).forEach(function(s){if(s.next_run&&s.enabled){var ds=s.next_run.substring(0,10);if(!dateScheds[ds])dateScheds[ds]=[];dateScheds[ds].push(s);}});
+  var html='<div class="cal-header"><button onclick="navigateCalendarMonth(-1)">&lt;</button><span>'+monthNames[month]+' '+year+'</span><button onclick="navigateCalendarMonth(1)">&gt;</button></div>';
+  html+='<div class="cal-grid">';
+  var dows=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  dows.forEach(function(dow){html+='<div class="cal-dow">'+dow+'</div>';});
+  // Previous month fill
+  for(var i=0;i<startDay;i++){var pd=new Date(year,month,0-startDay+i+1);html+='<div class="cal-day other-month"><span class="cal-date">'+pd.getDate()+'</span></div>';}
+  // Current month days
+  for(var day=1;day<=daysInMonth;day++){
+    var ds=year+"-"+String(month+1).padStart(2,"0")+"-"+String(day).padStart(2,"0");
+    var isToday=ds===todayStr;
+    var items=dateItems[ds]||[];
+    var scheds=dateScheds[ds]||[];
+    var isPast=ds<todayStr;
+    html+='<div class="cal-day'+(isToday?" today":"")+'" onclick="renderCalendarDay(\\''+ds+'\\')">';
+    html+='<span class="cal-date">'+day+'</span>';
+    if(items.length||scheds.length){
+      html+='<div style="margin-top:2px">';
+      items.forEach(function(it){var cls=(isPast&&it.status!=="done")?"overdue":"kanban";html+='<span class="cal-dot '+cls+'" title="'+esc(it.title)+'"></span>';});
+      scheds.forEach(function(s){html+='<span class="cal-dot sched" title="'+esc(s.name)+'"></span>';});
+      html+='</div>';
+    }
+    html+='</div>';
   }
+  // Next month fill
+  var totalCells=startDay+daysInMonth;
+  var remaining=totalCells%7===0?0:7-(totalCells%7);
+  for(var i=1;i<=remaining;i++){html+='<div class="cal-day other-month"><span class="cal-date">'+i+'</span></div>';}
+  html+='</div>';
+  // Day detail panel (expanded on click)
+  html+='<div id="calDayDetail"></div>';
+  // Schedules section
+  html+='<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px">';
+  html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><h4 style="font-size:13px;font-weight:600;margin:0">Recurring Schedules</h4><button class="btn" onclick="showNewScheduleForm()" style="font-size:12px;padding:6px 12px">+ New Schedule</button></div>';
+  html+='<div id="newScheduleForm" style="display:none;margin-bottom:16px" class="card">';
+  html+='<h2 style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:12px">Create Schedule</h2>';
+  html+='<input id="schedName" placeholder="Schedule name (e.g. Check inbox)" style="margin-bottom:8px;font-size:13px">';
+  html+='<textarea id="schedPrompt" placeholder="Task prompt..." style="margin-bottom:8px;font-size:13px;min-height:60px"></textarea>';
+  html+='<div style="display:flex;gap:8px;margin-bottom:8px;">';
+  html+='<select id="schedEngine" style="font-size:12px;width:auto!important;flex:1"><option value="auto">Auto</option><option value="browser_use">browser-use</option><option value="computer_use">computer-use</option><option value="openclaw">OpenClaw</option></select>';
+  html+='<select id="schedType" style="font-size:12px;width:auto!important;flex:1"><option value="interval">Interval</option><option value="cron">Cron</option><option value="once">One-shot</option></select>';
+  html+='</div>';
+  html+='<input id="schedValue" placeholder="e.g. 30m, 2h, 1d (interval) or 0 */2 * * * (cron) or 2026-02-15T10:00:00 (once)" style="margin-bottom:8px;font-size:12px">';
+  html+='<div style="font-size:10px;color:var(--muted);margin-bottom:12px;line-height:1.4"><strong>Interval:</strong> 30m, 2h, 1d, 300s | <strong>Cron:</strong> minute hour day month weekday | <strong>Once:</strong> ISO datetime</div>';
+  html+='<div style="display:flex;gap:8px;"><button class="btn" onclick="createSchedule()" style="flex:1;font-size:13px">Create</button><button class="btn" onclick="showNewScheduleForm()" style="flex:0;font-size:13px;background:#232428;border:1px solid var(--border)">Cancel</button></div>';
+  html+='</div>';
+  html+='<div id="scheduleViewList"></div>';
+  html+='</div>';
+  cc.innerHTML=html;
+  renderScheduleView();
 }
+function navigateCalendarMonth(delta){
+  var d=state.calendarMonth;
+  state.calendarMonth=new Date(d.getFullYear(),d.getMonth()+delta,1);
+  renderCalendarView();
+}
+function renderCalendarDay(dateStr){
+  var det=document.getElementById("calDayDetail");
+  if(!det)return;
+  var items=(state.plannerItems||[]).filter(function(it){return it.due_date===dateStr;});
+  var scheds=(state.schedules||[]).filter(function(s){return s.enabled&&s.next_run&&s.next_run.substring(0,10)===dateStr;});
+  if(!items.length&&!scheds.length){det.innerHTML='<div class="cal-day-detail"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+dateStr+'</div><div style="font-size:12px;color:var(--muted)">No items on this date</div></div>';return;}
+  var html='<div class="cal-day-detail"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+dateStr+'</div>';
+  if(items.length){html+='<div style="font-size:11px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Planner Items</div>';items.forEach(function(it){var pcolor=_phaseColors[it.phase]||"#949ba4";html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px"><span class="kb-card-phase" style="background:'+pcolor+'22;color:'+pcolor+'">'+esc(_phaseLabels[it.phase]||it.phase)+'</span><span>'+esc(it.title)+'</span></div>';});}
+  if(scheds.length){html+='<div style="font-size:11px;color:var(--muted);text-transform:uppercase;margin-top:8px;margin-bottom:6px">Schedules</div>';scheds.forEach(function(s){html+='<div style="font-size:12px;padding:4px 0"><span class="cal-dot sched" style="margin-right:6px"></span>'+esc(s.name)+' - '+esc(s.prompt.substring(0,60))+'</div>';});}
+  html+='</div>';
+  det.innerHTML=html;
+}
+// Keep renderPlannerView as alias for backward compat (WS handlers call it)
+async function renderPlannerView(){renderKanbanView();}
 function updatePlannerProgress(){
   var items=state.plannerItems||[];
   var done=items.filter(function(i){return i.status==="done"}).length;
@@ -9243,10 +9915,12 @@ function updatePlannerBadge(){
 }
 async function togglePlannerItem(id,checked){
   try{
-    await api("PUT","/api/planner/"+id,{status:checked?"done":"pending"});
+    var updates={status:checked?"done":"pending"};
+    if(checked)updates.stage="complete";
+    await api("PUT","/api/planner/"+id,updates);
     var it=(state.plannerItems||[]).find(function(i){return i.id===id});
-    if(it)it.status=checked?"done":"pending";
-    renderPlannerView();
+    if(it){it.status=updates.status;if(checked)it.stage="complete";}
+    renderKanbanView();
   }catch(e){console.error(e);}
 }
 function showAddPlannerForm(){
@@ -9257,12 +9931,14 @@ function showAddPlannerForm(){
 async function addPlannerItem(){
   var title=document.getElementById("plannerNewTitle").value.trim();
   var phase=document.getElementById("plannerNewPhase").value;
+  var stageEl=document.getElementById("plannerNewStage");
+  var stage=stageEl?stageEl.value:"backlog";
   if(!title){alert("Title is required");return;}
   try{
-    await api("POST","/api/planner",{title:title,phase:phase});
+    await api("POST","/api/planner",{title:title,phase:phase,stage:stage});
     document.getElementById("plannerNewTitle").value="";
     document.getElementById("addPlannerForm").classList.remove("visible");
-    renderPlannerView();
+    renderKanbanView();
   }catch(e){alert("Error: "+e.message);}
 }
 async function deletePlannerItem(id){
@@ -9284,11 +9960,136 @@ async function editPlannerNotes(id){
   }catch(e){console.error(e);}
 }
 async function seedPlanner(){
-  if(!confirm("Reset planner to defaults? This will delete all current items."))return;
+  var presets=["demo","dev","real-estate","qa-testing","content-creation"];
+  var labels={"demo":"Demo (Research & Personal)","dev":"Developer (Engine Tests)","real-estate":"Real Estate Underwriting","qa-testing":"QA Testing","content-creation":"Content Creation"};
+  var choice=window.prompt("Choose a preset to reset planner:\\n"+presets.map(function(p,i){return(i+1)+". "+labels[p]}).join("\\n")+"\\n\\nEnter number (or Cancel to abort):");
+  if(!choice)return;
+  var idx=parseInt(choice)-1;
+  if(isNaN(idx)||idx<0||idx>=presets.length){alert("Invalid choice");return;}
   try{
-    await api("POST","/api/planner/seed");
+    await api("POST","/api/planner/seed",{preset:presets[idx]});
     renderPlannerView();
   }catch(e){alert("Error: "+e.message);}
+}
+// ── Mission Control ──
+var _missionStartTime=null;
+function handlePlannerItemUpdate(item){
+  if(!item||!item.id)return;
+  // Update in-memory state
+  var idx=(state.plannerItems||[]).findIndex(function(i){return i.id===item.id});
+  if(idx>=0)state.plannerItems[idx]=item;
+  else state.plannerItems.push(item);
+  // Stage may have changed (auto-transition), so re-render kanban to move cards between columns
+  if(state.schedulesSubTab==="kanban"){
+    renderKanbanView();
+  }
+  // Refresh slide-out panel if open for this item
+  if(_kbPanelItemId===item.id){
+    document.getElementById("kbPanelTitle").textContent=item.title;
+    _renderKbPanelBody(item);
+    _renderKbPanelActions(item);
+  }
+  updatePlannerProgress();
+  updateMissionStats();
+}
+async function executePlannerItem(id){
+  try{
+    await api("POST","/api/planner/"+id+"/execute",{});
+    if(!_missionStartTime)_missionStartTime=Date.now();
+  }catch(e){alert("Execute error: "+(e.message||e));}
+}
+async function cancelPlannerItem(id){
+  try{await api("POST","/api/planner/"+id+"/cancel");}catch(e){console.error(e);}
+}
+async function cyclePlannerEngine(id,current){
+  var engines=["auto","browser_use","computer_use","openclaw"];
+  var idx=engines.indexOf(current);
+  var next=engines[(idx+1)%engines.length];
+  try{
+    await api("PUT","/api/planner/"+id,{engine_hint:next});
+    var it=(state.plannerItems||[]).find(function(i){return i.id===id});
+    if(it)it.engine_hint=next;
+    renderPlannerView();
+  }catch(e){console.error(e);}
+}
+function viewTaskInChat(taskId){
+  switchView("chat");
+  setTimeout(function(){
+    var el=document.querySelector("[data-task-id=\\'"+taskId+"\\']");
+    if(el)el.scrollIntoView({behavior:"smooth",block:"center"});
+  },200);
+}
+function updateMissionStats(){
+  var bar=document.getElementById("missionStatsBar");
+  if(!bar)return;
+  var items=state.plannerItems||[];
+  var running=items.filter(function(i){return i.execution_status==="running"}).length;
+  var queued=items.filter(function(i){return i.execution_status==="queued"}).length;
+  var complete=items.filter(function(i){return i.execution_status==="complete"}).length;
+  var errored=items.filter(function(i){return i.execution_status==="error"}).length;
+  var total=items.filter(function(i){return i.status!=="done"||i.execution_status!=="idle"}).length;
+  var active=running+queued;
+  // Cost tally
+  var totalCost=0;
+  items.forEach(function(it){
+    if(it.execution_result){try{var r=JSON.parse(it.execution_result);if(r.cost)totalCost+=r.cost;}catch(e){}}
+  });
+  var launchBtn=document.getElementById("missionLaunchBtn");
+  if(active>0){
+    bar.style.display="flex";
+    bar.innerHTML='<span class="mission-stat">Mission Active</span><span class="mission-stat"><b>'+complete+'</b>/'+(complete+errored+active)+' done</span>'+(totalCost?'<span class="mission-stat">$'+totalCost.toFixed(4)+'</span>':'')+(_missionStartTime?'<span class="mission-stat">'+Math.round((Date.now()-_missionStartTime)/1000)+'s</span>':'');
+    if(launchBtn){launchBtn.className="mission-launch-btn stop";launchBtn.textContent="Stop All";launchBtn.onclick=stopAllMission;}
+  }else{
+    if(complete||errored){
+      bar.style.display="flex";
+      bar.innerHTML='<span class="mission-stat">Done</span><span class="mission-stat"><b>'+complete+'</b> complete</span>'+(errored?'<span class="mission-stat" style="color:var(--err)">'+errored+' failed</span>':'')+(_missionStartTime?'<span class="mission-stat">'+Math.round((Date.now()-_missionStartTime)/1000)+'s total</span>':'')+(totalCost?'<span class="mission-stat">$'+totalCost.toFixed(4)+'</span>':'');
+    }else{bar.style.display="none";}
+    if(launchBtn){launchBtn.className="mission-launch-btn go";launchBtn.textContent="Launch All";launchBtn.onclick=launchAll;_missionStartTime=null;}
+  }
+}
+async function launchAll(){
+  _missionStartTime=Date.now();
+  try{await api("POST","/api/planner/execute-phase",{phase:"all"});}catch(e){alert("Launch error: "+(e.message||e));}
+}
+async function stopAllMission(){
+  var items=state.plannerItems||[];
+  for(var i=0;i<items.length;i++){
+    if(items[i].execution_status==="running"||items[i].execution_status==="queued"){
+      try{await api("POST","/api/planner/"+items[i].id+"/cancel");}catch(e){}
+    }
+  }
+  _missionStartTime=null;
+  updateMissionStats();
+}
+async function resetExecution(){
+  if(!confirm("Reset all execution states to idle?"))return;
+  try{
+    await api("POST","/api/planner/reset-execution");
+    _missionStartTime=null;
+    renderPlannerView();
+  }catch(e){alert("Error: "+e.message);}
+}
+async function launchPhase(){
+  var sel=document.getElementById("missionPhaseSelect");
+  if(!sel)return;
+  var phase=sel.value;
+  _missionStartTime=Date.now();
+  try{await api("POST","/api/planner/execute-phase",{phase:phase});}catch(e){alert("Launch error: "+(e.message||e));}
+}
+async function linkWorkflow(itemId){
+  var wfs=state.workflows||[];
+  if(!wfs.length){alert("No saved workflows. Record one first.");return;}
+  var names=wfs.map(function(w,i){return (i+1)+". "+w.name;}).join("\\n");
+  var choice=window.prompt("Link a workflow to this item:\\n"+names+"\\n\\nEnter number:");
+  if(!choice)return;
+  var idx=parseInt(choice)-1;
+  if(idx<0||idx>=wfs.length){alert("Invalid choice");return;}
+  try{
+    await api("PUT","/api/planner/"+itemId,{workflow_id:wfs[idx].id});
+    var it=(state.plannerItems||[]).find(function(i){return i.id===itemId});
+    if(it)it.workflow_id=wfs[idx].id;
+    renderPlannerView();
+  }catch(e){console.error(e);}
 }
 async function analyzeFailure(taskId){
   try{
@@ -9342,18 +10143,16 @@ async function switchView(view){
   const wv=document.getElementById("workflowsView");if(wv)wv.style.display=view==="workflows"?"flex":"none";
   const tv=document.getElementById("templatesView");if(tv)tv.style.display=view==="templates"?"flex":"none";
   const cv=document.getElementById("configView");if(cv)cv.style.display=view==="config"?"flex":"none";
-  const plv=document.getElementById("plannerView");if(plv)plv.style.display=view==="planner"?"flex":"none";
   // Update sidebar nav items
   document.querySelectorAll(".sidebar-nav-item").forEach(el=>{
     el.classList.toggle("active",el.id==="nav-"+view);
   });
   if(view==="soul"){if(!_currentSoulFile)loadSoulFile("SOUL.md");localStorage.setItem("onboarding_soul_customized","true");checkOnboarding();}
   if(view==="memory"){loadMemory();const mb=document.getElementById("memoryBadge");if(mb)mb.style.display="none";}
-  if(view==="schedules")loadScheduleView();
+  if(view==="schedules")switchSchedulesTab(state.schedulesSubTab||"kanban");
   if(view==="history"){toggleHistoryTab('tasks');renderHistory();}
   if(view==="workflows")renderWorkflows();
   if(view==="templates")renderTemplatesMain();
-  if(view==="planner")renderPlannerView();
   if(view==="config"){refreshConfig();renderEngines();}
 }
 function toggleHistoryTab(tab){
@@ -10398,15 +11197,13 @@ document.addEventListener('DOMContentLoaded', () => {
         <div onclick="switchView('memory')" title="Memory" style="display:none">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
         </div>
-        <div onclick="switchView('schedules')" title="Schedules">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <div onclick="switchView('schedules')" title="Planner">
+          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
         </div>
         <div onclick="switchView('history')" title="History">
           <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
         </div>
-        <div onclick="switchView('planner')" title="Planner" style="display:none">
-          <svg class="sidebar-icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-        </div>
+        <!-- Planner icon merged into schedules -->
       </div>
       <div class="sidebar-top-row">
         <button class="toggle-btn" onclick="toggleSidebar('left')" title="Toggle Sidebar" style="padding:4px;margin-left:auto;">
@@ -10432,9 +11229,10 @@ document.addEventListener('DOMContentLoaded', () => {
         <span id="memoryBadge" class="nav-badge" style="display:none"></span>
       </div>
       <div class="sidebar-nav-item" onclick="switchView('schedules')" id="nav-schedules">
-        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        <span>Schedules</span>
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        <span>Planner</span>
         <span id="schedulesBadge" class="nav-badge" style="display:none">0</span>
+        <span id="plannerBadge" class="nav-badge" style="display:none">0</span>
       </div>
       <div class="sidebar-nav-item" onclick="switchView('history')" id="nav-history">
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
@@ -10449,11 +11247,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
         <span>Templates</span>
       </div>
-      <div class="sidebar-nav-item" onclick="switchView('planner')" id="nav-planner" style="display:none">
-        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-        <span>Planner</span>
-        <span id="plannerBadge" class="nav-badge" style="display:none">0</span>
-      </div>
+      <!-- Mission Control merged into Planner tab -->
     </aside>
     <div class="sidebar-pull-tab" onclick="toggleSidebar('left')" title="Open sidebar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline></svg>
@@ -10751,36 +11545,76 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
       </div>
-      <!-- Schedule View -->
+      <!-- Planner View (Kanban + Calendar) -->
       <div id="scheduleView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
-        <div style="max-width:800px;margin:0 auto;width:100%;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-            <div>
-              <h3 style="font-size:16px;font-weight:600;margin-bottom:4px">Scheduled Tasks</h3>
-              <p style="font-size:12px;color:var(--muted)">Create recurring tasks that run automatically. Supports one-shot, interval, and cron expressions.</p>
+        <div style="max-width:1100px;margin:0 auto;width:100%;">
+          <!-- Header -->
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+            <div style="flex:1;min-width:0;">
+              <h3 style="font-size:18px;font-weight:700;margin-bottom:2px;letter-spacing:-0.3px">Planner</h3>
+              <p style="font-size:12px;color:var(--muted);margin-bottom:8px" id="plannerProgress">0 of 0 complete</p>
+              <div style="width:100%;height:4px;background:var(--border);border-radius:2px;overflow:hidden;max-width:300px;">
+                <div id="plannerProgressBar" style="height:100%;width:0%;background:var(--accent);border-radius:2px;transition:width 0.4s ease;"></div>
+              </div>
             </div>
-            <button class="btn" onclick="showNewScheduleForm()" style="font-size:13px">+ New Schedule</button>
-          </div>
-          <div id="newScheduleForm" style="display:none;margin-bottom:16px" class="card">
-            <h2 style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:12px">Create Schedule</h2>
-            <input id="schedName" placeholder="Schedule name (e.g. Check inbox)" style="margin-bottom:8px;font-size:13px">
-            <textarea id="schedPrompt" placeholder="Task prompt..." style="margin-bottom:8px;font-size:13px;min-height:60px"></textarea>
-            <div style="display:flex;gap:8px;margin-bottom:8px;">
-              <select id="schedEngine" style="font-size:12px;width:auto!important;flex:1"><option value="auto">Auto</option><option value="browser_use">browser-use</option><option value="computer_use">computer-use</option><option value="openclaw">OpenClaw</option></select>
-              <select id="schedType" style="font-size:12px;width:auto!important;flex:1"><option value="interval">Interval</option><option value="cron">Cron</option><option value="once">One-shot</option></select>
-            </div>
-            <input id="schedValue" placeholder="e.g. 30m, 2h, 1d (interval) or 0 */2 * * * (cron) or 2026-02-15T10:00:00 (once)" style="margin-bottom:8px;font-size:12px">
-            <div style="font-size:10px;color:var(--muted);margin-bottom:12px;line-height:1.4">
-              <strong>Interval:</strong> 30m, 2h, 1d, 300s &nbsp;|&nbsp;
-              <strong>Cron:</strong> minute hour day month weekday (e.g. 0 9 * * 1-5 = 9am weekdays) &nbsp;|&nbsp;
-              <strong>Once:</strong> ISO datetime
-            </div>
-            <div style="display:flex;gap:8px;">
-              <button class="btn" onclick="createSchedule()" style="flex:1;font-size:13px">Create</button>
-              <button class="btn" onclick="showNewScheduleForm()" style="flex:0;font-size:13px;background:#232428;border:1px solid var(--border)">Cancel</button>
+            <div style="display:flex;gap:8px;flex-shrink:0;margin-top:4px;">
+              <button class="btn" style="font-size:12px;padding:8px 14px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--muted)" onclick="resetExecution()" title="Reset execution states">Reset Exec</button>
+              <button class="btn" style="font-size:12px;padding:8px 14px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--muted)" onclick="seedPlanner()" title="Reset to defaults">Reset</button>
+              <button class="btn" style="font-size:12px;padding:8px 14px;" onclick="showAddPlannerForm()">+ Add Item</button>
             </div>
           </div>
-          <div id="scheduleViewList"></div>
+          <!-- Sub-tabs -->
+          <div class="sched-tabs">
+            <button class="sched-tab active" data-tab="kanban" onclick="switchSchedulesTab('kanban')">Kanban</button>
+            <button class="sched-tab" data-tab="calendar" onclick="switchSchedulesTab('calendar')">Calendar</button>
+          </div>
+          <!-- Kanban Content -->
+          <div id="kanbanContent" style="display:flex;flex-direction:column;">
+            <!-- Mission Control Bar -->
+            <div class="mission-bar" style="margin-bottom:12px;">
+              <div style="display:flex;align-items:center;gap:8px;flex:1;">
+                <select id="missionPhaseSelect" onchange="filterKanbanByPhase(this.value)" style="font-size:11px;padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--text);border-radius:6px;">
+                  <option value="all">All Phases</option>
+                </select>
+                <button class="mission-launch-btn go" onclick="launchPhase()" style="font-size:11px;padding:5px 12px;">Launch Phase</button>
+                <button id="missionLaunchBtn" class="mission-launch-btn go" onclick="launchAll()">Launch All</button>
+              </div>
+              <div id="missionStatsBar" style="display:none;gap:12px;align-items:center;flex-wrap:wrap;"></div>
+            </div>
+            <!-- Add Item Form -->
+            <div id="addPlannerForm" class="planner-add-form">
+              <div style="display:flex;gap:8px;align-items:flex-end;">
+                <div style="flex:1;min-width:0;">
+                  <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Title</label>
+                  <input id="plannerNewTitle" placeholder="What needs to be done?" style="font-size:13px;padding:8px 12px;">
+                </div>
+                <div style="width:130px;flex-shrink:0;">
+                  <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Phase</label>
+                  <select id="plannerNewPhase" style="font-size:13px;padding:8px 12px;">
+                    <option value="research">Research</option>
+                    <option value="organize">Organize</option>
+                    <option value="personal">Personal</option>
+                    <option value="benchmark">Benchmark</option>
+                    <option value="custom" selected>Custom</option>
+                  </select>
+                </div>
+                <div style="width:110px;flex-shrink:0;">
+                  <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Stage</label>
+                  <select id="plannerNewStage" style="font-size:13px;padding:8px 12px;">
+                    <option value="backlog" selected>Backlog</option>
+                    <option value="planning">Planning</option>
+                    <option value="executing">Executing</option>
+                  </select>
+                </div>
+                <button class="btn" style="font-size:12px;padding:8px 16px;flex-shrink:0;" onclick="addPlannerItem()">Add</button>
+                <button class="btn" style="font-size:12px;padding:8px 12px;background:transparent;border:1px solid var(--border);color:var(--muted);flex-shrink:0;" onclick="document.getElementById('addPlannerForm').classList.remove('visible')">Cancel</button>
+              </div>
+            </div>
+            <!-- Kanban Board -->
+            <div id="kbBoard" class="kb-board"><div class="planner-empty" style="flex:1">Loading planner...</div></div>
+          </div>
+          <!-- Calendar Content -->
+          <div id="calendarContent" style="display:none;"></div>
         </div>
       </div>
       <!-- History View -->
@@ -10902,45 +11736,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
       </div>
-      <!-- Planner View -->
-      <div id="plannerView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;padding:20px;">
-        <div style="max-width:900px;margin:0 auto;width:100%;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
-            <div style="flex:1;min-width:0;">
-              <h3 style="font-size:18px;font-weight:700;margin-bottom:2px;letter-spacing:-0.3px">Planner</h3>
-              <p style="font-size:12px;color:var(--muted);margin-bottom:8px" id="plannerProgress">0 of 0 complete</p>
-              <div style="width:100%;height:4px;background:var(--border);border-radius:2px;overflow:hidden;max-width:300px;">
-                <div id="plannerProgressBar" style="height:100%;width:0%;background:var(--accent);border-radius:2px;transition:width 0.4s ease;"></div>
-              </div>
-            </div>
-            <div style="display:flex;gap:8px;flex-shrink:0;margin-top:4px;">
-              <button class="btn" style="font-size:12px;padding:8px 14px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--muted)" onclick="seedPlanner()" title="Reset to defaults">Reset</button>
-              <button class="btn" style="font-size:12px;padding:8px 14px;" onclick="showAddPlannerForm()">+ Add Item</button>
-            </div>
-          </div>
-          <div id="addPlannerForm" class="planner-add-form">
-            <div style="display:flex;gap:8px;align-items:flex-end;">
-              <div style="flex:1;min-width:0;">
-                <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Title</label>
-                <input id="plannerNewTitle" placeholder="What needs to be done?" style="font-size:13px;padding:8px 12px;">
-              </div>
-              <div style="width:160px;flex-shrink:0;">
-                <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Phase</label>
-                <select id="plannerNewPhase" style="font-size:13px;padding:8px 12px;">
-                  <option value="benchmark">Benchmark & Fix</option>
-                  <option value="show">Show</option>
-                  <option value="ship">Ship</option>
-                  <option value="grow">Grow</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </div>
-              <button class="btn" style="font-size:12px;padding:8px 16px;flex-shrink:0;" onclick="addPlannerItem()">Add</button>
-              <button class="btn" style="font-size:12px;padding:8px 12px;background:transparent;border:1px solid var(--border);color:var(--muted);flex-shrink:0;" onclick="document.getElementById('addPlannerForm').classList.remove('visible')">Cancel</button>
-            </div>
-          </div>
-          <div id="plannerPhases"><div class="planner-empty">Loading planner...</div></div>
-        </div>
-      </div>
+      <!-- Old plannerView removed - merged into scheduleView above -->
     </main>
   </div>
   <!-- PiP Floating Panel -->
@@ -10999,6 +11795,13 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       </div>
     </div>
+  </div>
+  <!-- Kanban detail slide-out panel -->
+  <div class="kb-panel-overlay" id="kbPanelOverlay" onclick="closeKbPanel()"></div>
+  <div class="kb-panel" id="kbPanel">
+    <div class="kb-panel-hdr"><h3 id="kbPanelTitle">Item</h3><button class="kb-panel-close" onclick="closeKbPanel()">&times;</button></div>
+    <div class="kb-panel-body" id="kbPanelBody"></div>
+    <div class="kb-panel-actions" id="kbPanelActions"></div>
   </div>
   <script>""" + js + """</script>
 </body>
@@ -11312,8 +12115,8 @@ if(r.ok){{window.location.href='/';}}else{{const d=await r.json().catch(()=>({{}
         # Load planner items for preload
         try:
             _plc = sqlite3.connect(Settings.db_path)
-            planner_items = [dict(zip(["id", "phase", "title", "description", "status", "position", "notes", "created_at", "updated_at"], r))
-                             for r in _plc.execute("SELECT id, phase, title, description, status, position, notes, created_at, updated_at FROM planner_items ORDER BY phase, position").fetchall()]
+            planner_items = [dict(zip(["id", "phase", "title", "description", "status", "position", "notes", "created_at", "updated_at", "task_id", "execution_status", "execution_result", "engine_hint", "workflow_id", "stage", "due_date"], r))
+                             for r in _plc.execute("SELECT id, phase, title, description, status, position, notes, created_at, updated_at, task_id, execution_status, execution_result, engine_hint, workflow_id, stage, due_date FROM planner_items ORDER BY phase, position").fetchall()]
             _plc.close()
         except Exception:
             planner_items = []
@@ -12549,9 +13352,9 @@ a{{color:#5865f2;text-decoration:none;font-weight:600}}
     @app.get("/api/planner")
     async def list_planner_items():
         conn = sqlite3.connect(Settings.db_path)
-        rows = conn.execute("SELECT id, phase, title, description, status, position, notes, created_at, updated_at FROM planner_items ORDER BY phase, position").fetchall()
+        rows = conn.execute("SELECT id, phase, title, description, status, position, notes, created_at, updated_at, task_id, execution_status, execution_result, engine_hint, workflow_id, stage, due_date FROM planner_items ORDER BY phase, position").fetchall()
         conn.close()
-        return [dict(zip(["id", "phase", "title", "description", "status", "position", "notes", "created_at", "updated_at"], r)) for r in rows]
+        return [dict(zip(["id", "phase", "title", "description", "status", "position", "notes", "created_at", "updated_at", "task_id", "execution_status", "execution_result", "engine_hint", "workflow_id", "stage", "due_date"], r)) for r in rows]
 
     @app.post("/api/planner")
     async def create_planner_item(request: Request):
@@ -12561,15 +13364,16 @@ a{{color:#5865f2;text-decoration:none;font-weight:600}}
             raise HTTPException(400, "title is required")
         phase = body.get("phase", "custom").strip()
         desc = body.get("description", "")
+        stage = body.get("stage", "backlog").strip()
         _now = datetime.utcnow().isoformat()
-        _id = str(uuid.uuid4())[:8]
+        _id = body.get("id", "").strip() or str(uuid.uuid4())[:8]
         conn = sqlite3.connect(Settings.db_path)
         max_pos = conn.execute("SELECT COALESCE(MAX(position), -1) FROM planner_items WHERE phase = ?", (phase,)).fetchone()[0]
-        conn.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, '', ?, ?)",
-                     (_id, phase, title, desc, max_pos + 1, _now, _now))
+        conn.execute("INSERT INTO planner_items (id, phase, title, description, status, position, notes, stage, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, '', ?, ?, ?)",
+                     (_id, phase, title, desc, max_pos + 1, stage, _now, _now))
         conn.commit()
         conn.close()
-        return {"id": _id, "phase": phase, "title": title, "status": "pending"}
+        return {"id": _id, "phase": phase, "title": title, "status": "pending", "stage": stage}
 
     @app.put("/api/planner/{item_id}")
     async def update_planner_item(item_id: str, request: Request):
@@ -12580,7 +13384,7 @@ a{{color:#5865f2;text-decoration:none;font-weight:600}}
             conn.close()
             raise HTTPException(404, "Item not found")
         _now = datetime.utcnow().isoformat()
-        _ALLOWED_FIELDS = {"status", "notes", "position", "title", "phase", "description"}
+        _ALLOWED_FIELDS = {"status", "notes", "position", "title", "phase", "description", "engine_hint", "workflow_id", "stage", "due_date"}
         for field in _ALLOWED_FIELDS:
             if field in body:
                 conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query  # field is from hardcoded allowlist
@@ -12600,14 +13404,145 @@ a{{color:#5865f2;text-decoration:none;font-weight:600}}
         return {"ok": True}
 
     @app.post("/api/planner/seed")
-    async def seed_planner_items():
+    async def seed_planner_items(request: Request):
+        preset = None
+        try:
+            body = await request.json()
+            preset = body.get("preset")
+        except Exception:
+            pass
         conn = sqlite3.connect(Settings.db_path)
         conn.execute("DELETE FROM planner_items")
         conn.commit()
         conn.close()
-        # Re-run init_db to re-seed (it only seeds when table is empty)
-        init_db()
-        return {"ok": True, "message": "Planner items re-seeded"}
+        if preset and preset in _PLANNER_PRESETS:
+            seed_fn = _PLANNER_PRESETS[preset]
+            if seed_fn:
+                seed_fn()
+            else:
+                init_db()
+        elif preset is None and not Settings.developer_mode:
+            _seed_demo_planner()
+        else:
+            init_db()
+        return {"ok": True, "message": f"Planner items re-seeded ({preset or 'default'})"}
+
+    @app.get("/api/planner/presets")
+    async def list_planner_presets():
+        return [{"id": k, "name": v} for k, v in _PLANNER_PRESET_LABELS.items()]
+
+    # ── Mission Control Endpoints ──────────────────────────────────
+
+    @app.post("/api/planner/{item_id}/execute")
+    async def execute_planner_item(item_id: str, request: Request):
+        conn = sqlite3.connect(Settings.db_path)
+        row = conn.execute("SELECT id, title, description, notes, execution_status, engine_hint, workflow_id FROM planner_items WHERE id = ?", (item_id,)).fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(404, "Item not found")
+        _id, title, desc, notes, exec_status, engine_hint, workflow_id = row
+        if exec_status == "running":
+            conn.close()
+            raise HTTPException(409, "Item is already running")
+        # Parse optional body
+        engine_override = None
+        try:
+            body = await request.json()
+            engine_override = body.get("engine")
+        except Exception:
+            pass
+        engine = engine_override or engine_hint or "auto"
+        # Build prompt from notes RUN: commands, or title + description
+        prompt = ""
+        if notes and "RUN:" in notes:
+            # Extract RUN: lines
+            run_lines = [line.strip()[4:].strip() for line in notes.split("\n") if line.strip().startswith("RUN:")]
+            prompt = " && ".join(run_lines) if run_lines else title
+        else:
+            prompt = title + ((" - " + desc) if desc else "")
+        # Workflow-based execution
+        if workflow_id:
+            wf_mgr = get_workflow_manager()
+            wf = wf_mgr.get(workflow_id)
+            if wf:
+                prompt = f"replay: {wf.name}"
+                engine = "computer_use"
+        # Create and submit task
+        task = Task(prompt=prompt, engine=engine, planner_item_id=item_id)
+        _update_planner_execution_status(item_id, "queued", task.id)
+        conn.close()
+        result = await get_manager().submit(task)
+        if _broadcast:
+            await _broadcast({"type": "planner_item_update", "payload": _get_planner_item(item_id)})
+        return {"task": result.model_dump(mode="json"), "item": _get_planner_item(item_id)}
+
+    @app.post("/api/planner/execute-phase")
+    async def execute_planner_phase(request: Request):
+        body = await request.json()
+        phase = body.get("phase", "all")
+        conn = sqlite3.connect(Settings.db_path)
+        if phase == "all":
+            rows = conn.execute("SELECT id FROM planner_items WHERE status != 'done' AND execution_status IN ('idle', 'error') ORDER BY phase, position").fetchall()
+        else:
+            rows = conn.execute("SELECT id FROM planner_items WHERE phase = ? AND status != 'done' AND execution_status IN ('idle', 'error') ORDER BY position", (phase,)).fetchall()
+        conn.close()
+        queued = 0
+        for (iid,) in rows:
+            try:
+                # Simulate a request to execute each item
+                item = _get_planner_item(iid)
+                if not item:
+                    continue
+                engine = item.get("engine_hint") or "auto"
+                notes = item.get("notes") or ""
+                title = item.get("title") or ""
+                desc = item.get("description") or ""
+                workflow_id = item.get("workflow_id")
+                prompt = ""
+                if notes and "RUN:" in notes:
+                    run_lines = [line.strip()[4:].strip() for line in notes.split("\n") if line.strip().startswith("RUN:")]
+                    prompt = " && ".join(run_lines) if run_lines else title
+                else:
+                    prompt = title + ((" - " + desc) if desc else "")
+                if workflow_id:
+                    wf_mgr = get_workflow_manager()
+                    wf = wf_mgr.get(workflow_id)
+                    if wf:
+                        prompt = f"replay: {wf.name}"
+                        engine = "computer_use"
+                task = Task(prompt=prompt, engine=engine, planner_item_id=iid)
+                _update_planner_execution_status(iid, "queued", task.id)
+                await get_manager().submit(task)
+                if _broadcast:
+                    await _broadcast({"type": "planner_item_update", "payload": _get_planner_item(iid)})
+                queued += 1
+            except Exception as e:
+                logging.warning("Failed to queue planner item %s: %s", iid, e)
+        return {"queued": queued, "phase": phase}
+
+    @app.post("/api/planner/{item_id}/cancel")
+    async def cancel_planner_item(item_id: str):
+        item = _get_planner_item(item_id)
+        if not item:
+            raise HTTPException(404, "Item not found")
+        task_id = item.get("task_id")
+        if task_id:
+            await get_manager().cancel(task_id)
+        _update_planner_execution_status(item_id, "idle", None, "")
+        if _broadcast:
+            await _broadcast({"type": "planner_item_update", "payload": _get_planner_item(item_id)})
+        return {"ok": True}
+
+    @app.post("/api/planner/reset-execution")
+    async def reset_planner_execution():
+        conn = sqlite3.connect(Settings.db_path)
+        _now = datetime.utcnow().isoformat()
+        conn.execute("UPDATE planner_items SET execution_status = 'idle', task_id = NULL, execution_result = '', updated_at = ?", (_now,))
+        # Reset auto-promoted stages: executing -> backlog, but leave complete and user-set stages alone
+        conn.execute("UPDATE planner_items SET stage = 'backlog' WHERE stage = 'executing' AND status != 'done'")
+        conn.commit()
+        conn.close()
+        return {"ok": True}
 
     @app.post("/api/recording/start")
     async def start_recording():

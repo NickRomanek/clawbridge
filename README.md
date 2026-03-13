@@ -254,7 +254,7 @@ The web dashboard at `http://127.0.0.1:8765` provides:
 
 - **Chat interface**: Submit tasks, see results in a message-bubble layout with inline cost/duration info
 - **Engine selector**: Chip bar (Auto / Browser / Desktop / Chat) with tooltips
-- **Slash commands**: Type `/` for autocomplete dropdown — `/record`, `/stop`, `/replay <name>`, `/browser`, `/computer`, `/chat`
+- **Slash commands**: Type `/` for autocomplete dropdown — `/record`, `/stop`, `/replay <name>`, `/do <number>`, `/browser`, `/computer`, `/chat`
 - **Stop button**: Send button swaps to red Stop while a task is running — always visible, one-click cancel
 - **Workflow recording from chat**: Click Record, perform actions, click Stop — save card appears with pre-filled name
 - **Live View**: Real-time screenshot stream from browser or desktop
