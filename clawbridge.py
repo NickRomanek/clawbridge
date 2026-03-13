@@ -47,6 +47,22 @@ if sys.platform == "darwin":
     del _pf_fix, _orig_processor, _patched_processor
 
 # ---------------------------------------------------------------------------
+# Auto-detect bundled environment — set PATH and PLAYWRIGHT_BROWSERS_PATH
+# from the app's own directory so the VBS/shortcut doesn't need to.
+# ---------------------------------------------------------------------------
+_app_dir = os.path.dirname(os.path.abspath(__file__))
+_bundled_nodejs = os.path.join(_app_dir, "nodejs")
+_bundled_scripts = os.path.join(_app_dir, "python", "Scripts")
+_bundled_browsers = os.path.join(_app_dir, "playwright_browsers")
+if os.path.isdir(_bundled_nodejs) and _bundled_nodejs not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _bundled_nodejs + os.pathsep + _bundled_scripts + os.pathsep + os.environ.get("PATH", "")
+if os.path.isdir(_bundled_browsers) and not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = _bundled_browsers
+# Auto-set CLAWBRIDGE_OPEN_BROWSER if running from a bundled install (pythonw.exe next to us)
+if not os.environ.get("CLAWBRIDGE_OPEN_BROWSER") and os.path.isfile(os.path.join(_app_dir, "python", "pythonw.exe")):
+    os.environ["CLAWBRIDGE_OPEN_BROWSER"] = "1"
+
+# ---------------------------------------------------------------------------
 # Early loading server — starts BEFORE dependency install using only stdlib.
 # Provides real-time startup progress via /startup-status JSON endpoint.
 # ---------------------------------------------------------------------------
@@ -323,6 +339,7 @@ def _open_app_mode(url: str) -> None:
 # Flag for deferred browser open — actual open happens in lifespan() after uvicorn is serving,
 # which eliminates "site can't be reached" on first launch (GIL contention) and port transition gap.
 _should_open_browser = (os.environ.get("CLAWBRIDGE_OPEN_BROWSER") == "1" and _loading_server is not None)
+print(f"  [boot] CLAWBRIDGE_OPEN_BROWSER={os.environ.get('CLAWBRIDGE_OPEN_BROWSER')!r}, loading_server={'yes' if _loading_server else 'no'}, should_open={_should_open_browser}")
 
 # ---------------------------------------------------------------------------
 # Auto-install dependencies if missing (run once, then exit; user runs again)
@@ -3053,9 +3070,19 @@ class OpenClawEngine(EngineBase):
             if desired_model and defaults.get("model") != desired_model:
                 defaults["model"] = desired_model
                 cfg_changed = True
+            # Sync API keys to env block (gateway reads these for chat completions)
+            env_block = cfg.setdefault("env", {})
+            for env_key, env_val in [
+                ("OPENROUTER_API_KEY", settings.openrouter_api_key),
+                ("ANTHROPIC_API_KEY", settings.anthropic_api_key),
+                ("OPENAI_API_KEY", settings.openai_api_key),
+            ]:
+                if env_val and env_block.get(env_key) != env_val:
+                    env_block[env_key] = env_val
+                    cfg_changed = True
             if cfg_changed:
                 self._atomic_json_write(oc_dir, oc_path, cfg)
-                logging.info("OpenClaw: updated %s (chatCompletions, default model)", oc_path)
+                logging.info("OpenClaw: updated %s (chatCompletions, default model, env keys)", oc_path)
 
             # ── 2. auth-profiles.json: write API keys to per-agent auth store ──
             auth_dir = os.path.join(oc_dir, "agents", "main", "agent")
@@ -8650,10 +8677,12 @@ let _wtPreference='auto';
 function initWalkthrough(){
   const ov=document.getElementById('walkthroughOverlay');
   if(!ov)return;
-  if(localStorage.getItem('walkthrough_completed'))return;
   const p=window.__PRELOAD__;
   const hasKey=p&&p.has_any_key;
-  if(hasKey)return;
+  // Show walkthrough if no API keys configured, even if previously dismissed
+  // (user may have opened in a browser with existing localStorage from a prior install)
+  if(hasKey){localStorage.setItem('walkthrough_completed','true');return;}
+  if(localStorage.getItem('walkthrough_completed')&&hasKey)return;
   ov.style.display='flex';
   walkthroughStep(1);
 }
