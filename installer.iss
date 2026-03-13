@@ -65,7 +65,7 @@ Name: "{userstartup}\ClawBridge"; Filename: "{app}\{#MyAppExeName}"; WorkingDir:
 
 [Run]
 ; Only the final "Launch" checkbox — all heavy work is done in [Code] with progress bar
-Filename: "{sys}\wscript.exe"; Parameters: """{app}\ClawBridge.vbs"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\clawbridge.py"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall runasoriginaluser
 
 [UninstallDelete]
 ; Clean up generated files on uninstall
