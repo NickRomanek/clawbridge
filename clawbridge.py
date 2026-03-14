@@ -8708,11 +8708,20 @@ function walkthroughStep(n){
       +'</ul>'
       +'<button class="wt-btn-primary" onclick="walkthroughStep(2)">Get Started</button>';
   }else if(n===2){
-    html+='<h2>Connect an AI Provider</h2>'
-      +'<p class="wt-sub">ClawBridge uses your own API key. Pick a provider to get started.</p>'
+    html+='<h2>Set Up AI Access</h2>'
+      +'<p class="wt-sub">Enter your activation code or connect your own API key.</p>'
+      // Activation code
+      +'<div class="wt-provider-card recommended" style="margin-bottom:16px">'
+      +'<div class="wt-provider-name">I purchased ClawBridge</div>'
+      +'<div class="wt-provider-hint">Enter the activation code from your purchase email.</div>'
+      +'<div class="wt-key-row" style="margin-top:8px"><input type="text" id="wt-activation-code" placeholder="CB-XXXX-XXXX-XXXX" style="text-transform:uppercase;font-family:monospace;letter-spacing:1px"><button id="wt-activate-btn" onclick="walkthroughActivate()">Activate</button></div>'
+      +'<div class="wt-key-status" id="wt-status-activation"></div>'
+      +'</div>'
+      // Divider
+      +'<div style="display:flex;align-items:center;gap:12px;margin:4px 0 16px"><div style="flex:1;height:1px;background:var(--border)"></div><span style="color:var(--muted);font-size:12px;white-space:nowrap">Or bring your own API key</span><div style="flex:1;height:1px;background:var(--border)"></div></div>'
       +'<div class="wt-provider-cards">'
       // OpenRouter
-      +'<div class="wt-provider-card recommended">'
+      +'<div class="wt-provider-card">'
       +'<div class="wt-provider-name">OpenRouter <span class="wt-provider-badge">Recommended</span></div>'
       +'<div class="wt-provider-hint">One key, all models. Pay-as-you-go pricing.</div>'
       +'<button class="wt-btn-primary" onclick="startOpenRouterOAuth()" style="width:100%;margin-bottom:8px;font-size:13px">Sign in with OpenRouter</button>'
@@ -8721,7 +8730,9 @@ function walkthroughStep(n){
       +'<div class="wt-key-row" style="margin-top:8px"><input type="password" id="wt-key-openrouter" placeholder="sk-or-..."><button onclick="walkthroughSaveKey(\\'openrouter\\')">Save</button></div>'
       +'<a class="wt-key-help" href="https://openrouter.ai/keys" target="_blank" rel="noopener">Get a key at openrouter.ai/keys</a></details>'
       +'</div>'
-      // Anthropic
+      // Anthropic & OpenAI (collapsed)
+      +'<details><summary style="font-size:12px;color:var(--muted);cursor:pointer;padding:4px 0">Other providers (Anthropic, OpenAI)</summary>'
+      +'<div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">'
       +'<div class="wt-provider-card">'
       +'<div class="wt-provider-name">Anthropic</div>'
       +'<div class="wt-provider-hint">Direct access to Claude models.</div>'
@@ -8737,6 +8748,7 @@ function walkthroughStep(n){
       +'<div class="wt-key-status" id="wt-status-openai"></div>'
       +'<a class="wt-key-help" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get a key at platform.openai.com</a>'
       +'</div>'
+      +'</div></details>'
       +'</div>'
       +'<button class="wt-btn-primary" onclick="walkthroughStep(3)">Continue</button>'
       +'<br><span class="wt-skip" onclick="walkthroughStep(3)">Skip for now</span>';
@@ -8791,6 +8803,24 @@ async function walkthroughSaveKey(provider){
     if(input)input.value='';
     refreshConfig();
   }catch(e){if(status){status.textContent=e.message;status.style.color='var(--err)';}}
+}
+async function walkthroughActivate(){
+  const input=document.getElementById('wt-activation-code');
+  const status=document.getElementById('wt-status-activation');
+  const btn=document.getElementById('wt-activate-btn');
+  const code=input?input.value.trim():'';
+  if(!code){if(status){status.textContent='Enter your activation code';status.style.color='var(--err)';}return;}
+  if(btn){btn.disabled=true;btn.textContent='Activating...';}
+  if(status){status.textContent='Connecting to activation server...';status.style.color='var(--muted)';}
+  try{
+    const result=await api('POST','/api/license/activate',{activation_code:code});
+    if(status){status.textContent=result.message||'Activated!';status.style.color='var(--ok)';}
+    refreshConfig();
+    setTimeout(()=>walkthroughStep(3),1500);
+  }catch(e){
+    if(status){status.textContent=e.message||'Activation failed';status.style.color='var(--err)';}
+    if(btn){btn.disabled=false;btn.textContent='Activate';}
+  }
 }
 function walkthroughSetPreference(engine){
   _wtPreference=engine;
