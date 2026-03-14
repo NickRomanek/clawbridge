@@ -8730,24 +8730,24 @@ function walkthroughStep(n){
       +'<div class="wt-key-row" style="margin-top:8px"><input type="password" id="wt-key-openrouter" placeholder="sk-or-..."><button onclick="walkthroughSaveKey(\\'openrouter\\')">Save</button></div>'
       +'<a class="wt-key-help" href="https://openrouter.ai/keys" target="_blank" rel="noopener">Get a key at openrouter.ai/keys</a></details>'
       +'</div>'
-      // Anthropic & OpenAI (collapsed)
-      +'<details><summary style="font-size:12px;color:var(--muted);cursor:pointer;padding:4px 0">Other providers (Anthropic, OpenAI)</summary>'
-      +'<div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">'
+      // OpenAI (with OAuth)
       +'<div class="wt-provider-card">'
+      +'<div class="wt-provider-name">OpenAI</div>'
+      +'<div class="wt-provider-hint">Sign in with your ChatGPT account (Plus, Pro, Team).</div>'
+      +'<button class="wt-btn-primary" onclick="startOpenAIOAuth()" style="width:100%;margin-bottom:8px;font-size:13px;background:#10a37f">Sign in with OpenAI</button>'
+      +'<div class="wt-key-status" id="wt-status-openai-oauth"></div>'
+      +'<details style="margin-top:8px"><summary style="font-size:11px;color:var(--muted);cursor:pointer">Or paste your API key</summary>'
+      +'<div class="wt-key-row" style="margin-top:8px"><input type="password" id="wt-key-openai" placeholder="sk-..."><button onclick="walkthroughSaveKey(\\'openai\\')">Save</button></div>'
+      +'<a class="wt-key-help" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get a key at platform.openai.com</a></details>'
+      +'</div>'
+      // Anthropic (collapsed)
+      +'<details><summary style="font-size:12px;color:var(--muted);cursor:pointer;padding:4px 0">Anthropic (paste API key)</summary>'
+      +'<div class="wt-provider-card" style="margin-top:12px">'
       +'<div class="wt-provider-name">Anthropic</div>'
       +'<div class="wt-provider-hint">Direct access to Claude models.</div>'
       +'<div class="wt-key-row"><input type="password" id="wt-key-anthropic" placeholder="sk-ant-..."><button onclick="walkthroughSaveKey(\\'anthropic\\')">Save</button></div>'
       +'<div class="wt-key-status" id="wt-status-anthropic"></div>'
       +'<a class="wt-key-help" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get a key at console.anthropic.com</a>'
-      +'</div>'
-      // OpenAI
-      +'<div class="wt-provider-card">'
-      +'<div class="wt-provider-name">OpenAI</div>'
-      +'<div class="wt-provider-hint">GPT models for chat tasks.</div>'
-      +'<div class="wt-key-row"><input type="password" id="wt-key-openai" placeholder="sk-..."><button onclick="walkthroughSaveKey(\\'openai\\')">Save</button></div>'
-      +'<div class="wt-key-status" id="wt-status-openai"></div>'
-      +'<a class="wt-key-help" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get a key at platform.openai.com</a>'
-      +'</div>'
       +'</div></details>'
       +'</div>'
       +'<button class="wt-btn-primary" onclick="walkthroughStep(3)">Continue</button>'
@@ -8889,6 +8889,32 @@ async function startOpenRouterOAuth(){
     }
   }catch(e){
     const statusEl=document.getElementById('wt-status-openrouter')||document.getElementById('oauth-status-config');
+    if(statusEl){statusEl.textContent='OAuth failed: '+e.message;statusEl.style.color='var(--err)';}
+  }
+}
+async function startOpenAIOAuth(){
+  try{
+    const r=await api('GET','/auth/openai');
+    if(r&&r.auth_url){
+      window.open(r.auth_url,'_blank','noopener');
+      const statusEl=document.getElementById('wt-status-openai-oauth')||document.getElementById('oauth-status-openai-config');
+      if(statusEl){statusEl.textContent='Waiting for authorization...';statusEl.style.color='var(--muted)';}
+      let polls=0;
+      const poll=setInterval(async()=>{
+        polls++;
+        if(polls>60){clearInterval(poll);if(statusEl){statusEl.textContent='Timed out. Try pasting your key manually.';statusEl.style.color='var(--err)';}return;}
+        try{
+          const cfg=await api('GET','/api/config');
+          if(cfg&&cfg.keys&&cfg.keys.openai_configured){
+            clearInterval(poll);
+            if(statusEl){statusEl.textContent='Connected!';statusEl.style.color='var(--ok)';}
+            refreshConfig();
+          }
+        }catch(e){}
+      },2000);
+    }
+  }catch(e){
+    const statusEl=document.getElementById('wt-status-openai-oauth')||document.getElementById('oauth-status-openai-config');
     if(statusEl){statusEl.textContent='OAuth failed: '+e.message;statusEl.style.color='var(--err)';}
   }
 }
@@ -9236,10 +9262,25 @@ function renderConfigSummary(c){
     +'<button class="btn" style="font-size:11px;padding:6px 12px;white-space:nowrap" onclick="saveInlineKey(\\'openrouter\\')">Save</button>'
     +'</div>'
     +'<div id="key-status-openrouter" style="font-size:10px;margin-top:4px"></div></div></div>';
+  // OpenAI row with OAuth button
+  const oaiRow=k.openai_configured?providerRow("OpenAI","openai",true)
+    :'<div class="config-provider-row">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;cursor:pointer" onclick="toggleInlineKey(\\'openai\\')">'
+    +'<span style="font-size:12px;color:var(--muted)">OpenAI</span>'
+    +'<span class="config-chip not-set clickable-chip">Click to set</span></div>'
+    +'<div id="inline-key-openai" style="display:none;padding:4px 0 8px">'
+    +'<button class="btn" style="width:100%;font-size:12px;padding:8px;margin-bottom:8px;background:#10a37f" onclick="startOpenAIOAuth()">Sign in with OpenAI</button>'
+    +'<div id="oauth-status-openai-config" style="font-size:10px;margin-bottom:8px;min-height:14px"></div>'
+    +'<div style="font-size:10px;color:var(--muted);margin-bottom:6px">Or paste your API key:</div>'
+    +'<div style="display:flex;gap:6px">'
+    +'<input type="password" id="key-input-openai" placeholder="Paste OpenAI API key..." style="flex:1;font-size:12px;padding:6px 10px" onkeydown="if(event.key===\\'Enter\\')saveInlineKey(\\'openai\\')">'
+    +'<button class="btn" style="font-size:11px;padding:6px 12px;white-space:nowrap" onclick="saveInlineKey(\\'openai\\')">Save</button>'
+    +'</div>'
+    +'<div id="key-status-openai" style="font-size:10px;margin-top:4px"></div></div></div>';
   document.getElementById("configSummary").innerHTML=
     '<div class="config-provider-primary">Active: '+esc(primary)+'</div>'
     +providerRow("Anthropic","anthropic",k.anthropic_configured)
-    +providerRow("OpenAI","openai",k.openai_configured)
+    +oaiRow
     +orRow;
   // Update Machine ID in health dropdown
   const midEl=document.getElementById("healthMachineId");
@@ -12567,6 +12608,118 @@ a{{color:#5865f2;text-decoration:none;font-weight:600}}
 <div class="check">&#10003;</div>
 <h2>Connected!</h2>
 <p>Your OpenRouter API key has been saved.</p>
+<a href="http://localhost:{port}">Return to Dashboard</a>
+</div>
+<script>setTimeout(function(){{window.close()}},3000)</script>
+</body></html>""")
+
+    # -- OpenAI Codex OAuth PKCE --
+    _openai_oauth_state: dict = {}
+
+    @app.get("/auth/openai")
+    async def openai_oauth_start():
+        """Generate PKCE challenge and return the OpenAI Codex auth URL."""
+        import hashlib
+        code_verifier = secrets.token_urlsafe(48)
+        code_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode()).digest()
+        ).rstrip(b"=").decode()
+        state = secrets.token_urlsafe(32)
+        _openai_oauth_state["code_verifier"] = code_verifier
+        _openai_oauth_state["state"] = state
+        _openai_oauth_state["created_at"] = __import__("time").time()
+        port = int(os.environ.get("CLAWBRIDGE_PORT", "8765"))
+        callback_url = f"http://localhost:{port}/auth/openai-callback"
+        auth_url = (
+            f"https://auth.openai.com/oauth/authorize?"
+            f"response_type=code"
+            f"&client_id=app_EMoamEEZ73f0CkXaXp7hrann"
+            f"&redirect_uri={callback_url}"
+            f"&scope=openid%20profile%20email%20offline_access"
+            f"&code_challenge={code_challenge}"
+            f"&code_challenge_method=S256"
+            f"&state={state}"
+        )
+        return {"auth_url": auth_url}
+
+    @app.get("/auth/openai-callback")
+    async def openai_oauth_callback(request: Request):
+        """Receive auth code from OpenAI, exchange for API key via two-step token exchange."""
+        import httpx
+        code = request.query_params.get("code", "")
+        if not code:
+            return HTMLResponse("<html><body><h2>Error: No auth code received</h2></body></html>", status_code=400)
+        verifier = _openai_oauth_state.pop("code_verifier", None)
+        _openai_oauth_state.pop("state", None)
+        _openai_oauth_state.pop("created_at", None)
+        if not verifier:
+            return HTMLResponse("<html><body><h2>Error: OAuth session expired. Please try again.</h2></body></html>", status_code=400)
+        port = int(os.environ.get("CLAWBRIDGE_PORT", "8765"))
+        callback_url = f"http://localhost:{port}/auth/openai-callback"
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                # Step 1: Exchange auth code for tokens (id_token, access_token, refresh_token)
+                resp = await client.post("https://auth.openai.com/oauth/token", data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": callback_url,
+                    "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+                    "code_verifier": verifier,
+                }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+                if resp.status_code != 200:
+                    return HTMLResponse(f"<html><body><h2>Error exchanging code: {resp.text}</h2></body></html>", status_code=502)
+                tokens = resp.json()
+                id_token = tokens.get("id_token", "")
+                if not id_token:
+                    return HTMLResponse("<html><body><h2>Error: No id_token in response</h2></body></html>", status_code=502)
+                # Step 2: Exchange id_token for an API key
+                resp2 = await client.post("https://auth.openai.com/oauth/token", data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+                    "requested_token": "openai-api-key",
+                    "subject_token": id_token,
+                    "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+                }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+                if resp2.status_code != 200:
+                    return HTMLResponse(f"<html><body><h2>Error exchanging for API key: {resp2.text}</h2></body></html>", status_code=502)
+                key_data = resp2.json()
+                api_key = key_data.get("access_token", "")
+                if not api_key:
+                    return HTMLResponse("<html><body><h2>Error: No API key in response</h2></body></html>", status_code=502)
+        except Exception as e:
+            return HTMLResponse(f"<html><body><h2>Error: {e}</h2></body></html>", status_code=500)
+        # Save to .env
+        env_var = "OPENAI_API_KEY"
+        env_path = Path(".env")
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith(env_var + "=") or line.strip().startswith(env_var + " ="):
+                lines[i] = f"{env_var}={api_key}"
+                found = True
+                break
+        if not found:
+            lines.append(f"{env_var}={api_key}")
+        env_path.write_text("\n".join(lines) + "\n")
+        os.environ[env_var] = api_key
+        Settings.openai_api_key = api_key
+        # Re-init engines
+        await get_manager().init_engines()
+        await _broadcast({"type": "engine_status", "payload": await get_manager().engine_infos()})
+        # Return success HTML
+        port = int(os.environ.get("CLAWBRIDGE_PORT", "8765"))
+        return HTMLResponse(f"""<html><head><style>
+body{{background:#1e1f22;color:#e0e1e5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}
+.card{{text-align:center;padding:40px;background:#2b2d31;border-radius:16px;border:1px solid #3f4147}}
+.check{{font-size:48px;color:#57a86d;margin-bottom:16px}}
+h2{{margin:0 0 8px;font-size:20px}}
+p{{color:#949ba4;font-size:14px;margin:0 0 20px}}
+a{{color:#5865f2;text-decoration:none;font-weight:600}}
+</style></head><body>
+<div class="card">
+<div class="check">&#10003;</div>
+<h2>Connected!</h2>
+<p>Your OpenAI account has been linked.</p>
 <a href="http://localhost:{port}">Return to Dashboard</a>
 </div>
 <script>setTimeout(function(){{window.close()}},3000)</script>
