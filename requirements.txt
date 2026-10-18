@@ -38,7 +38,7 @@ pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'
 pynput>=1.7.6
 
 # System tray icon
-pystray>=0.19.0
+pystray>=0.19.5
 
 # MCP server (optional, for Claude Code integration)
 mcp>=1.26.0
