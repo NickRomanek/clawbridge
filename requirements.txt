@@ -31,7 +31,7 @@ rubicon-objc>=0.4.4; sys_platform == 'darwin'  # ARM64 fix: older versions use o
 
 # macOS platform backend (PyObjC frameworks)
 pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
-pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Quartz>=12.2.2; sys_platform == 'darwin'
 pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'
 
 # Input recording for workflow capture
