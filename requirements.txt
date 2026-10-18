@@ -19,7 +19,7 @@ langchain-anthropic>=0.3.0
 langchain-openai>=0.3.0
 
 # Configuration and environment
-python-dotenv>=1.0.0
+python-dotenv>=1.2.4
 
 # Computer-use engine (desktop automation)
 anthropic>=0.39.0
